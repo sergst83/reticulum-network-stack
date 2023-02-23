@@ -98,7 +98,8 @@ public class AutoInterface extends AbstractConnectionInterface {
     private Map<?, ?> interfaceServers = Map.of();
     private Map<?, ?> multicastEchoes = Map.of();
     private Map<?, ?> timedOutInterfaces = Map.of();
-    private boolean carrierChanged = false;
+    private boolean carrierChanged;
+    private boolean receives;
 
     private Object outboundUdpSocket;
 
