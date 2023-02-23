@@ -40,7 +40,7 @@ public class ReticulumConstant {
      * This value will be applied by default to all created interfaces,
      * but it can be configured individually on a per-interface basis.
      */
-    public static final float ANNOUNCE_CAP = 2;
+    public static final double ANNOUNCE_CAP = 2;
     public static final int MINIMUM_BITRATE = 500;
     // TODO: To reach the 300bps level without unreasonably impacting
     // performance on faster links, we need a mechanism for setting

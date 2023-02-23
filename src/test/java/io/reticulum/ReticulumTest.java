@@ -4,7 +4,6 @@ import io.reticulum.vendor.config.ConfigObj;
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.lang3.SystemUtils;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -34,16 +33,6 @@ class ReticulumTest {
         var config = ConfigObj.initConfig(Path.of(getClass().getClassLoader().getResource("reticulum.default.yml").getPath()));
 
         System.out.println(config);
-    }
-
-    @Test
-    void tf() {
-        System.out.println(Integer.class.getSimpleName());
-    }
-
-    @Test
-    void osTestName() {
-        System.out.println(SystemUtils.IS_OS_LINUX);
     }
 
     private String initConfig(String configDir) {

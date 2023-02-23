@@ -25,34 +25,34 @@ import static java.util.Objects.nonNull;
 @ToString
 public class AbstractConnectionInterface implements ConnectionInterface {
 
-    private boolean enabled;
+    protected boolean enabled;
 
     @JsonAlias({"interface_mode", "mode"})
-    private InterfaceMode interfaceMode = MODE_FULL;
+    protected InterfaceMode interfaceMode = MODE_FULL;
 
     @JsonProperty("ifac_size")
-    private Integer ifacSize;
+    protected Integer ifacSize;
 
     @JsonAlias({"networkname", "network_name"})
-    private String ifacNetname;
+    protected String ifacNetName;
 
     @JsonAlias({"passphrase", "pass_phrase"})
-    private String ifacNetkey;
+    protected String ifacNetKey;
 
     @JsonProperty("bitrate")
-    private Integer configuredBitrate;
+    protected Integer configuredBitrate;
 
     @JsonProperty("announce_rate_target")
-    private Integer announceRateTarget;
+    protected Integer announceRateTarget;
 
     @JsonProperty("announce_rate_grace")
-    private Integer announceRateGrace;
+    protected Integer announceRateGrace;
 
     @JsonProperty("announce_rate_penalty")
-    private Integer announceRatePenalty;
+    protected Integer announceRatePenalty;
 
     @JsonProperty("announce_cap")
-    private float announceCap = ANNOUNCE_CAP / 100;
+    protected double announceCap = ANNOUNCE_CAP / 100;
 
     public void setIfacSize(int newIfacSize) {
         if (newIfacSize >= IFAC_MIN_SIZE * 8) {
@@ -60,15 +60,15 @@ public class AbstractConnectionInterface implements ConnectionInterface {
         }
     }
 
-    public void setIfacNetname(String newIfacNetname) {
+    public void setIfacNetName(String newIfacNetname) {
         if (StringUtils.isNotBlank(newIfacNetname)) {
-            ifacNetname = newIfacNetname;
+            ifacNetName = newIfacNetname;
         }
     }
 
-    public void setIfacNetkey(String newIfacNetkey) {
+    public void setIfacNetKey(String newIfacNetkey) {
         if (StringUtils.isNotBlank(newIfacNetkey)) {
-            ifacNetkey = newIfacNetkey;
+            ifacNetKey = newIfacNetkey;
         }
     }
 
@@ -112,7 +112,7 @@ public class AbstractConnectionInterface implements ConnectionInterface {
         return announceRatePenalty;
     }
 
-    public void setAnnounceCap(float newAnnounceCap) {
+    public void setAnnounceCap(double newAnnounceCap) {
         if (newAnnounceCap > 0 && newAnnounceCap < 100) {
             this.announceCap = newAnnounceCap / 100;
         }
