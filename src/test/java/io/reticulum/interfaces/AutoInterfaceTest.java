@@ -1,12 +1,8 @@
 package io.reticulum.interfaces;
 
 import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-
-import java.net.NetworkInterface;
-import java.net.SocketException;
 
 class AutoInterfaceTest {
 
@@ -23,12 +19,5 @@ class AutoInterfaceTest {
         autoInterface.setGroupId(groupId);
 
         Assertions.assertEquals(dicoveryAddress, autoInterface.getMcastDiscoveryAddress());
-    }
-
-    @Test
-    void interfaces() throws SocketException {
-        NetworkInterface.networkInterfaces()
-                .peek(i -> i.getInetAddresses().asIterator().forEachRemaining(inetAddress -> System.out.println(inetAddress.getClass().getName())))
-                .forEach(System.out::println);
     }
 }

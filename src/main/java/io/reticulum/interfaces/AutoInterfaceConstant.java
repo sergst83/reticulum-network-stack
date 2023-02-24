@@ -3,6 +3,7 @@ package io.reticulum.interfaces;
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
+import java.net.Inet6Address;
 import java.net.NetworkInterface;
 import java.util.List;
 import java.util.function.BiPredicate;
@@ -24,12 +25,12 @@ public final class AutoInterfaceConstant {
     static final List<String> ANDROID_IGNORE_IFS = List.of("dummy0", "lo", "tun0");
     static final boolean IN = true;
 
-    static final BiPredicate<NetworkInterface, List<String>> DARWIN_PREDICATE = (netIface, allowedInterfaces) -> {
+    static final BiPredicate<NetworkInterface, AutoInterface> DARWIN_PREDICATE = (netIface, autoInterface) -> {
         var result = OS_NAME.toLowerCase().contains("darwin")
                 && DARWIN_IGNORE_IFS.contains(netIface.getName().toLowerCase())
-                && isFalse(allowedInterfaces.contains(netIface.getName()));
+                && isFalse(autoInterface.getAllowedInterfaces().contains(netIface.getName()));
         if (result) {
-            log.trace("{} skipping Darwin AWDL or tethering interface {}", AutoInterface.class, netIface.getName());
+            log.trace("{} skipping Darwin AWDL or tethering interface {}", autoInterface.getName(), netIface.getName());
         }
 
         return result;
@@ -44,32 +45,36 @@ public final class AutoInterfaceConstant {
         return result;
     };
 
-    static final BiPredicate<NetworkInterface, List<String>> ANDROID_PREDICATE = (netIface, allowedInterfaces) -> {
+    static final BiPredicate<NetworkInterface, AutoInterface> ANDROID_PREDICATE = (netIface, autoInterface) -> {
         var result = OS_NAME.toLowerCase().contains("android")
                 && ANDROID_IGNORE_IFS.contains(netIface.getName().toLowerCase())
-                && isFalse(allowedInterfaces.contains(netIface.getName()));
+                && isFalse(autoInterface.getAllowedInterfaces().contains(netIface.getName()));
         if (result) {
-            log.trace("{} skipping Android system interface {}", AutoInterface.class, netIface.getName());
+            log.trace("{} skipping Android system interface {}", autoInterface.getName(), netIface.getName());
         }
 
         return result;
     };
 
-    static final BiPredicate<NetworkInterface, List<String>> IGNORED_PREDICATE = (netIface, ignoredInterfaces) -> {
-        var result = ignoredInterfaces.contains(netIface.getName().toLowerCase());
+    static final BiPredicate<NetworkInterface, AutoInterface> IGNORED_PREDICATE = (netIface, autoInterface) -> {
+        var result = autoInterface.getIgnoredInterfaces().contains(netIface.getName().toLowerCase());
         if (result) {
-            log.trace("{} ignoring disallowed interface {}", AutoInterface.class, netIface.getName());
+            log.trace("{} ignoring disallowed interface {}", autoInterface.getName(), netIface.getName());
         }
 
         return result;
     };
 
-    static final BiPredicate<NetworkInterface, List<String>> NOT_IN_ALLOWED_PREDICATE = (netIface, allowedInterfaces) -> {
-        var result = allowedInterfaces.size() > 0 && isFalse(allowedInterfaces.contains(netIface.getName().toLowerCase()));
+    static final BiPredicate<NetworkInterface, AutoInterface> NOT_IN_ALLOWED_PREDICATE = (netIface, autoInterface) -> {
+        var result = autoInterface.getAllowedInterfaces().size() > 0
+                && isFalse(autoInterface.getAllowedInterfaces().contains(netIface.getName().toLowerCase()));
         if (result) {
-            log.trace("{} ignoring interface {} since it was not allowed", AutoInterface.class, netIface.getName());
+            log.trace("{} ignoring interface {} since it was not allowed", autoInterface.getName(), netIface.getName());
         }
 
         return result;
     };
+
+    static final Predicate<NetworkInterface> HAS_IPV6_ADDRESS = netIface -> netIface.inetAddresses()
+            .anyMatch(inetAddress -> inetAddress instanceof Inet6Address);
 }

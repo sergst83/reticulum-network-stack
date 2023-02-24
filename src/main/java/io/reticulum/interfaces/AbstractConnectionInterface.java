@@ -27,6 +27,8 @@ public class AbstractConnectionInterface implements ConnectionInterface {
 
     protected boolean enabled;
 
+    private String name;
+
     @JsonAlias({"interface_mode", "mode"})
     protected InterfaceMode interfaceMode = MODE_FULL;
 
@@ -116,5 +118,9 @@ public class AbstractConnectionInterface implements ConnectionInterface {
         if (newAnnounceCap > 0 && newAnnounceCap < 100) {
             this.announceCap = newAnnounceCap / 100;
         }
+    }
+
+    public String getName() {
+        return String.format(this.getClass().getSimpleName() + "(%s)", name);
     }
 }
