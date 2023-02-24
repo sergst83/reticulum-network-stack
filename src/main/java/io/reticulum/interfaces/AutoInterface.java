@@ -22,7 +22,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.StringJoiner;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 import static io.reticulum.interfaces.AutoInterfaceConstant.ANDROID_PREDICATE;
 import static io.reticulum.interfaces.AutoInterfaceConstant.DARWIN_LOOPBACK_PREDICATE;
@@ -38,7 +37,10 @@ import static java.lang.Byte.toUnsignedInt;
 import static java.lang.String.format;
 import static java.net.NetworkInterface.networkInterfaces;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.nonNull;
 import static java.util.concurrent.Executors.callable;
+import static java.util.concurrent.Executors.newFixedThreadPool;
+import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.stream.Collectors.toList;
@@ -113,6 +115,7 @@ public class AutoInterface extends AbstractConnectionInterface {
     private Map<?, ?> timedOutInterfaces = Map.of();
     private boolean carrierChanged;
     private boolean receives;
+    private String mcastDiscoveryAddress;
 
     private Object outboundUdpSocket;
 
@@ -125,7 +128,11 @@ public class AutoInterface extends AbstractConnectionInterface {
 
     @Setter(PRIVATE)
     @Getter(PRIVATE)
-    private ExecutorService peerAnnounceScheduledThreadPool;
+    private ExecutorService peerAnnounceScheduledExecutor;
+
+    @Setter(PRIVATE)
+    @Getter(PRIVATE)
+    private ExecutorService multicastDiscoveryListenerExecutor;
 
     @Override
     public void setEnabled(boolean enabled) {
@@ -152,40 +159,66 @@ public class AutoInterface extends AbstractConnectionInterface {
                 .filter(HAS_IPV6_ADDRESS)
                 .collect(toUnmodifiableList());
 
-        // TODO: 23.02.2023 создаем поток, в котором будут слушаться multicast discovery сообщения и добавляться в список пиров
-
-        //создаем потоки, которые будет рассылать по multicast сообщения и определенным интервалом
-        peerAnnounceScheduledThreadPool = Executors.newScheduledThreadPool(interfaceList.size());
-        peerAnnounceScheduledThreadPool.invokeAll(
-                interfaceList.stream()
-                        .map(iface -> callable(() -> peerAnnounce(iface)))
-                        .collect(toList()),
-                (long) (getAnnounceInterval() * SECONDS.toMillis(1)),
-                MILLISECONDS
-        );
-
         if (interfaceList.size() == 0) {
             log.trace("{} could not autoconfigure. This interface currently provides no connectivity.", getName());
         } else {
+            //создаем поток, в котором будут слушаться multicast discovery сообщения и добавляться в список пиров
+            initMulticastDiscoveryListeners(interfaceList);
+
+            //создаем потоки, которые будет рассылать по multicast сообщения и определенным интервалом
+            initPeerAnnounces(interfaceList);
+
             // TODO: 23.02.2023 Запускаем udp сервера на всех интерфейсам в своих потоках для слушания соединений
             // TODO: 23.02.2023 запускаем peer job которая проверяет пиров от которых давно не было анонсов и перезапускает udp сервер если там изменился адрес
         }
     }
 
-    public byte[] getGroupHash() {
-        return getSha256Digest().digest(getGroupId().getBytes(UTF_8));
+    public String getMcastDiscoveryAddress() {
+        if (nonNull(mcastDiscoveryAddress)) {
+            return mcastDiscoveryAddress;
+        } else {
+            synchronized (this) {
+                var groupHash = getSha256Digest().digest(getGroupId().getBytes(UTF_8));
+                var sj = new StringJoiner(":")
+                        .add("ff1" + getDiscoveryScope().getScopeValue())
+                        .add("0");
+                for (int i = 2; i <= 12; i += 2) {
+                    sj.add(format("%02x", toUnsignedInt(groupHash[i + 1]) + (toUnsignedInt(groupHash[i]) << 8)));
+                }
+                mcastDiscoveryAddress = sj.toString();
+            }
+
+            return mcastDiscoveryAddress;
+        }
     }
 
-    public String getMcastDiscoveryAddress() {
-        var groupHash = getGroupHash();
-        var sj = new StringJoiner(":")
-                .add("ff1" + getDiscoveryScope().getScopeValue())
-                .add("0");
-        for (int i = 2; i <= 12; i += 2) {
-            sj.add(format("%02x", toUnsignedInt(groupHash[i + 1]) + (toUnsignedInt(groupHash[i]) << 8)));
-        }
+    private void initPeerAnnounces(List<NetworkInterface> networkInterfaceList) throws InterruptedException {
+        peerAnnounceScheduledExecutor = newScheduledThreadPool(networkInterfaceList.size());
+        peerAnnounceScheduledExecutor.invokeAll(
+                networkInterfaceList.stream()
+                        .map(iface -> callable(() -> peerAnnounce(iface)))
+                        .collect(toList()),
+                (long) (getAnnounceInterval() * SECONDS.toMillis(1)),
+                MILLISECONDS
+        );
+    }
 
-        return sj.toString();
+    private void initMulticastDiscoveryListeners(List<NetworkInterface> networkInterfaceList) throws InterruptedException {
+        multicastDiscoveryListenerExecutor = newFixedThreadPool(networkInterfaceList.size());
+        multicastDiscoveryListenerExecutor.invokeAll(
+                networkInterfaceList.stream()
+                        .map(iface -> callable(() -> discoveryHandler(initMulticastDiscoveryListener(iface))))
+                        .collect(toList())
+        );
+    }
+
+    @SneakyThrows
+    private MulticastSocket initMulticastDiscoveryListener(NetworkInterface networkInterface) {
+        var multicastSocket = new MulticastSocket(getDiscoveryPort());
+        var group = InetAddress.getByName(getMcastDiscoveryAddress()+ "%" + networkInterface.getName());
+        multicastSocket.joinGroup(group);
+
+        return multicastSocket;
     }
 
     private void peerAnnounce(final NetworkInterface networkInterface) {
@@ -193,13 +226,41 @@ public class AutoInterface extends AbstractConnectionInterface {
                 (getGroupId() + getLocalIpv6Address(networkInterface)).getBytes(UTF_8)
         );
         try(var multicastSocket = new MulticastSocket(getDiscoveryPort())) {
-            var group = InetAddress.getByAddress(getMcastDiscoveryAddress().getBytes(UTF_8));
+            multicastSocket.setNetworkInterface(networkInterface);
+            var group = InetAddress.getByName(getMcastDiscoveryAddress());
             multicastSocket.joinGroup(group);
             multicastSocket.send(new DatagramPacket(discoveryToken, discoveryToken.length, group, getDiscoveryPort()));
             multicastSocket.leaveGroup(group);
         } catch (IOException e) {
             log.error("Error while send announce on interface {}", networkInterface, e);
         }
+    }
+
+    private void discoveryHandler(MulticastSocket multicastSocket) {
+        while (true) {
+            var buf = new byte[1024];
+            var packet = new DatagramPacket(buf, buf.length);
+            try {
+                multicastSocket.receive(packet);
+                var ipV6Address = packet.getAddress().getHostAddress().split("&")[0];
+                var expectedHash = getSha256Digest().digest((getGroupId() + ipV6Address).getBytes(UTF_8));
+                if (Arrays.equals(packet.getData(), expectedHash)) {
+                    addPeer(ipV6Address, multicastSocket.getNetworkInterface());
+                } else {
+                    log.debug(
+                            "{} received peering packet on {}  from {}, but authentication hash was incorrect.",
+                            this.getName(), multicastSocket.getNetworkInterface().getName(), ipV6Address
+                    );
+                }
+            } catch (IOException e) {
+                log.error("Error while receive multicast packet {}", packet, e);
+            }
+        }
+    }
+
+    // TODO: 24.02.2023 доделать пиров
+    private void addPeer(String ipV6Address, NetworkInterface networkInterface) {
+
     }
 
     private String getLocalIpv6Address(final NetworkInterface networkInterface) {
