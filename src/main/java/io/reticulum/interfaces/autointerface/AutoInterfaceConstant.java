@@ -1,4 +1,4 @@
-package io.reticulum.interfaces;
+package io.reticulum.interfaces.autointerface;
 
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,9 +21,10 @@ public final class AutoInterfaceConstant {
     static final int DEFAULT_DISCOVERY_PORT = 29716;
     static final int DEFAULT_DATA_PORT = 42671;
     static final int DEFAULT_IFAC_SIZE = 16;
-    static final List<String> DARWIN_IGNORE_IFS  = List.of("awdl0", "llw0", "lo0", "en5");
+    static final List<String> DARWIN_IGNORE_IFS = List.of("awdl0", "llw0", "lo0", "en5");
     static final List<String> ANDROID_IGNORE_IFS = List.of("dummy0", "lo", "tun0");
     static final boolean IN = true;
+    static final int BITRATE_GUESS = 10 * 1000 * 1000;
 
     static final BiPredicate<NetworkInterface, AutoInterface> DARWIN_PREDICATE = (netIface, autoInterface) -> {
         var result = OS_NAME.toLowerCase().contains("darwin")

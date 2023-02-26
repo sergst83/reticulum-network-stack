@@ -34,4 +34,8 @@ public class Transport implements ExitHandler, PersistData {
     private void saveTunnelTable() {
 
     }
+
+    public void inbound(byte[] data) {
+
+    }
 }
