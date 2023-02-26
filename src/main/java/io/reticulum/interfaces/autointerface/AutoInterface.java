@@ -1,6 +1,7 @@
 package io.reticulum.interfaces.autointerface;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import io.reticulum.interfaces.AbstractConnectionInterface;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -322,7 +323,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
 
     private void processOutgoung(final byte[] data) {
         for (Peer peer : peers.keySet()) {
-            try(var socket = new DatagramSocket()) {
+            try(var socket = new DatagramSocket(getDataPort())) {
                 var packet = new DatagramPacket(data, data.length, peer.getAddress(), peer.getPort());
                 socket.send(packet);
             } catch (IOException e) {

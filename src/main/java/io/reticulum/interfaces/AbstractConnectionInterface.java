@@ -1,10 +1,8 @@
-package io.reticulum.interfaces.autointerface;
+package io.reticulum.interfaces;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.reticulum.Transport;
-import io.reticulum.interfaces.ConnectionInterface;
-import io.reticulum.interfaces.InterfaceMode;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;

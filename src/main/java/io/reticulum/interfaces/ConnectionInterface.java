@@ -19,4 +19,6 @@ public interface ConnectionInterface {
     }
 
     boolean isEnabled();
+
+    void setName(String name);
 }
