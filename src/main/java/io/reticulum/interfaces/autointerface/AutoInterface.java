@@ -38,6 +38,7 @@ import static io.reticulum.interfaces.autointerface.AutoInterfaceConstant.DEFAUL
 import static io.reticulum.interfaces.autointerface.AutoInterfaceConstant.DEFAULT_IFAC_SIZE;
 import static io.reticulum.interfaces.autointerface.AutoInterfaceConstant.PEERING_TIMEOUT;
 import static io.reticulum.interfaces.autointerface.DiscoveryScope.SCOPE_LINK;
+import static io.reticulum.utils.IdentityUtils.fullHash;
 import static java.lang.Byte.toUnsignedInt;
 import static java.lang.String.format;
 import static java.lang.System.currentTimeMillis;
@@ -52,7 +53,6 @@ import static java.util.concurrent.Executors.newSingleThreadScheduledExecutor;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.stream.Collectors.toList;
 import static lombok.AccessLevel.PRIVATE;
-import static org.apache.commons.codec.digest.DigestUtils.getSha256Digest;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 import static org.apache.commons.lang3.BooleanUtils.isTrue;
 import static org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS;
@@ -166,7 +166,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
             return mcastDiscoveryAddress;
         } else {
             synchronized (this) {
-                var groupHash = getSha256Digest().digest(getGroupId().getBytes(UTF_8));
+                var groupHash = fullHash(getGroupId().getBytes(UTF_8));
                 var sj = new StringJoiner(":")
                         .add("ff1" + getDiscoveryScope().getScopeValue())
                         .add("0");
@@ -252,7 +252,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     }
 
     private void peerAnnounce(final NetworkInterface networkInterface) {
-        var discoveryToken = getSha256Digest().digest(
+        var discoveryToken = fullHash(
                 (getGroupId() + getLocalIpv6Address(networkInterface)).getBytes(UTF_8)
         );
         try (var multicastSocket = new MulticastSocket(getDiscoveryPort())) {
@@ -281,7 +281,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
                 multicastSocket.receive(packet);
                 var peerAddress = packet.getAddress();
                 var ipV6Address = peerAddress.getHostAddress().split("&")[0];
-                var expectedHash = getSha256Digest().digest((getGroupId() + ipV6Address).getBytes(UTF_8));
+                var expectedHash = fullHash((getGroupId() + ipV6Address).getBytes(UTF_8));
                 if (Arrays.equals(packet.getData(), expectedHash)) {
                     addPeer(new Peer(peerAddress, packet.getPort()), multicastSocket.getNetworkInterface());
                 } else {

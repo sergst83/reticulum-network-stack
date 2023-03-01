@@ -2,6 +2,7 @@ package io.reticulum.interfaces;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import io.reticulum.Identity;
 import io.reticulum.Transport;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -27,9 +28,10 @@ import static java.util.Objects.nonNull;
 public class AbstractConnectionInterface implements ConnectionInterface {
 
     protected Transport owner;
-
+    protected Identity identity;
     protected boolean enabled;
-
+    protected byte[] ifacKey;
+    protected byte[] ifacSignature;
     private String name;
 
     @JsonAlias({"interface_mode", "mode"})
