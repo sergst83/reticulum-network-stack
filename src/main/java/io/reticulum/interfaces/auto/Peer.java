@@ -1,4 +1,4 @@
-package io.reticulum.interfaces.autointerface;
+package io.reticulum.interfaces.auto;
 
 import lombok.AllArgsConstructor;
 import lombok.EqualsAndHashCode;

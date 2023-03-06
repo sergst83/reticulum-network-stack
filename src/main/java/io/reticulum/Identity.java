@@ -1,7 +1,6 @@
 package io.reticulum;
 
 import io.reticulum.utils.IdentityUtils;
-import lombok.Builder;
 import lombok.RequiredArgsConstructor;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
@@ -22,7 +21,6 @@ import static java.util.Objects.nonNull;
  * for encryption, decryption, signatures and verification, and is the basis
  * for all encrypted communication over Reticulum networks.
  */
-@Builder
 @Slf4j
 @ToString
 @RequiredArgsConstructor
@@ -130,11 +128,15 @@ public class Identity implements PersistData, ExitHandler {
     }
 
     private void updateHashes() {
-        this.hash = IdentityUtils.truncatedHash(get_public_key());
+        this.hash = IdentityUtils.truncatedHash(getPublicKey());
         this.hexHash = Hex.encodeHexString(hash);
     }
 
-    private byte[] get_public_key() {
+    public byte[] getPublicKey() {
         return ArrayUtils.addAll(pubBytes, sigPubBytes);
+    }
+
+    public byte[] getPrivateKey() {
+        return ArrayUtils.addAll(prvBytes, sigPrvBytes);
     }
 }

@@ -1,4 +1,4 @@
-package io.reticulum.interfaces.autointerface;
+package io.reticulum.interfaces.auto;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import lombok.Getter;

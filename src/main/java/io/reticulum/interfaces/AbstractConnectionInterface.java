@@ -12,10 +12,17 @@ import lombok.ToString;
 import lombok.experimental.SuperBuilder;
 import org.apache.commons.lang3.StringUtils;
 
+import java.math.BigInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+
+import static io.reticulum.interfaces.InterfaceMode.MODE_ACCESS_POINT;
 import static io.reticulum.interfaces.InterfaceMode.MODE_FULL;
+import static io.reticulum.interfaces.InterfaceMode.MODE_GATEWAY;
 import static io.reticulum.utils.ReticulumConstant.ANNOUNCE_CAP;
 import static io.reticulum.utils.ReticulumConstant.IFAC_MIN_SIZE;
 import static io.reticulum.utils.ReticulumConstant.MINIMUM_BITRATE;
+import static java.math.BigInteger.ZERO;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 
@@ -25,14 +32,26 @@ import static java.util.Objects.nonNull;
 @AllArgsConstructor
 @NoArgsConstructor
 @ToString
-public class AbstractConnectionInterface implements ConnectionInterface {
+public abstract class AbstractConnectionInterface extends Thread implements ConnectionInterface {
 
-    protected Transport owner;
+    protected boolean IN = false;
+
+    @JsonProperty("outgoing")
+    protected boolean OUT = false;
+    protected boolean FWD = false;
+    protected boolean RPT = false;
+    protected AtomicBoolean online = new AtomicBoolean(false);
+    protected String name;
+    protected int bitrate;
+    protected AtomicReference<BigInteger> rxb = new AtomicReference<>(ZERO);
+    protected AtomicReference<BigInteger> txb = new AtomicReference<>(ZERO);
+    protected static final InterfaceMode[] DISCOVER_PATHS_FOR = new InterfaceMode[]{MODE_ACCESS_POINT, MODE_GATEWAY};
+
+    protected Transport transport;
     protected Identity identity;
     protected boolean enabled;
     protected byte[] ifacKey;
     protected byte[] ifacSignature;
-    private String name;
 
     @JsonAlias({"interface_mode", "mode"})
     protected InterfaceMode interfaceMode = MODE_FULL;
@@ -125,7 +144,7 @@ public class AbstractConnectionInterface implements ConnectionInterface {
         }
     }
 
-    public String getName() {
-        return String.format(this.getClass().getSimpleName() + "(%s)", name);
+    public String getInterfaceName() {
+        return String.format(this.getClass().getSimpleName() + "[%s]", name);
     }
 }

@@ -1,4 +1,4 @@
-package io.reticulum.interfaces.autointerface;
+package io.reticulum.interfaces.auto;
 
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,7 +31,7 @@ public final class AutoInterfaceConstant {
                 && DARWIN_IGNORE_IFS.contains(netIface.getName().toLowerCase())
                 && isFalse(autoInterface.getAllowedInterfaces().contains(netIface.getName()));
         if (result) {
-            log.trace("{} skipping Darwin AWDL or tethering interface {}", autoInterface.getName(), netIface.getName());
+            log.trace("{} skipping Darwin AWDL or tethering interface {}", autoInterface.getInterfaceName(), netIface.getName());
         }
 
         return result;
@@ -51,7 +51,7 @@ public final class AutoInterfaceConstant {
                 && ANDROID_IGNORE_IFS.contains(netIface.getName().toLowerCase())
                 && isFalse(autoInterface.getAllowedInterfaces().contains(netIface.getName()));
         if (result) {
-            log.trace("{} skipping Android system interface {}", autoInterface.getName(), netIface.getName());
+            log.trace("{} skipping Android system interface {}", autoInterface.getInterfaceName(), netIface.getName());
         }
 
         return result;
@@ -60,7 +60,7 @@ public final class AutoInterfaceConstant {
     static final BiPredicate<NetworkInterface, AutoInterface> IGNORED_PREDICATE = (netIface, autoInterface) -> {
         var result = autoInterface.getIgnoredInterfaces().contains(netIface.getName().toLowerCase());
         if (result) {
-            log.trace("{} ignoring disallowed interface {}", autoInterface.getName(), netIface.getName());
+            log.trace("{} ignoring disallowed interface {}", autoInterface.getInterfaceName(), netIface.getName());
         }
 
         return result;
@@ -70,7 +70,7 @@ public final class AutoInterfaceConstant {
         var result = autoInterface.getAllowedInterfaces().size() > 0
                 && isFalse(autoInterface.getAllowedInterfaces().contains(netIface.getName().toLowerCase()));
         if (result) {
-            log.trace("{} ignoring interface {} since it was not allowed", autoInterface.getName(), netIface.getName());
+            log.trace("{} ignoring interface {} since it was not allowed", autoInterface.getInterfaceName(), netIface.getName());
         }
 
         return result;

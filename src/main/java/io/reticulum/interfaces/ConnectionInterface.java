@@ -3,7 +3,7 @@ package io.reticulum.interfaces;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonSubTypes.Type;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
-import io.reticulum.interfaces.autointerface.AutoInterface;
+import io.reticulum.interfaces.auto.AutoInterface;
 
 @JsonTypeInfo(
         use = JsonTypeInfo.Id.NAME,
@@ -21,4 +21,7 @@ public interface ConnectionInterface {
     boolean isEnabled();
 
     void setName(String name);
+
+    void processIncoming(final byte[] data);
+    void processOutgoing(final byte[] data);
 }

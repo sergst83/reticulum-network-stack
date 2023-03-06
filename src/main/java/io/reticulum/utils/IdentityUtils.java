@@ -18,4 +18,8 @@ public class IdentityUtils {
     public static byte[] truncatedHash(byte[] data) {
         return Arrays.copyOfRange(fullHash(data), 0, TRUNCATED_HASHLENGTH / 8);
     }
+
+    public static void loadKnownDestinations() {
+
+    }
 }

@@ -2,6 +2,7 @@ package io.reticulum;
 
 import io.reticulum.interfaces.AbstractConnectionInterface;
 import io.reticulum.interfaces.ConnectionInterface;
+import io.reticulum.utils.IdentityUtils;
 import io.reticulum.vendor.config.ConfigObj;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -13,8 +14,12 @@ import org.bouncycastle.crypto.generators.HKDFBytesGenerator;
 import org.bouncycastle.crypto.params.HKDFParameters;
 
 import java.io.IOException;
+import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.utils.ReticulumConstant.CONFIG_FILE_NAME;
@@ -22,6 +27,8 @@ import static io.reticulum.utils.ReticulumConstant.ETC_DIR;
 import static io.reticulum.utils.ReticulumConstant.IFAC_SALT;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.nonNull;
+import static org.apache.commons.lang3.BooleanUtils.isFalse;
+import static org.apache.commons.lang3.BooleanUtils.isTrue;
 import static org.apache.commons.lang3.SystemUtils.USER_HOME;
 
 /**
@@ -52,8 +59,8 @@ import static org.apache.commons.lang3.SystemUtils.USER_HOME;
 @Slf4j
 public class Reticulum implements ExitHandler, PersistData {
 //    private final RNSInteface router;
-    private final ConfigObj config;
-//    private final Transport transport;
+    private ConfigObj config;
+    private final Transport transport;
 //    private final Identity identity;
     private String configDir;
     private Path configPath;
@@ -69,11 +76,13 @@ public class Reticulum implements ExitHandler, PersistData {
 
     private boolean transportEnabled = false;
     private boolean useImplicitProof = true;
+    @Getter
     private boolean panicOnIntefaceError = false;
     private int localIntefacePort = 37428;
     private int localControlPort = 37429;
     private boolean shareInstance = true;
-    private Object rpcListener;
+    private ServerSocket rpcListener;
+    private byte[] rpcKey;
     private byte[] ifacSalt = IFAC_SALT;
     private Object jobsThread;
     private long lastDataPersist = System.currentTimeMillis();
@@ -88,25 +97,45 @@ public class Reticulum implements ExitHandler, PersistData {
      */
     public Reticulum(final String configDir) throws IOException {
         initConfig(configDir);
-
-        if (Files.isRegularFile(configPath)) {
-            try {
-                this.config = ConfigObj.initConfig(configPath);
-            } catch (Exception e) {
-                log.error("Could not parse the configuration at {}. \nCheck your configuration file for errors!", configPath);
-                throw e;
-            }
-        } else {
-            log.info("Could not load config file, creating default configuration file...");
-            createDefaultConfig();
-            this.config = ConfigObj.initConfig(configPath);
-            log.info("Default config file created. Make any necessary changes in {}/config and restart Reticulum if needed.", this.configDir);
+        startLocalInterface();
+        var ifList = initInterfaces();
+        IdentityUtils.loadKnownDestinations();
+        transport = Transport.start(this);
+        transport.getInterfaces().addAll(ifList);
+        rpcKey = fullHash(transport.getIdentity().getPrivateKey());
+        if (isSharedInstance) {
+            rpcListener = new ServerSocket(localIntefacePort);
         }
+//        atexit.register(Reticulum.exit_handler)
+//        signal.signal(signal.SIGINT, Reticulum.sigint_handler)
+//        signal.signal(signal.SIGTERM, Reticulum.sigterm_handler)
+    }
 
-        var reticulumConfig = this.config.getReticulum();
-        if (MapUtils.isNotEmpty(config.getInterfaces())) {
+    /**
+     * This exit handler is called whenever Reticulum is asked to
+     * shut down, and will in turn call exit handlers in other
+     * classes, saving necessary information to disk and carrying
+     * out cleanup operations.
+     */
+    public void exitHandler() {
+//        transport.exitHandler();
+//        identity.exitHandler();
+    }
+
+    @Override
+    synchronized public void persistData() {
+//        transport.persistData();
+//        identity.persistData();
+    }
+
+    private List<ConnectionInterface> initInterfaces() {
+        var interfaceList = new ArrayList<ConnectionInterface>();
+        if (nonNull(config) && MapUtils.isNotEmpty(config.getInterfaces())) {
             for (ConnectionInterface connectionInterface : config.getInterfaces().values()) {
                 var iface = (AbstractConnectionInterface) connectionInterface;
+                if (isFalse(iface.isEnabled())) {
+                    log.debug("Skipping disabled interface {}", iface.getInterfaceName());
+                }
                 if (StringUtils.isNotBlank(iface.getIfacNetName()) || StringUtils.isNotBlank(iface.getIfacNetKey())) {
                     var ifacOrigin = new byte[]{};
                     if (StringUtils.isNotBlank(iface.getIfacNetName())) {
@@ -127,29 +156,16 @@ public class Reticulum implements ExitHandler, PersistData {
                         iface.setIdentity(identity);
                         iface.setIfacSignature(identity.sign(fullHash(ifacKey)));
                     } else {
-                        log.warn("Identity is null. Interface {} not initialiset correctly!", iface);
+                        log.warn("Identity is null. Interface {} not initialised correctly!", iface);
+                        continue;
                     }
                 }
-                Transport.interfaces.add(connectionInterface);
+                interfaceList.add(iface);
             }
+            log.info("System interfaces are ready");
         }
-    }
 
-    /**
-     * This exit handler is called whenever Reticulum is asked to
-     * shut down, and will in turn call exit handlers in other
-     * classes, saving necessary information to disk and carrying
-     * out cleanup operations.
-     */
-    public void exitHandler() {
-//        transport.exitHandler();
-//        identity.exitHandler();
-    }
-
-    @Override
-    public void persistData() {
-//        transport.persistData();
-//        identity.persistData();
+        return interfaceList;
     }
 
     private void initConfig(String configDir) throws IOException {
@@ -188,6 +204,40 @@ public class Reticulum implements ExitHandler, PersistData {
 
         if (Files.notExists(identityPath)) {
             Files.createDirectories(identityPath);
+        }
+
+        if (Files.isRegularFile(configPath)) {
+            try {
+                this.config = ConfigObj.initConfig(configPath);
+            } catch (Exception e) {
+                log.error("Could not parse the configuration at {}. \nCheck your configuration file for errors!", configPath);
+                throw e;
+            }
+        } else {
+            log.info("Could not load config file, creating default configuration file...");
+            createDefaultConfig();
+            this.config = ConfigObj.initConfig(configPath);
+            log.info("Default config file created. Make any necessary changes in {}/config and restart Reticulum if needed.", this.configDir);
+        }
+
+        log.info("Config loaded from {}", configPath);
+
+        var reticulumConfig = config.getReticulum();
+        shareInstance = Optional.ofNullable(reticulumConfig.getShareInstance()).orElse(shareInstance);
+        localIntefacePort = Optional.ofNullable(reticulumConfig.getSharedInstancePort()).orElse(localControlPort);
+        localControlPort = Optional.ofNullable(reticulumConfig.getInstanceControlPort()).orElse(localControlPort);
+        transportEnabled = Optional.ofNullable(reticulumConfig.getEnableTransport()).orElse(transportEnabled);
+        panicOnIntefaceError = Optional.ofNullable(reticulumConfig.getPanicOnInterfaceError()).orElse(panicOnIntefaceError);
+        useImplicitProof = Optional.ofNullable(reticulumConfig.getUseImplicitProof()).orElse(useImplicitProof);
+    }
+
+    private void startLocalInterface() {
+        if (isTrue(config.getReticulum().getShareInstance())) {
+            try {
+//                var iface = new Lova
+            } catch (Exception e) {
+
+            }
         }
     }
 

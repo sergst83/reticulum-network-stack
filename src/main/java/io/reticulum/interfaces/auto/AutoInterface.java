@@ -1,4 +1,4 @@
-package io.reticulum.interfaces.autointerface;
+package io.reticulum.interfaces.auto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.reticulum.interfaces.AbstractConnectionInterface;
@@ -30,19 +30,17 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 
-import static io.reticulum.interfaces.autointerface.AutoInterfaceConstant.BITRATE_GUESS;
-import static io.reticulum.interfaces.autointerface.AutoInterfaceConstant.DEFAULT_DATA_PORT;
-import static io.reticulum.interfaces.autointerface.AutoInterfaceConstant.DEFAULT_DISCOVERY_PORT;
-import static io.reticulum.interfaces.autointerface.AutoInterfaceConstant.DEFAULT_IFAC_SIZE;
-import static io.reticulum.interfaces.autointerface.AutoInterfaceConstant.PEERING_TIMEOUT;
-import static io.reticulum.interfaces.autointerface.DiscoveryScope.SCOPE_LINK;
+import static io.reticulum.interfaces.auto.AutoInterfaceConstant.BITRATE_GUESS;
+import static io.reticulum.interfaces.auto.AutoInterfaceConstant.DEFAULT_DATA_PORT;
+import static io.reticulum.interfaces.auto.AutoInterfaceConstant.DEFAULT_DISCOVERY_PORT;
+import static io.reticulum.interfaces.auto.AutoInterfaceConstant.DEFAULT_IFAC_SIZE;
+import static io.reticulum.interfaces.auto.AutoInterfaceConstant.PEERING_TIMEOUT;
+import static io.reticulum.interfaces.auto.DiscoveryScope.SCOPE_LINK;
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static java.lang.Byte.toUnsignedInt;
 import static java.lang.String.format;
 import static java.lang.System.currentTimeMillis;
-import static java.math.BigInteger.ZERO;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.nonNull;
 import static java.util.concurrent.Executors.defaultThreadFactory;
@@ -70,9 +68,6 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
         configuredBitrate = BITRATE_GUESS;
     }
 
-    @JsonProperty("outgoing")
-    private boolean OUT = false;
-
     @JsonProperty("group_id")
     private String groupId = "reticulum";
 
@@ -90,9 +85,6 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
 
     @JsonProperty("ignored_interfaces")
     private List<String> ignoredInterfaces = List.of();
-
-    private AtomicReference<BigInteger> rxb = new AtomicReference<>(ZERO);
-    private AtomicReference<BigInteger> txb = new AtomicReference<>(ZERO);
     private Map<Peer, MutablePair<NetworkInterface, Long>> peers = new ConcurrentHashMap<>();
     private Map<NetworkInterface, Thread> interfaceServers = new ConcurrentHashMap<>();
     private Map<NetworkInterface, Long> multicastEchoes = new ConcurrentHashMap<>();
@@ -104,7 +96,6 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     private double peerJobInterval = PEERING_TIMEOUT * 1.1;
     private double peeringTimeout = PEERING_TIMEOUT;
     private double multicastEchoTimeout = PEERING_TIMEOUT / 2;
-    private boolean online;
     private boolean receives;
 
     private List<NetworkInterface> interfaceList = new CopyOnWriteArrayList<>();
@@ -145,11 +136,11 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
 
         //создаем поток, в котором будут слушаться multicast discovery сообщения и добавляться в список пиров
         if (initMulticastDiscoveryListeners(interfaceList) && initPeerAnnounces(interfaceList)) {
-            log.trace("{} could not autoconfigure. This interface currently provides no connectivity.", getName());
+            log.trace("{} could not autoconfigure. This interface currently provides no connectivity.", getInterfaceName());
         } else {
             receives = true;
             var peering_wait = secToMillisec(getAnnounceInterval() * 1.2);
-            log.info("{}  discovering peers for {} seconds...", this.getName(), MILLISECONDS.toSeconds(peering_wait));
+            log.info("{}  discovering peers for {} seconds...", this.getInterfaceName(), MILLISECONDS.toSeconds(peering_wait));
 
             //Запускаем udp сервера на всех интерфейсам в своих потоках для слушания соединений
             initNetworkInterfaceServers(interfaceList);
@@ -157,7 +148,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
             //запускаем peerJob, которая проверяет пиров, от которых давно не было анонсов и перезапускает udp сервер если там изменился адрес
             schedulePeerJob();
 
-            online = true;
+            online.set(true);
         }
     }
 
@@ -266,7 +257,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
                     (timedOutInterfaces.containsKey(networkInterface) && isFalse(timedOutInterfaces.get(networkInterface)))
                     || isFalse(timedOutInterfaces.containsKey(networkInterface))
             ) {
-                log.warn("{}  Detected possible carrier loss on {}.", this.getName(), networkInterface.getName(), e);
+                log.warn("{}  Detected possible carrier loss on {}.", this.getInterfaceName(), networkInterface.getName(), e);
             }
 
             log.error("Error while send announce on interface {}", networkInterface, e);
@@ -287,7 +278,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
                 } else {
                     log.debug(
                             "{} received peering packet on {}  from {}, but authentication hash was incorrect.",
-                            this.getName(), multicastSocket.getNetworkInterface().getName(), ipV6Address
+                            this.getInterfaceName(), multicastSocket.getNetworkInterface().getName(), ipV6Address
                     );
                 }
             } catch (IOException e) {
@@ -304,21 +295,26 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
                     .findFirst()
                     .ifPresentOrElse(
                             iface -> multicastEchoes.put(iface, currentTime),
-                            () -> log.warn("{} received multicast echo on unexpected interface {}", this.getName(), networkInterface.getName())
+                            () -> log.warn("{} received multicast echo on unexpected interface {}", this.getInterfaceName(), networkInterface.getName())
                     );
         } else {
             if (isFalse(peers.containsKey(peer))) {
                 peers.put(peer, MutablePair.of(networkInterface, currentTime));
-                log.debug("{} added peer {} on {}", this.getName(), peer, networkInterface);
+                log.debug("{} added peer {} on {}", this.getInterfaceName(), peer, networkInterface);
             } else {
                 peers.get(peer).setRight(currentTime);
             }
         }
     }
 
-    private void processIncoming(final byte[] data) {
+    public void processIncoming(final byte[] data) {
         rxb.updateAndGet(previous -> previous.add(BigInteger.valueOf(data.length)));
-        owner.inbound(data);
+        transport.inbound(data);
+    }
+
+    @Override
+    public void processOutgoing(byte[] data) {
+        //pass
     }
 
     private void processOutgoung(final byte[] data) {
@@ -327,7 +323,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
                 var packet = new DatagramPacket(data, data.length, peer.getAddress(), peer.getPort());
                 socket.send(packet);
             } catch (IOException e) {
-                log.error("Could not transmit on {}.", this.getName(), e);
+                log.error("Could not transmit on {}.", this.getInterfaceName(), e);
             }
         }
         txb.updateAndGet(previous -> previous.add(BigInteger.valueOf(data.length)));
@@ -348,7 +344,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
                 .forEach(
                         peerAddress -> {
                             var removed = peers.remove(peerAddress);
-                            log.debug("{} removed peer {} on {}", this.getName(), peerAddress, removed.getLeft().getName());
+                            log.debug("{} removed peer {} on {}", this.getInterfaceName(), peerAddress, removed.getLeft().getName());
                         }
                 );
 
@@ -358,7 +354,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
 
             var toRemove = CollectionUtils.subtract(interfaceList, newIfaceList);
             for (NetworkInterface iface : toRemove) {
-                log.debug("Shutting down previous UDP listener for {} on {}", this.getName(), iface.getName());
+                log.debug("Shutting down previous UDP listener for {} on {}", this.getInterfaceName(), iface.getName());
                 interfaceList.remove(iface);
                 var thread = interfaceServers.remove(iface);
                 cachedTreadPoolExecutor.submit(thread::interrupt);
@@ -366,7 +362,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
 
             var toAdd = CollectionUtils.subtract(newIfaceList, interfaceList);
             for (NetworkInterface iface : toAdd) {
-                log.debug("Starting new UDP listener for {} {}", this.getName(), iface.getName());
+                log.debug("Starting new UDP listener for {} {}", this.getInterfaceName(), iface.getName());
                 interfaceList.add(iface);
                 initNetworkInterfaceServers(List.of(iface));
             }
@@ -383,13 +379,13 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
                 } else {
                     if (timedOutInterfaces.containsKey(iface) && isTrue(timedOutInterfaces.get(iface))) {
                         carrierChanged.set(true);
-                        log.warn("{}  Carrier recovered on {}", this.getName(), iface.getName());
+                        log.warn("{}  Carrier recovered on {}", this.getInterfaceName(), iface.getName());
                     }
                     timedOutInterfaces.put(iface, false);
                 }
             }
         } catch (SocketException e) {
-            log.error("Could not get device information while updating link-local addresses for {}.", this.getName(), e);
+            log.error("Could not get device information while updating link-local addresses for {}.", this.getInterfaceName(), e);
         }
     }
 }

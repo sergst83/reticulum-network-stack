@@ -1,4 +1,4 @@
-package io.reticulum.interfaces.autointerface;
+package io.reticulum.interfaces.auto;
 
 import java.net.Inet6Address;
 import java.net.InetAddress;
@@ -6,12 +6,12 @@ import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.util.List;
 
-import static io.reticulum.interfaces.autointerface.AutoInterfaceConstant.ANDROID_PREDICATE;
-import static io.reticulum.interfaces.autointerface.AutoInterfaceConstant.DARWIN_LOOPBACK_PREDICATE;
-import static io.reticulum.interfaces.autointerface.AutoInterfaceConstant.DARWIN_PREDICATE;
-import static io.reticulum.interfaces.autointerface.AutoInterfaceConstant.HAS_IPV6_ADDRESS;
-import static io.reticulum.interfaces.autointerface.AutoInterfaceConstant.IGNORED_PREDICATE;
-import static io.reticulum.interfaces.autointerface.AutoInterfaceConstant.NOT_IN_ALLOWED_PREDICATE;
+import static io.reticulum.interfaces.auto.AutoInterfaceConstant.ANDROID_PREDICATE;
+import static io.reticulum.interfaces.auto.AutoInterfaceConstant.DARWIN_LOOPBACK_PREDICATE;
+import static io.reticulum.interfaces.auto.AutoInterfaceConstant.DARWIN_PREDICATE;
+import static io.reticulum.interfaces.auto.AutoInterfaceConstant.HAS_IPV6_ADDRESS;
+import static io.reticulum.interfaces.auto.AutoInterfaceConstant.IGNORED_PREDICATE;
+import static io.reticulum.interfaces.auto.AutoInterfaceConstant.NOT_IN_ALLOWED_PREDICATE;
 import static java.net.NetworkInterface.networkInterfaces;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.stream.Collectors.toUnmodifiableList;
