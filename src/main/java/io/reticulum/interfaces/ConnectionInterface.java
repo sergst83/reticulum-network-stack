@@ -24,4 +24,6 @@ public interface ConnectionInterface {
 
     void processIncoming(final byte[] data);
     void processOutgoing(final byte[] data);
+
+    public String getInterfaceName();
 }

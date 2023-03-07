@@ -2,25 +2,29 @@ package io.reticulum;
 
 import io.reticulum.interfaces.AbstractConnectionInterface;
 import io.reticulum.interfaces.ConnectionInterface;
+import io.reticulum.interfaces.local.LocalClientInterface;
+import io.reticulum.interfaces.local.LocalServerInterface;
 import io.reticulum.utils.IdentityUtils;
 import io.reticulum.vendor.config.ConfigObj;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.MapUtils;
 import org.apache.commons.lang3.ArrayUtils;
-import org.apache.commons.lang3.StringUtils;
 import org.bouncycastle.crypto.digests.SHA256Digest;
 import org.bouncycastle.crypto.generators.HKDFBytesGenerator;
 import org.bouncycastle.crypto.params.HKDFParameters;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.SocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import static io.reticulum.utils.CommonUtils.panic;
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.utils.ReticulumConstant.CONFIG_FILE_NAME;
 import static io.reticulum.utils.ReticulumConstant.ETC_DIR;
@@ -28,7 +32,7 @@ import static io.reticulum.utils.ReticulumConstant.IFAC_SALT;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.nonNull;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
-import static org.apache.commons.lang3.BooleanUtils.isTrue;
+import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.apache.commons.lang3.SystemUtils.USER_HOME;
 
 /**
@@ -82,6 +86,7 @@ public class Reticulum implements ExitHandler, PersistData {
     private int localControlPort = 37429;
     private boolean shareInstance = true;
     private ServerSocket rpcListener;
+    private SocketAddress rpcAddr;
     private byte[] rpcKey;
     private byte[] ifacSalt = IFAC_SALT;
     private Object jobsThread;
@@ -97,12 +102,17 @@ public class Reticulum implements ExitHandler, PersistData {
      */
     public Reticulum(final String configDir) throws IOException {
         initConfig(configDir);
+
         startLocalInterface();
         var ifList = initInterfaces();
         IdentityUtils.loadKnownDestinations();
         transport = Transport.start(this);
         transport.getInterfaces().addAll(ifList);
+
+        rpcAddr = new InetSocketAddress(localIntefacePort);
         rpcKey = fullHash(transport.getIdentity().getPrivateKey());
+
+        // TODO: 07.03.2023 не уверен что нам надо делать в таком виде как в питоне...
         if (isSharedInstance) {
             rpcListener = new ServerSocket(localIntefacePort);
         }
@@ -130,20 +140,34 @@ public class Reticulum implements ExitHandler, PersistData {
 
     private List<ConnectionInterface> initInterfaces() {
         var interfaceList = new ArrayList<ConnectionInterface>();
+        if (isFalse(isSharedInstance || isStandaloneInnstance)) {
+            return interfaceList;
+        }
         if (nonNull(config) && MapUtils.isNotEmpty(config.getInterfaces())) {
             for (ConnectionInterface connectionInterface : config.getInterfaces().values()) {
                 var iface = (AbstractConnectionInterface) connectionInterface;
+
                 if (isFalse(iface.isEnabled())) {
                     log.debug("Skipping disabled interface {}", iface.getInterfaceName());
                 }
-                if (StringUtils.isNotBlank(iface.getIfacNetName()) || StringUtils.isNotBlank(iface.getIfacNetKey())) {
+
+                if (interfaceList.stream().anyMatch(i -> i.getInterfaceName().equals(iface.getInterfaceName()))) {
+                    log.error("The interface name {} was already used. Check your configuration file for errors!", iface.getInterfaceName());
+                    panic();
+                }
+
+                if (isNotBlank(iface.getIfacNetName()) || isNotBlank(iface.getIfacNetKey())) {
                     var ifacOrigin = new byte[]{};
-                    if (StringUtils.isNotBlank(iface.getIfacNetName())) {
+
+                    if (isNotBlank(iface.getIfacNetName())) {
                         ifacOrigin = ArrayUtils.addAll(ifacOrigin, fullHash(iface.getIfacNetName().getBytes(UTF_8)));
                     }
-                    if (StringUtils.isNotBlank(iface.getIfacNetKey())) {
+
+                    if (isNotBlank(iface.getIfacNetKey())) {
                         ifacOrigin = ArrayUtils.addAll(ifacOrigin, fullHash(iface.getIfacNetKey().getBytes(UTF_8)));
                     }
+
+                    // TODO: 07.03.2023 проверить чтоб были хеши и ключи одинаковые с питоном
                     var ifacOriginHash = fullHash(ifacOrigin);
                     var hkdf = new HKDFBytesGenerator(new SHA256Digest());
                     hkdf.init(new HKDFParameters(ifacOriginHash, IFAC_SALT, new byte[0]));
@@ -160,6 +184,7 @@ public class Reticulum implements ExitHandler, PersistData {
                         continue;
                     }
                 }
+
                 interfaceList.add(iface);
             }
             log.info("System interfaces are ready");
@@ -169,7 +194,7 @@ public class Reticulum implements ExitHandler, PersistData {
     }
 
     private void initConfig(String configDir) throws IOException {
-        if (StringUtils.isNotBlank(configDir)) {
+        if (isNotBlank(configDir)) {
             this.configDir = configDir;
         } else {
             if (Files.isDirectory(Path.of(ETC_DIR)) && Files.exists(Path.of(ETC_DIR, CONFIG_FILE_NAME))) {
@@ -232,12 +257,39 @@ public class Reticulum implements ExitHandler, PersistData {
     }
 
     private void startLocalInterface() {
-        if (isTrue(config.getReticulum().getShareInstance())) {
+        if (shareInstance) {
             try {
-//                var iface = new Lova
-            } catch (Exception e) {
+                var serverInterface = new LocalServerInterface(transport, localIntefacePort);
+                serverInterface.setOUT(true);
+                serverInterface.start();
+                transport.getInterfaces().add(serverInterface);
 
+                isSharedInstance = true;
+                log.debug("Started shared instance interface: {}", serverInterface.getInterfaceName());
+                startJobs();
+            } catch (Exception e) {
+                try {
+                    var localClientInterface = new LocalClientInterface(transport,"Local shared instance", localIntefacePort);
+                    localClientInterface.setOUT(true);
+                    localClientInterface.start();
+                    transport.getInterfaces().add(localClientInterface);
+                    isSharedInstance = false;
+                    isStandaloneInnstance = false;
+                    isConnectedToSharedInstance = true;
+                    transportEnabled = false;
+                    log.debug("Connected to locally available Reticulum instance via: {}", localClientInterface.getInterfaceName());
+                } catch (IOException ex) {
+                    log.error("Local shared instance appears to be running, but it could not be connected", e);
+                    isSharedInstance = false;
+                    isStandaloneInnstance = true;
+                    isConnectedToSharedInstance = false;
+                }
             }
+        } else {
+            isSharedInstance = false;
+            isStandaloneInnstance = true;
+            isConnectedToSharedInstance = false;
+            startJobs();
         }
     }
 
@@ -249,5 +301,9 @@ public class Reticulum implements ExitHandler, PersistData {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private void startJobs() {
+
     }
 }

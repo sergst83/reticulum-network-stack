@@ -2,6 +2,7 @@ package io.reticulum.interfaces.local;
 
 import io.reticulum.Transport;
 import io.reticulum.interfaces.AbstractConnectionInterface;
+import io.reticulum.interfaces.InterfaceMode;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.ArrayUtils;
@@ -10,6 +11,7 @@ import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.math.BigInteger;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
@@ -50,28 +52,58 @@ public class LocalClientInterface extends AbstractConnectionInterface {
         return result;
     }
 
-    private Socket connection;
+    private Socket socket;
     private SocketAddress targetAddress;
     private LocalServerInterface parentInterface;
     private boolean isConnectedToSharedInstance;
-    private boolean neverConnected = true;
+    private boolean neverConnected;
     private boolean detached;
     private boolean reconnecting;
     private boolean writing;
+    private boolean receives;
+    private boolean forceBitrate;
+
+    private LocalClientInterface() {
+        enabled = true;
+        online.set(false);
+
+        IN = true;
+        OUT = false;
+        reconnecting = false;
+        neverConnected = true;
+        detached = false;
+        interfaceMode = InterfaceMode.MODE_FULL;
+
+        bitrate = 1000_000_000;
+        writing = false;
+
+        forceBitrate = false;
+    }
 
     public LocalClientInterface(Transport owner, String name, Socket socket) {
+        this();
+        this.receives = true;
         this.transport = owner;
         this.name = name;
-        this.connection = socket;
+        this.socket = socket;
         this.targetAddress = socket.getRemoteSocketAddress();
         this.isConnectedToSharedInstance = true;
         this.online.set(true);
         this.neverConnected = false;
     }
 
+    public LocalClientInterface(Transport owner, String name, int port) throws IOException {
+        this();
+        this.transport = owner;
+        this.name = name;
+        this.socket = new Socket();
+        this.targetAddress = new InetSocketAddress(port);
+        connect();
+    }
+
     public void readLoop() {
         try {
-            var inputStream = new BufferedInputStream(connection.getInputStream());
+            var inputStream = new BufferedInputStream(socket.getInputStream());
             var inFrame = false;
             var escape = false;
             var dataBuffer = new byte[0];
@@ -111,13 +143,13 @@ public class LocalClientInterface extends AbstractConnectionInterface {
                     transport.sharedConnectionDisappeared();
                     reconnect();
                 } else {
-                    this.teardown(true);
+                    teardown(true);
                 }
             }
         } catch (IOException | InterruptedException e) {
             online.set(false);
             log.error("An interface error occurred. Tearing down {}", this.getInterfaceName(), e);
-            this.teardown(false);
+            teardown(false);
         }
     }
 
@@ -179,12 +211,24 @@ public class LocalClientInterface extends AbstractConnectionInterface {
         }
     }
 
-    private void connect() throws IOException {
-        connection.connect(targetAddress);
+    private boolean connect() throws IOException {
+        socket.connect(targetAddress);
+        isConnectedToSharedInstance = true;
+        neverConnected = false;
+        online.set(true);
+
+        return true;
     }
 
     @Override
     public void processIncoming(byte[] data) {
+        if (forceBitrate) {
+            try {
+                Thread.sleep(TimeUnit.SECONDS.toMillis(data.length / bitrate * 8L));
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }
         rxb.updateAndGet(previous -> previous.add(BigInteger.valueOf(data.length)));
         if (nonNull(parentInterface)) {
             parentInterface.getRxb().updateAndGet(previous -> previous.add(BigInteger.valueOf(data.length)));
@@ -196,8 +240,8 @@ public class LocalClientInterface extends AbstractConnectionInterface {
     public void processOutgoing(final byte[] data) {
         if (online.get()) {
             try {
-                var outputStream = new BufferedOutputStream(connection.getOutputStream());
-                if (!connection.isConnected()) {
+                var outputStream = new BufferedOutputStream(socket.getOutputStream());
+                if (!socket.isConnected()) {
                     reconnect();
                 }
                 writing = true;
@@ -218,7 +262,7 @@ public class LocalClientInterface extends AbstractConnectionInterface {
 
     @Override
     public void run() {
-        while (!this.connection.isClosed()) {
+        while (!this.socket.isClosed()) {
             readLoop();
         }
     }
