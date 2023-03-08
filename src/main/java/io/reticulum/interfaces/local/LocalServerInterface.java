@@ -15,19 +15,17 @@ import static io.reticulum.interfaces.InterfaceMode.MODE_FULL;
 @Slf4j
 public class LocalServerInterface extends AbstractConnectionInterface {
 
-    private final int bindPort;
     private final ServerSocket server;
     @Getter
     private final AtomicInteger clients = new AtomicInteger(0);
 
     public LocalServerInterface(Transport transport, int port) throws IOException {
         this.transport = transport;
-        this.bindPort = port;
         this.IN = true;
         this.OUT = false;
-        this.name = "Reticulum";
+        this.interfaceName = "Reticulum";
         this.interfaceMode = MODE_FULL;
-        this.server = new ServerSocket(bindPort);
+        this.server = new ServerSocket(port);
         this.server.setReuseAddress(true);
         this.bitrate = 1000_000_000;
         this.online.set(true);
@@ -45,7 +43,7 @@ public class LocalServerInterface extends AbstractConnectionInterface {
     }
 
     private void incomingConnection(Socket socket) {
-        var spawnedInterface = new LocalClientInterface(transport, name, socket);
+        var spawnedInterface = new LocalClientInterface(transport, interfaceName, socket);
         spawnedInterface.setIN(IN);
         spawnedInterface.setOUT(OUT);
         spawnedInterface.setParentInterface(this);
@@ -53,7 +51,7 @@ public class LocalServerInterface extends AbstractConnectionInterface {
         log.trace("Accepting new connection to shared instance: {}", spawnedInterface.getInterfaceName());
         transport.getInterfaces().add(spawnedInterface);
         transport.getLocalClientInterfaces().add(spawnedInterface);
-        clients.getAndIncrement();
+        clients.incrementAndGet();
         spawnedInterface.start();
     }
 

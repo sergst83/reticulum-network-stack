@@ -9,7 +9,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 import lombok.ToString;
-import lombok.experimental.SuperBuilder;
 import org.apache.commons.lang3.StringUtils;
 
 import java.math.BigInteger;
@@ -28,7 +27,6 @@ import static java.util.Objects.nonNull;
 
 @Getter
 @Setter
-@SuperBuilder(toBuilder = true)
 @AllArgsConstructor
 @NoArgsConstructor
 @ToString
@@ -41,7 +39,7 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
     protected boolean FWD = false;
     protected boolean RPT = false;
     protected AtomicBoolean online = new AtomicBoolean(false);
-    protected String name;
+    protected String interfaceName;
     protected int bitrate;
     protected AtomicReference<BigInteger> rxb = new AtomicReference<>(ZERO);
     protected AtomicReference<BigInteger> txb = new AtomicReference<>(ZERO);
@@ -145,6 +143,6 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
     }
 
     public String getInterfaceName() {
-        return String.format(this.getClass().getSimpleName() + "[%s]", name);
+        return String.format(this.getClass().getSimpleName() + "[%s]", interfaceName);
     }
 }

@@ -36,7 +36,7 @@ public class ConfigObj {
     public void setInterfaces(Map<String, ConnectionInterface> interfaces) {
         this.interfaces = interfaces;
         if (MapUtils.isNotEmpty(this.interfaces)) {
-            this.interfaces.forEach((name, connectionInterface) -> connectionInterface.setName(name));
+            this.interfaces.forEach((name, connectionInterface) -> connectionInterface.setInterfaceName(name));
         }
     }
 }

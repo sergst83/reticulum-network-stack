@@ -27,9 +27,9 @@ import static org.apache.commons.lang3.BooleanUtils.isFalse;
 public class LocalClientInterface extends AbstractConnectionInterface {
 
     private static final long RECONNECT_WAIT = TimeUnit.SECONDS.toMillis(3);
-    private static final byte FLAG = Byte.decode("0x7E");
-    private static final byte ESC = Byte.decode("0x7D");
-    private static final byte ESC_MASK = Byte.decode("0x20");
+    private static final byte FLAG = 0x7E;
+    private static final byte ESC = 0x7D;
+    private static final byte ESC_MASK = 0x20;
     private static final int HW_MTU = 1064;
 
     private static byte[] escape(byte[] data) {
@@ -84,7 +84,7 @@ public class LocalClientInterface extends AbstractConnectionInterface {
         this();
         this.receives = true;
         this.transport = owner;
-        this.name = name;
+        this.interfaceName = name;
         this.socket = socket;
         this.targetAddress = socket.getRemoteSocketAddress();
         this.isConnectedToSharedInstance = true;
@@ -95,7 +95,7 @@ public class LocalClientInterface extends AbstractConnectionInterface {
     public LocalClientInterface(Transport owner, String name, int port) throws IOException {
         this();
         this.transport = owner;
-        this.name = name;
+        this.interfaceName = name;
         this.socket = new Socket();
         this.targetAddress = new InetSocketAddress(port);
         connect();

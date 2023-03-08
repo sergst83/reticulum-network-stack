@@ -20,10 +20,9 @@ public interface ConnectionInterface {
 
     boolean isEnabled();
 
-    void setName(String name);
-
     void processIncoming(final byte[] data);
     void processOutgoing(final byte[] data);
 
+    void setInterfaceName(String name);
     public String getInterfaceName();
 }

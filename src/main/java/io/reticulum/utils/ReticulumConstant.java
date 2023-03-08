@@ -5,6 +5,14 @@ import lombok.NoArgsConstructor;
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.function.BiConsumer;
+import java.util.stream.Stream;
+
+import static io.reticulum.utils.IdentiryConstant.HASHLENGTH;
+
 @NoArgsConstructor(access = AccessLevel.PRIVATE)
 public class ReticulumConstant {
 
@@ -76,4 +84,11 @@ public class ReticulumConstant {
     public static final String ETC_DIR = "/etc/reticulum";
 
     public static final String CONFIG_FILE_NAME = "config.yml";
+
+    public static final BiConsumer<Stream<Path>, Integer> CLEAN_CONSUMER = (streamPath, ttlSec) ->
+            streamPath
+                    .filter(Files::isRegularFile)
+                    .filter(path -> path.toFile().getName().length() == HASHLENGTH / 8 * 2)
+                    .filter(path -> System.currentTimeMillis() - path.toFile().lastModified() > Duration.ofSeconds(ttlSec).toMillis())
+                    .forEach(path -> path.toFile().delete());
 }

@@ -1,5 +1,6 @@
 package io.reticulum.utils;
 
+import io.reticulum.Transport;
 import lombok.NoArgsConstructor;
 
 import java.util.Arrays;
@@ -21,5 +22,19 @@ public class IdentityUtils {
 
     public static void loadKnownDestinations() {
 
+    }
+
+    public static void saveKnownDestinations() {
+
+    }
+
+    public static void persistData() {
+        if (Transport.getInstance().getOwner().isConnectedToSharedInstance()) {
+            saveKnownDestinations();
+        }
+    }
+
+    public static void exitHandler() {
+        persistData();
     }
 }

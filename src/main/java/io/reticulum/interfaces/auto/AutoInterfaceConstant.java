@@ -21,6 +21,7 @@ public final class AutoInterfaceConstant {
     static final int DEFAULT_DISCOVERY_PORT = 29716;
     static final int DEFAULT_DATA_PORT = 42671;
     static final int DEFAULT_IFAC_SIZE = 16;
+    static final List<String> ALL_IGNORE_IFS     = List.of("lo0");
     static final List<String> DARWIN_IGNORE_IFS = List.of("awdl0", "llw0", "lo0", "en5");
     static final List<String> ANDROID_IGNORE_IFS = List.of("dummy0", "lo", "tun0");
     static final boolean IN = true;
@@ -71,6 +72,15 @@ public final class AutoInterfaceConstant {
                 && isFalse(autoInterface.getAllowedInterfaces().contains(netIface.getName().toLowerCase()));
         if (result) {
             log.trace("{} ignoring interface {} since it was not allowed", autoInterface.getInterfaceName(), netIface.getName());
+        }
+
+        return result;
+    };
+
+    static final BiPredicate<NetworkInterface, AutoInterface> IN_ALL_IGNORE_IFS = (netIface, autoInterface) -> {
+        var result = ALL_IGNORE_IFS.contains(netIface.getName().toLowerCase());
+        if (result) {
+            log.trace("{} skipping interface {}", autoInterface.getInterfaceName(), netIface.getName());
         }
 
         return result;

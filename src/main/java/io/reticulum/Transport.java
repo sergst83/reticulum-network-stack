@@ -11,7 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 @RequiredArgsConstructor
-public final class Transport implements ExitHandler, PersistData {
+public final class Transport implements ExitHandler {
     private static volatile Transport INSTANCE;
 
     @Getter
@@ -64,7 +64,10 @@ public final class Transport implements ExitHandler, PersistData {
         }
     }
 
-    @Override
+    public void detachInterfaces() {
+
+    }
+
     public void persistData() {
         savePacketHashlist();
         savePathTable();

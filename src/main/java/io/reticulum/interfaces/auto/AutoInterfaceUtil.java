@@ -11,6 +11,7 @@ import static io.reticulum.interfaces.auto.AutoInterfaceConstant.DARWIN_LOOPBACK
 import static io.reticulum.interfaces.auto.AutoInterfaceConstant.DARWIN_PREDICATE;
 import static io.reticulum.interfaces.auto.AutoInterfaceConstant.HAS_IPV6_ADDRESS;
 import static io.reticulum.interfaces.auto.AutoInterfaceConstant.IGNORED_PREDICATE;
+import static io.reticulum.interfaces.auto.AutoInterfaceConstant.IN_ALL_IGNORE_IFS;
 import static io.reticulum.interfaces.auto.AutoInterfaceConstant.NOT_IN_ALLOWED_PREDICATE;
 import static java.net.NetworkInterface.networkInterfaces;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -25,6 +26,7 @@ public interface AutoInterfaceUtil {
                 .filter(netIface -> ANDROID_PREDICATE.negate().test(netIface, instace))
                 .filter(netIface -> IGNORED_PREDICATE.negate().test(netIface, instace))
                 .filter(netIface -> NOT_IN_ALLOWED_PREDICATE.test(netIface, instace))
+                .filter(netIface -> IN_ALL_IGNORE_IFS.negate().test(netIface, instace))
                 .filter(HAS_IPV6_ADDRESS)
                 .collect(toUnmodifiableList());
     }

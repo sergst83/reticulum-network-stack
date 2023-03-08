@@ -24,7 +24,7 @@ import static java.util.Objects.nonNull;
 @Slf4j
 @ToString
 @RequiredArgsConstructor
-public class Identity implements PersistData, ExitHandler {
+public class Identity {
 
     private static final int KEYSIZE = 256 * 2;
 
@@ -74,20 +74,6 @@ public class Identity implements PersistData, ExitHandler {
         }
     }
 
-    //todo додулать это
-    @Override
-    public void persistData() {
-//        if (transport.getOwner().isConnectedToSharedInstance()) {
-
-//        }
-    }
-
-    // TODO: 18.02.2023 доделать реализацию
-    @Override
-    public void exitHandler() {
-
-    }
-
     /**
      * Signs information by the identity.
      *
@@ -112,11 +98,11 @@ public class Identity implements PersistData, ExitHandler {
     }
 
     /**
-     * Create a new :ref:`RNS.Identity<api-identity>` instance from *bytes* of private key.
+     * Create a new {@link Identity} instance from <strong>bytes</strong> of private key.
      * Can be used to load previously created and saved identities into Reticulum.
      *
-     * @param bytes The *bytes* of private a saved private key. **HAZARD!** Never use this to generate a new key by feeding random data in prv_bytes.
-     * @return A {@link Identity} instance, or *null* if the *bytes* data was invalid.
+     * @param bytes The *bytes* of private a saved private key. <strong>HAZARD!</strong> Never use this to generate a new key by feeding random data in prv_bytes.
+     * @return A {@link Identity} instance, or <strong>null</strong> if the *bytes* data was invalid.
      */
     public static Identity fromBytes(byte[] bytes) {
         var identity = new Identity(false);

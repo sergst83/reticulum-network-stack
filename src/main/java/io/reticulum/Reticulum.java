@@ -13,24 +13,32 @@ import org.apache.commons.lang3.ArrayUtils;
 import org.bouncycastle.crypto.digests.SHA256Digest;
 import org.bouncycastle.crypto.generators.HKDFBytesGenerator;
 import org.bouncycastle.crypto.params.HKDFParameters;
+import sun.misc.Signal;
 
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
-import java.net.SocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicLong;
 
+import static io.reticulum.utils.CommonUtils.exit;
 import static io.reticulum.utils.CommonUtils.panic;
 import static io.reticulum.utils.IdentityUtils.fullHash;
+import static io.reticulum.utils.ReticulumConstant.CLEAN_CONSUMER;
+import static io.reticulum.utils.ReticulumConstant.CLEAN_INTERVAL;
 import static io.reticulum.utils.ReticulumConstant.CONFIG_FILE_NAME;
 import static io.reticulum.utils.ReticulumConstant.ETC_DIR;
 import static io.reticulum.utils.ReticulumConstant.IFAC_SALT;
+import static io.reticulum.utils.ReticulumConstant.PERSIST_INTERVAL;
+import static io.reticulum.utils.ReticulumConstant.RESOURCE_CACHE;
+import static io.reticulum.utils.TransportConstant.DESTINATION_TIMEOUT;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.nonNull;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.apache.commons.lang3.SystemUtils.USER_HOME;
@@ -61,11 +69,10 @@ import static org.apache.commons.lang3.SystemUtils.USER_HOME;
  * other programs to use on demand.
  */
 @Slf4j
-public class Reticulum implements ExitHandler, PersistData {
-//    private final RNSInteface router;
-    private ConfigObj config;
+public class Reticulum implements ExitHandler {
     private final Transport transport;
-//    private final Identity identity;
+
+    private ConfigObj config;
     private String configDir;
     private Path configPath;
     private Path storagePath;
@@ -83,15 +90,17 @@ public class Reticulum implements ExitHandler, PersistData {
     @Getter
     private boolean panicOnIntefaceError = false;
     private int localIntefacePort = 37428;
-    private int localControlPort = 37429;
     private boolean shareInstance = true;
-    private ServerSocket rpcListener;
-    private SocketAddress rpcAddr;
-    private byte[] rpcKey;
+
+//    private int localControlPort = 37429;
+//    private SocketAddress rpcAddr;
+//    private byte[] rpcKey;
+
     private byte[] ifacSalt = IFAC_SALT;
-    private Object jobsThread;
-    private long lastDataPersist = System.currentTimeMillis();
-    private long lastCacheClean = 0;
+    private AtomicLong lastDataPersist = new AtomicLong(System.currentTimeMillis());
+    private AtomicLong lastCacheClean = new AtomicLong(0);
+
+    private static final ScheduledExecutorService scheduledExecutorService = Executors.newScheduledThreadPool(2);
 
     /**
      * Initialises and starts a Reticulum instance. This must be
@@ -109,16 +118,16 @@ public class Reticulum implements ExitHandler, PersistData {
         transport = Transport.start(this);
         transport.getInterfaces().addAll(ifList);
 
-        rpcAddr = new InetSocketAddress(localIntefacePort);
-        rpcKey = fullHash(transport.getIdentity().getPrivateKey());
+//        rpcAddr = new InetSocketAddress(localIntefacePort);
+//        rpcKey = fullHash(transport.getIdentity().getPrivateKey());
 
         // TODO: 07.03.2023 не уверен что нам надо делать в таком виде как в питоне...
-        if (isSharedInstance) {
-            rpcListener = new ServerSocket(localIntefacePort);
-        }
-//        atexit.register(Reticulum.exit_handler)
-//        signal.signal(signal.SIGINT, Reticulum.sigint_handler)
-//        signal.signal(signal.SIGTERM, Reticulum.sigterm_handler)
+//        if (isSharedInstance) {
+//            rpcListener = new ServerSocket(localIntefacePort);
+//        }
+        Runtime.getRuntime().addShutdownHook(new Thread(this::exitHandler));
+        Signal.handle(new Signal("INT"), sig -> sigintHandler());
+        Signal.handle(new Signal("TERM"), sig -> sigtermHandler());
     }
 
     /**
@@ -128,14 +137,41 @@ public class Reticulum implements ExitHandler, PersistData {
      * out cleanup operations.
      */
     public void exitHandler() {
-//        transport.exitHandler();
-//        identity.exitHandler();
+        transport.exitHandler();
+        IdentityUtils.exitHandler();
     }
 
-    @Override
-    synchronized public void persistData() {
-//        transport.persistData();
-//        identity.persistData();
+    private void sigintHandler() {
+        transport.detachInterfaces();
+        exit();
+    }
+
+    private void sigtermHandler() {
+        transport.detachInterfaces();
+        exit();
+    }
+
+    public void persistData() {
+        transport.persistData();
+        IdentityUtils.persistData();
+    }
+
+    private void cleanCaches() {
+        log.trace("Cleaning resource and packet caches...");
+
+        // Clean resource caches
+        try (var streamPath = Files.walk(resourcePath)) {
+            CLEAN_CONSUMER.accept(streamPath, RESOURCE_CACHE);
+        } catch (IOException e) {
+            log.error("Error while cleaning resources cache.", e);
+        }
+
+        // Clean packet caches
+        try (var streamPath = Files.walk(cachePath)) {
+            CLEAN_CONSUMER.accept(streamPath, DESTINATION_TIMEOUT);
+        } catch (IOException e) {
+            log.error("Error while cleaning caches cache.", e);
+        }
     }
 
     private List<ConnectionInterface> initInterfaces() {
@@ -249,8 +285,8 @@ public class Reticulum implements ExitHandler, PersistData {
 
         var reticulumConfig = config.getReticulum();
         shareInstance = Optional.ofNullable(reticulumConfig.getShareInstance()).orElse(shareInstance);
-        localIntefacePort = Optional.ofNullable(reticulumConfig.getSharedInstancePort()).orElse(localControlPort);
-        localControlPort = Optional.ofNullable(reticulumConfig.getInstanceControlPort()).orElse(localControlPort);
+        localIntefacePort = Optional.ofNullable(reticulumConfig.getSharedInstancePort()).orElse(localIntefacePort);
+//        localControlPort = Optional.ofNullable(reticulumConfig.getInstanceControlPort()).orElse(localControlPort);
         transportEnabled = Optional.ofNullable(reticulumConfig.getEnableTransport()).orElse(transportEnabled);
         panicOnIntefaceError = Optional.ofNullable(reticulumConfig.getPanicOnInterfaceError()).orElse(panicOnIntefaceError);
         useImplicitProof = Optional.ofNullable(reticulumConfig.getUseImplicitProof()).orElse(useImplicitProof);
@@ -304,6 +340,22 @@ public class Reticulum implements ExitHandler, PersistData {
     }
 
     private void startJobs() {
-
+        var defaultDelaySec = 5;
+        scheduledExecutorService.scheduleAtFixedRate(
+                () -> {
+                    cleanCaches();
+                    lastCacheClean.set(System.currentTimeMillis());
+                }, defaultDelaySec,
+                CLEAN_INTERVAL,
+                SECONDS
+        );
+        scheduledExecutorService.scheduleAtFixedRate(() -> {
+                    persistData();
+                    lastDataPersist.set(System.currentTimeMillis());
+                },
+                defaultDelaySec,
+                PERSIST_INTERVAL,
+                SECONDS
+        );
     }
 }
