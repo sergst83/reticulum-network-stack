@@ -21,6 +21,8 @@ public final class Transport implements ExitHandler {
 
     @Getter
     private final List<ConnectionInterface> interfaces = new CopyOnWriteArrayList<>();
+    @Getter
+    private final List<Destination> destinations = new CopyOnWriteArrayList<>();
 
     @Getter
     private final List<ConnectionInterface> localClientInterfaces = new CopyOnWriteArrayList<>();

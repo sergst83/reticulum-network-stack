@@ -15,8 +15,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 
-import static io.reticulum.utils.ReticulumConstant.ETC_DIR;
-import static io.reticulum.utils.ReticulumConstant.IFAC_SALT;
+import static io.reticulum.constant.ReticulumConstant.ETC_DIR;
+import static io.reticulum.constant.ReticulumConstant.IFAC_SALT;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.apache.commons.codec.digest.DigestUtils.getSha256Digest;
 import static org.apache.commons.lang3.SystemUtils.USER_HOME;

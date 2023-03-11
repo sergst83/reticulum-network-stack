@@ -3,9 +3,11 @@ package io.reticulum.utils;
 import io.reticulum.Transport;
 import lombok.NoArgsConstructor;
 
+import java.security.SecureRandom;
 import java.util.Arrays;
 
-import static io.reticulum.utils.ReticulumConstant.TRUNCATED_HASHLENGTH;
+import static io.reticulum.IdentityKnownDestination.saveKnownDestinations;
+import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
 import static lombok.AccessLevel.PRIVATE;
 import static org.apache.commons.codec.digest.DigestUtils.getSha256Digest;
 
@@ -16,16 +18,23 @@ public class IdentityUtils {
         return getSha256Digest().digest(data);
     }
 
+    /**
+     * Get a truncated SHA-256 hash of passed data.
+     *
+     * @param data Data to be hashed.
+     * @return Truncated SHA-256 hash
+     */
     public static byte[] truncatedHash(byte[] data) {
         return Arrays.copyOfRange(fullHash(data), 0, TRUNCATED_HASHLENGTH / 8);
     }
 
-    public static void loadKnownDestinations() {
-
-    }
-
-    public static void saveKnownDestinations() {
-
+    /**
+     * Get a random SHA-256 hash.
+     *
+     * @return Truncated SHA-256 hash of random data
+     */
+    public static byte[] getRandomHash() {
+        return truncatedHash(SecureRandom.getSeed(TRUNCATED_HASHLENGTH / 8));
     }
 
     public static void persistData() {

@@ -1,4 +1,4 @@
-package io.reticulum.utils;
+package io.reticulum.constant;
 
 import lombok.AccessLevel;
 import lombok.NoArgsConstructor;
@@ -11,7 +11,7 @@ import java.time.Duration;
 import java.util.function.BiConsumer;
 import java.util.stream.Stream;
 
-import static io.reticulum.utils.IdentiryConstant.HASHLENGTH;
+import static io.reticulum.constant.IdentityConstant.HASHLENGTH;
 
 @NoArgsConstructor(access = AccessLevel.PRIVATE)
 public class ReticulumConstant {
@@ -32,6 +32,7 @@ public class ReticulumConstant {
     public static final int MTU = 500;
     public static final int MAX_QUEUED_ANNOUNCES = 16384;
     public static final int QUEUED_ANNOUNCE_LIFE = 60 * 60 * 24;
+
     /**
      * The maximum percentage of interface bandwidth that, at any given time,
      * may be used to propagate announces. If an announce was scheduled for
@@ -50,6 +51,7 @@ public class ReticulumConstant {
      */
     public static final double ANNOUNCE_CAP = 2;
     public static final int MINIMUM_BITRATE = 500;
+
     // TODO: To reach the 300bps level without unreasonably impacting
     // performance on faster links, we need a mechanism for setting
     // this value more intelligently. One option could be inferring it
@@ -57,8 +59,10 @@ public class ReticulumConstant {
     // probably be to let Reticulum somehow continously build a map of
     // per-hop latencies and use this map for the timeout calculation.
     public static final int DEFAULT_PER_HOP_TIMEOUT = 6;
+
     /**
-     * Length of truncated hashes in bits.
+     * Constant specifying the truncated hash length (in bits) used by Reticulum
+     * for addressable hashes and other purposes. Non-configurable.
      */
     public static final int TRUNCATED_HASHLENGTH = 128;
 

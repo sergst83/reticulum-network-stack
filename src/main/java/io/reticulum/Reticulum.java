@@ -25,17 +25,18 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static io.reticulum.IdentityKnownDestination.loadKnownDestinations;
 import static io.reticulum.utils.CommonUtils.exit;
 import static io.reticulum.utils.CommonUtils.panic;
 import static io.reticulum.utils.IdentityUtils.fullHash;
-import static io.reticulum.utils.ReticulumConstant.CLEAN_CONSUMER;
-import static io.reticulum.utils.ReticulumConstant.CLEAN_INTERVAL;
-import static io.reticulum.utils.ReticulumConstant.CONFIG_FILE_NAME;
-import static io.reticulum.utils.ReticulumConstant.ETC_DIR;
-import static io.reticulum.utils.ReticulumConstant.IFAC_SALT;
-import static io.reticulum.utils.ReticulumConstant.PERSIST_INTERVAL;
-import static io.reticulum.utils.ReticulumConstant.RESOURCE_CACHE;
-import static io.reticulum.utils.TransportConstant.DESTINATION_TIMEOUT;
+import static io.reticulum.constant.ReticulumConstant.CLEAN_CONSUMER;
+import static io.reticulum.constant.ReticulumConstant.CLEAN_INTERVAL;
+import static io.reticulum.constant.ReticulumConstant.CONFIG_FILE_NAME;
+import static io.reticulum.constant.ReticulumConstant.ETC_DIR;
+import static io.reticulum.constant.ReticulumConstant.IFAC_SALT;
+import static io.reticulum.constant.ReticulumConstant.PERSIST_INTERVAL;
+import static io.reticulum.constant.ReticulumConstant.RESOURCE_CACHE;
+import static io.reticulum.constant.TransportConstant.DESTINATION_TIMEOUT;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.nonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -75,6 +76,7 @@ public class Reticulum implements ExitHandler {
     private ConfigObj config;
     private String configDir;
     private Path configPath;
+    @Getter
     private Path storagePath;
     private Path cachePath;
     private Path resourcePath;
@@ -114,7 +116,7 @@ public class Reticulum implements ExitHandler {
 
         startLocalInterface();
         var ifList = initInterfaces();
-        IdentityUtils.loadKnownDestinations();
+        loadKnownDestinations();
         transport = Transport.start(this);
         transport.getInterfaces().addAll(ifList);
 

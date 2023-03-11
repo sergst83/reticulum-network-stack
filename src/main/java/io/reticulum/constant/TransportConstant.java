@@ -1,4 +1,4 @@
-package io.reticulum.utils;
+package io.reticulum.constant;
 
 import static io.reticulum.utils.LinkConstant.STALE_TIME;
 
