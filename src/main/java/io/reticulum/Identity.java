@@ -1,5 +1,6 @@
 package io.reticulum;
 
+import com.macasaet.fernet.Key;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
@@ -8,18 +9,26 @@ import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.lang3.ArrayUtils;
+import org.bouncycastle.crypto.agreement.X25519Agreement;
+import org.bouncycastle.crypto.digests.SHA256Digest;
+import org.bouncycastle.crypto.generators.HKDFBytesGenerator;
+import org.bouncycastle.crypto.generators.X25519KeyPairGenerator;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
+import org.bouncycastle.crypto.params.HKDFParameters;
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters;
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
 
+import javax.crypto.spec.IvParameterSpec;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.SecureRandom;
 import java.util.Arrays;
 
 import static io.reticulum.utils.IdentityUtils.truncatedHash;
+import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 
 /**
@@ -157,6 +166,73 @@ public class Identity {
     }
 
     /**
+     * Encrypts information for the identity.
+     *
+     * @param plaintext The plaintext to be encrypted
+     * @return Ciphertext token
+     */
+    public byte[] encrypt(final byte[] plaintext) {
+        if (isNull(pub)) {
+            throw new IllegalStateException("Encryption failed because identity does not hold a public key");
+        }
+
+        var ephemeralKeyPair = new X25519KeyPairGenerator().generateKeyPair();
+        var ephemeralKey = (X25519PrivateKeyParameters) ephemeralKeyPair.getPrivate();
+        var ephemeralPubBytes = ephemeralKey.generatePublicKey().getEncoded();
+
+        var agreement = new X25519Agreement();
+        agreement.init(ephemeralKey);
+        var sharedKey = new byte[agreement.getAgreementSize()];
+        agreement.calculateAgreement(pub, sharedKey, 0);
+
+        var hkdf = new HKDFBytesGenerator(new SHA256Digest());
+        hkdf.init(new HKDFParameters(sharedKey, getSalt(), getContext()));
+        var derivedKey = new byte[32];
+        hkdf.generateBytes(derivedKey, 0, derivedKey.length);
+
+        var fernet = new Fernet(derivedKey);
+        var ciphertext = fernet.encrypt(plaintext);
+
+        return ArrayUtils.addAll(ephemeralPubBytes, ciphertext);
+    }
+
+    public byte[] decrypt(final byte[] cipherTextToken) {
+        if (isNull(prv)) {
+            throw new IllegalStateException("Encryption failed because identity does not hold a public key");
+        }
+
+        if (cipherTextToken.length > KEYSIZE / 8 / 2) {
+            byte[] plainText = null;
+            try {
+                var peerPubBytes = Arrays.copyOfRange(cipherTextToken, 0, KEYSIZE / 8 / 2);
+                var peerPub = new X25519PublicKeyParameters(peerPubBytes);
+
+                var agreement = new X25519Agreement();
+                agreement.init(prv);
+                var sharedKey = new byte[agreement.getAgreementSize()];
+                agreement.calculateAgreement(peerPub, sharedKey, 0);
+
+                var hkdf = new HKDFBytesGenerator(new SHA256Digest());
+                hkdf.init(new HKDFParameters(sharedKey, getSalt(), getContext()));
+                var derivedKey = new byte[32];
+                hkdf.generateBytes(derivedKey, 0, derivedKey.length);
+
+                var fernet = new Fernet(derivedKey);
+                var cipherText = Arrays.copyOfRange(cipherTextToken, KEYSIZE / 8 / 2, cipherTextToken.length);
+                plainText = fernet.decrypt(cipherText);
+            } catch (Exception e) {
+                log.debug("Decryption by {} failed.", hash, e);
+            }
+
+            return plainText;
+        } else {
+            log.debug("Decryption failed because the token size was invalid.");
+
+            return null;
+        }
+    }
+
+    /**
      * Create a new {@link Identity} instance from <strong>bytes</strong> of private key.
      * Can be used to load previously created and saved identities into Reticulum.
      *
@@ -211,5 +287,26 @@ public class Identity {
         return null;
     }
 
-    // TODO: 11.03.2023 encrypt decrypt
+    private static class Fernet extends Key {
+
+        private final IvParameterSpec initializationVector;
+
+        public Fernet(byte[] concatenatedKeys) {
+            super(concatenatedKeys);
+
+            var secureRandom = new SecureRandom();
+            final byte[] retval = new byte[16];
+            secureRandom.nextBytes(retval);
+
+            initializationVector = new IvParameterSpec(retval);
+        }
+
+        public byte[] encrypt(byte[] plainText) {
+            return encrypt(plainText, initializationVector);
+        }
+
+        public byte[] decrypt(byte[] cipherText) {
+           return decrypt(cipherText, initializationVector);
+        }
+    }
 }

@@ -86,6 +86,11 @@
             <artifactId>bcpkix-jdk15on</artifactId>
             <version>1.70</version>
         </dependency>
+        <dependency>
+            <groupId>com.macasaet.fernet</groupId>
+            <artifactId>fernet-java8</artifactId>
+            <version>1.4.2</version>
+        </dependency>
     </dependencies>
 
     <build>
