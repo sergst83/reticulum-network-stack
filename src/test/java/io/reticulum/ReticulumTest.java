@@ -17,9 +17,11 @@ import java.util.Arrays;
 
 import static io.reticulum.constant.ReticulumConstant.ETC_DIR;
 import static io.reticulum.constant.ReticulumConstant.IFAC_SALT;
+import static java.lang.ClassLoader.getSystemClassLoader;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.apache.commons.codec.digest.DigestUtils.getSha256Digest;
 import static org.apache.commons.lang3.SystemUtils.USER_HOME;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 class ReticulumTest {
 
@@ -37,9 +39,9 @@ class ReticulumTest {
 
     @Test
     void testConfigYamlParse() throws IOException {
-        var config = ConfigObj.initConfig(Path.of(getClass().getClassLoader().getResource("reticulum.default.yml").getPath()));
+        var config = ConfigObj.initConfig(Path.of(getSystemClassLoader().getResource("reticulum.default.yml").getPath()));
 
-        System.out.println(config);
+        assertNotNull(config);
     }
 
     @Test
@@ -57,7 +59,7 @@ class ReticulumTest {
         var result = new byte[64];
         var len = HKDF.generateBytes(result, 0, result.length);
 
-        System.out.println(Hex.encodeHexString(result));
+        assertNotNull(Hex.encodeHexString(result));
     }
 
     private String initConfig(String configDir) {

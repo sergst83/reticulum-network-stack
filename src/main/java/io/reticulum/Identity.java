@@ -1,10 +1,10 @@
 package io.reticulum;
 
-import com.macasaet.fernet.Key;
+import io.reticulum.cryptography.Fernet;
 import lombok.Getter;
 import lombok.NonNull;
-import lombok.RequiredArgsConstructor;
 import lombok.Setter;
+import lombok.SneakyThrows;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Hex;
@@ -12,7 +12,6 @@ import org.apache.commons.lang3.ArrayUtils;
 import org.bouncycastle.crypto.agreement.X25519Agreement;
 import org.bouncycastle.crypto.digests.SHA256Digest;
 import org.bouncycastle.crypto.generators.HKDFBytesGenerator;
-import org.bouncycastle.crypto.generators.X25519KeyPairGenerator;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
 import org.bouncycastle.crypto.params.HKDFParameters;
@@ -20,13 +19,15 @@ import org.bouncycastle.crypto.params.X25519PrivateKeyParameters;
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
 
-import javax.crypto.spec.IvParameterSpec;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.util.Arrays;
 
+import static io.reticulum.constant.IdentityConstant.KEYSIZE;
+import static io.reticulum.constant.PacketConstant.PROOF;
+import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.truncatedHash;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
@@ -38,13 +39,8 @@ import static java.util.Objects.nonNull;
  */
 @Slf4j
 @ToString
-@RequiredArgsConstructor
 @Getter
 public class Identity {
-
-    private static final int KEYSIZE = 256 * 2;
-
-    private final boolean createKeys;
 
     private byte[] prvBytes;
     private X25519PrivateKeyParameters prv;
@@ -62,8 +58,29 @@ public class Identity {
     @Setter
     private byte[] appData;
 
+    public Identity() {
+        this(true);
+    }
 
-//    private final Transport transport;
+    public Identity(boolean createKeys) {
+        if (createKeys) {
+            prv = new X25519PrivateKeyParameters(new SecureRandom());
+            prvBytes = prv.getEncoded();
+
+            sigPrv = new Ed25519PrivateKeyParameters(new SecureRandom());
+            sigPrvBytes = sigPrv.getEncoded();
+
+            pub = prv.generatePublicKey();
+            pubBytes = pub.getEncoded();
+
+            sigPub = sigPrv.generatePublicKey();
+            sigPubBytes = sigPub.getEncoded();
+
+            updateHashes();
+
+            log.info("Identity keys created for {}", hash);
+        }
+    }
 
     /**
      * Load a private key into the instance.
@@ -171,13 +188,13 @@ public class Identity {
      * @param plaintext The plaintext to be encrypted
      * @return Ciphertext token
      */
+    @SneakyThrows
     public byte[] encrypt(final byte[] plaintext) {
         if (isNull(pub)) {
             throw new IllegalStateException("Encryption failed because identity does not hold a public key");
         }
 
-        var ephemeralKeyPair = new X25519KeyPairGenerator().generateKeyPair();
-        var ephemeralKey = (X25519PrivateKeyParameters) ephemeralKeyPair.getPrivate();
+        var ephemeralKey = new X25519PrivateKeyParameters(new SecureRandom());
         var ephemeralPubBytes = ephemeralKey.generatePublicKey().getEncoded();
 
         var agreement = new X25519Agreement();
@@ -193,7 +210,7 @@ public class Identity {
         var fernet = new Fernet(derivedKey);
         var ciphertext = fernet.encrypt(plaintext);
 
-        return ArrayUtils.addAll(ephemeralPubBytes, ciphertext);
+        return concatArrays(ephemeralPubBytes, ciphertext);
     }
 
     public byte[] decrypt(final byte[] cipherTextToken) {
@@ -266,6 +283,22 @@ public class Identity {
         }
     }
 
+    public void prove(@NonNull Packet packet, Destination destination) throws IOException {
+        var signature = sign(packet.getPacketHash());
+        var proofData = concatArrays(packet.getPacketHash(), signature);
+        if (Transport.getInstance().getOwner().isUseImplicitProof()) {
+            proofData = signature;
+        }
+
+        var proof = new Packet(
+                isNull(destination) ? packet.generatrProofDestination() : destination,
+                proofData,
+                PROOF,
+                packet.getReceivingInterface()
+        );
+        proof.send();
+    }
+
     private void updateHashes() {
         this.hash = truncatedHash(getPublicKey());
         this.hexHash = Hex.encodeHexString(hash);
@@ -285,28 +318,5 @@ public class Identity {
 
     public byte[] getContext() {
         return null;
-    }
-
-    private static class Fernet extends Key {
-
-        private final IvParameterSpec initializationVector;
-
-        public Fernet(byte[] concatenatedKeys) {
-            super(concatenatedKeys);
-
-            var secureRandom = new SecureRandom();
-            final byte[] retval = new byte[16];
-            secureRandom.nextBytes(retval);
-
-            initializationVector = new IvParameterSpec(retval);
-        }
-
-        public byte[] encrypt(byte[] plainText) {
-            return encrypt(plainText, initializationVector);
-        }
-
-        public byte[] decrypt(byte[] cipherText) {
-           return decrypt(cipherText, initializationVector);
-        }
     }
 }

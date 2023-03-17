@@ -14,7 +14,6 @@ import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.lang3.ArrayUtils;
 import org.msgpack.jackson.dataformat.MessagePackMapper;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.Arrays;
@@ -27,9 +26,11 @@ import static io.reticulum.constant.IdentityConstant.NAME_HASH_LENGTH;
 import static io.reticulum.constant.IdentityConstant.SIGLENGTH;
 import static io.reticulum.constant.PacketConstant.ANNOUNCE;
 import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
+import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
+import static java.util.Objects.requireNonNullElse;
 import static lombok.AccessLevel.PRIVATE;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
@@ -114,26 +115,13 @@ public class IdentityKnownDestination {
                     appData = null;
                 }
 
-                byte[] signedData;
-                try (var baos = new ByteArrayOutputStream()) {
-                    baos.write(destinationHash);
-                    baos.write(publicKey);
-                    baos.write(nameHash);
-                    baos.write(randomHash);
-                    baos.write(appData != null ? appData : new byte[0]);
-                    signedData = baos.toByteArray();
-                }
+                byte[] signedData = concatArrays(destinationHash, publicKey, nameHash, requireNonNullElse(appData, new byte[0]));
 
                 var announcedIdentity = new Identity(false);
                 announcedIdentity.loadPublicKey(publicKey);
 
                 if (nonNull(announcedIdentity.getSigPub()) && announcedIdentity.validate(signature, signedData)) {
-                    byte[] hashHaterial;
-                    try (var baos = new ByteArrayOutputStream()) {
-                        baos.write(nameHash);
-                        baos.write(announcedIdentity.getHash());
-                        hashHaterial = baos.toByteArray();
-                    }
+                    var hashHaterial = concatArrays(nameHash, announcedIdentity.getHash());
                     var expectedHash = Arrays.copyOfRange(fullHash(hashHaterial), 0, TRUNCATED_HASHLENGTH / 8);
                     if (Arrays.equals(destinationHash, expectedHash)) {
                         // Check if we already have a public key for this destination
@@ -262,8 +250,7 @@ public class IdentityKnownDestination {
     }
 
     static int length(String key) {
-        byte[] bytes = toBytes(key);
-        return ArrayUtils.isNotEmpty(bytes) ? bytes.length : 0;
+        return ArrayUtils.getLength(toBytes(key));
     }
 
     @SneakyThrows

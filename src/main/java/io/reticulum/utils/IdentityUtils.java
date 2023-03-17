@@ -3,6 +3,8 @@ package io.reticulum.utils;
 import io.reticulum.Transport;
 import lombok.NoArgsConstructor;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.security.SecureRandom;
 import java.util.Arrays;
 
@@ -45,5 +47,15 @@ public class IdentityUtils {
 
     public static void exitHandler() {
         persistData();
+    }
+
+    public static byte[] concatArrays(byte[]... arrays) throws IOException {
+        try (var os = new ByteArrayOutputStream()) {
+            for (byte[] array : arrays) {
+                os.write(array);
+            }
+
+            return os.toByteArray();
+        }
     }
 }

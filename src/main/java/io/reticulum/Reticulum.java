@@ -88,6 +88,7 @@ public class Reticulum implements ExitHandler {
     private boolean isStandaloneInnstance = false;
 
     private boolean transportEnabled = false;
+    @Getter
     private boolean useImplicitProof = true;
     @Getter
     private boolean panicOnIntefaceError = false;
