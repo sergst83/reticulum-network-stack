@@ -1,4 +1,4 @@
-package io.reticulum.vendor.config;
+package io.reticulum.config;
 
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
 import io.reticulum.interfaces.ConnectionInterface;

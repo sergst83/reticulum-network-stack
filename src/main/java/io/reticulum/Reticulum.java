@@ -5,7 +5,7 @@ import io.reticulum.interfaces.ConnectionInterface;
 import io.reticulum.interfaces.local.LocalClientInterface;
 import io.reticulum.interfaces.local.LocalServerInterface;
 import io.reticulum.utils.IdentityUtils;
-import io.reticulum.vendor.config.ConfigObj;
+import io.reticulum.config.ConfigObj;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.MapUtils;
@@ -74,13 +74,11 @@ public class Reticulum implements ExitHandler {
     private final Transport transport;
 
     private ConfigObj config;
-    private String configDir;
     private Path configPath;
     @Getter
     private Path storagePath;
     private Path cachePath;
     private Path resourcePath;
-    private Path identityPath;
 
     @Getter
     private boolean isConnectedToSharedInstance = false;
@@ -100,8 +98,8 @@ public class Reticulum implements ExitHandler {
 //    private byte[] rpcKey;
 
     private byte[] ifacSalt = IFAC_SALT;
-    private AtomicLong lastDataPersist = new AtomicLong(System.currentTimeMillis());
-    private AtomicLong lastCacheClean = new AtomicLong(0);
+    private final AtomicLong lastDataPersist = new AtomicLong(System.currentTimeMillis());
+    private final AtomicLong lastCacheClean = new AtomicLong(0);
 
     private static final ScheduledExecutorService scheduledExecutorService = Executors.newScheduledThreadPool(2);
 
@@ -233,26 +231,27 @@ public class Reticulum implements ExitHandler {
     }
 
     private void initConfig(String configDir) throws IOException {
+        String configDir1;
         if (isNotBlank(configDir)) {
-            this.configDir = configDir;
+            configDir1 = configDir;
         } else {
             if (Files.isDirectory(Path.of(ETC_DIR)) && Files.exists(Path.of(ETC_DIR, CONFIG_FILE_NAME))) {
-                this.configDir = ETC_DIR;
+                configDir1 = ETC_DIR;
             } else if (
                     Files.isDirectory(Path.of(USER_HOME, ".config", "reticulum"))
                             && Files.exists(Path.of(ETC_DIR, ".config", "reticulum", CONFIG_FILE_NAME))
             ) {
-                this.configDir = Path.of(USER_HOME, ".config", "reticulum").toString();
+                configDir1 = Path.of(USER_HOME, ".config", "reticulum").toString();
             } else {
-                this.configDir = Path.of(USER_HOME, ".reticulum").toString();
+                configDir1 = Path.of(USER_HOME, ".reticulum").toString();
             }
         }
 
-        this.configPath = Path.of(this.configDir, "config");
-        this.storagePath = Path.of(this.configDir, "storage");
-        this.cachePath = Path.of(this.configDir, "storage", "cache");
-        this.resourcePath = Path.of(this.configDir, "storage", "resources");
-        this.identityPath = Path.of(this.configDir, "storage", "identities");
+        this.configPath = Path.of(configDir1, "config");
+        this.storagePath = Path.of(configDir1, "storage");
+        this.cachePath = Path.of(configDir1, "storage", "cache");
+        this.resourcePath = Path.of(configDir1, "storage", "resources");
+        Path identityPath = Path.of(configDir1, "storage", "identities");
 
         if (Files.notExists(storagePath)) {
             Files.createDirectories(storagePath);
@@ -281,7 +280,7 @@ public class Reticulum implements ExitHandler {
             log.info("Could not load config file, creating default configuration file...");
             createDefaultConfig();
             this.config = ConfigObj.initConfig(configPath);
-            log.info("Default config file created. Make any necessary changes in {}/config and restart Reticulum if needed.", this.configDir);
+            log.info("Default config file created. Make any necessary changes in {}/config and restart Reticulum if needed.", configDir1);
         }
 
         log.info("Config loaded from {}", configPath);

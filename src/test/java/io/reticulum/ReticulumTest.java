@@ -1,6 +1,6 @@
 package io.reticulum;
 
-import io.reticulum.vendor.config.ConfigObj;
+import io.reticulum.config.ConfigObj;
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.lang3.ArrayUtils;

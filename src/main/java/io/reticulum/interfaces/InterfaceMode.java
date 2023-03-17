@@ -21,7 +21,7 @@ public enum InterfaceMode {
     ;
 
     private final List<String> aliases;
-    private final int modeValue;
+    private final byte modeValue;
 
     @JsonCreator
     public static InterfaceMode parseName(@NonNull String modeName) {

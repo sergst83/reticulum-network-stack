@@ -1,4 +1,4 @@
-package io.reticulum.vendor.config;
+package io.reticulum.config;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
