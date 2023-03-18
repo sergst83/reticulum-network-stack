@@ -1,9 +1,12 @@
-package io.reticulum;
+package io.reticulum.identity;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.reticulum.packet.Packet;
+import io.reticulum.Transport;
 import io.reticulum.constant.IdentityConstant;
+import io.reticulum.destination.Destination;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;

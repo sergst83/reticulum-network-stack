@@ -1,6 +1,6 @@
 package io.reticulum.constant;
 
-import static io.reticulum.utils.LinkConstant.STALE_TIME;
+import static io.reticulum.constant.LinkConstant.STALE_TIME;
 
 public class TransportConstant {
 

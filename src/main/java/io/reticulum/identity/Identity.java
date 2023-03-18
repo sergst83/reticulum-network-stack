@@ -1,6 +1,9 @@
-package io.reticulum;
+package io.reticulum.identity;
 
+import io.reticulum.Transport;
 import io.reticulum.cryptography.Fernet;
+import io.reticulum.destination.Destination;
+import io.reticulum.packet.Packet;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.Setter;
@@ -26,7 +29,7 @@ import java.security.SecureRandom;
 import java.util.Arrays;
 
 import static io.reticulum.constant.IdentityConstant.KEYSIZE;
-import static io.reticulum.constant.PacketConstant.PROOF;
+import static io.reticulum.packet.PacketType.PROOF;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.truncatedHash;
 import static java.util.Objects.isNull;

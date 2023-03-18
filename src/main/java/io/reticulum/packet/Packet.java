@@ -1,12 +1,17 @@
-package io.reticulum;
+package io.reticulum.packet;
 
+import io.reticulum.destination.Destination;
+import io.reticulum.destination.ProofDestination;
 import io.reticulum.interfaces.ConnectionInterface;
 import lombok.Getter;
 
+/**
+ *
+ */
 @Getter
 public class Packet {
 
-    private byte packetType;
+    private PacketType packetType;
     private byte[] destinationHash;
     private byte[] data;
 
@@ -17,7 +22,11 @@ public class Packet {
     private ConnectionInterface receivingInterface;
     private byte[] packetHash;
 
-    public Packet(Object destination, byte[] proofData, byte proof, ConnectionInterface attachedInterface) {
+    public Packet(Object destination, byte[] proofData, PacketType proof, ConnectionInterface attachedInterface) {
+    }
+
+    public Packet(Destination destination, byte[] announceData, PacketType announce, PacketContextType announceContext, ConnectionInterface attachedInterface) {
+
     }
 
     public byte[] getHash() {

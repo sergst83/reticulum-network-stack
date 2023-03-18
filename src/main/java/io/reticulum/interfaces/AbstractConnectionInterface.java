@@ -2,7 +2,7 @@ package io.reticulum.interfaces;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import io.reticulum.Identity;
+import io.reticulum.identity.Identity;
 import io.reticulum.Transport;
 import lombok.AllArgsConstructor;
 import lombok.Getter;

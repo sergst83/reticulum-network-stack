@@ -1,5 +1,6 @@
 package io.reticulum;
 
+import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.AbstractConnectionInterface;
 import io.reticulum.interfaces.ConnectionInterface;
 import io.reticulum.interfaces.local.LocalClientInterface;
@@ -25,7 +26,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static io.reticulum.IdentityKnownDestination.loadKnownDestinations;
+import static io.reticulum.identity.IdentityKnownDestination.loadKnownDestinations;
 import static io.reticulum.utils.CommonUtils.exit;
 import static io.reticulum.utils.CommonUtils.panic;
 import static io.reticulum.utils.IdentityUtils.fullHash;

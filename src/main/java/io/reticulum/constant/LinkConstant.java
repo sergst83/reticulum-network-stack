@@ -1,4 +1,4 @@
-package io.reticulum.utils;
+package io.reticulum.constant;
 
 public class LinkConstant {
 

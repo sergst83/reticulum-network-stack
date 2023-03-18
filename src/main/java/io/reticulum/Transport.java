@@ -1,14 +1,21 @@
 package io.reticulum;
 
+import io.reticulum.destination.Destination;
+import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.ConnectionInterface;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+
+import static io.reticulum.constant.ReticulumConstant.MTU;
+import static io.reticulum.destination.DestinationType.SINGLE;
+import static io.reticulum.destination.Direction.IN;
 
 @RequiredArgsConstructor
 public final class Transport implements ExitHandler {
@@ -112,5 +119,24 @@ public final class Transport implements ExitHandler {
 
     public void sharedConnectionReappeared() {
 
+    }
+
+    public void registerDestination(Destination destination) {
+        destination.setMtu(MTU);
+        if (destination.getDirection() == IN) {
+            for (Destination registeredDestination : destinations) {
+                if (Arrays.equals(destination.getHash(), registeredDestination.getHash())) {
+                    throw new IllegalStateException("Attempt to register an already registered destination.");
+                }
+            }
+
+            destinations.add(destination);
+
+            if (owner.isConnectedToSharedInstance()) {
+                if (destination.getType() == SINGLE) {
+                    destination.announce(true);
+                }
+            }
+        }
     }
 }

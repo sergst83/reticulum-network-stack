@@ -12,9 +12,9 @@ public class IdentityConstant {
      */
     public static final int KEYSIZE = 256 * 2;
 
-    public static final int AES128_BLOCKSIZE = 16;       // In bytes
-    public static final int HASHLENGTH = 256;         // In bits
-    public static final int SIGLENGTH = KEYSIZE; // In bits
+    public static final int AES128_BLOCKSIZE = 16;      // In bytes
+    public static final int HASHLENGTH = 256;           // In bits
+    public static final int SIGLENGTH = KEYSIZE;        // In bits
 
     public static final int NAME_HASH_LENGTH = 80;
 }

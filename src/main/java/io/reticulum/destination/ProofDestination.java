@@ -1,4 +1,4 @@
-package io.reticulum;
+package io.reticulum.destination;
 
 public class ProofDestination {
 }

@@ -8,7 +8,7 @@ import java.io.IOException;
 import java.security.SecureRandom;
 import java.util.Arrays;
 
-import static io.reticulum.IdentityKnownDestination.saveKnownDestinations;
+import static io.reticulum.identity.IdentityKnownDestination.saveKnownDestinations;
 import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
 import static lombok.AccessLevel.PRIVATE;
 import static org.apache.commons.codec.digest.DigestUtils.getSha256Digest;

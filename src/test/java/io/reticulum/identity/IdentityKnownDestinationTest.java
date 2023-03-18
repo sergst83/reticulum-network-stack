@@ -1,6 +1,8 @@
-package io.reticulum;
+package io.reticulum.identity;
 
-import io.reticulum.IdentityKnownDestination.DestinationData;
+import io.reticulum.Reticulum;
+import io.reticulum.Transport;
+import io.reticulum.identity.IdentityKnownDestination.DestinationData;
 import org.apache.commons.codec.binary.Hex;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -11,8 +13,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 
-import static io.reticulum.IdentityKnownDestination.KNOWN_DESTINATIONS;
-import static io.reticulum.IdentityKnownDestination.KNOWN_DESTINATIONS_FILE_NAME;
+import static io.reticulum.identity.IdentityKnownDestination.KNOWN_DESTINATIONS;
+import static io.reticulum.identity.IdentityKnownDestination.KNOWN_DESTINATIONS_FILE_NAME;
 import static org.apache.commons.lang3.SystemUtils.getJavaIoTmpDir;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;

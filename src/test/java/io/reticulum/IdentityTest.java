@@ -1,5 +1,6 @@
 package io.reticulum;
 
+import io.reticulum.identity.Identity;
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
 import org.bouncycastle.crypto.digests.SHA256Digest;
