@@ -8,6 +8,7 @@ import io.reticulum.packet.Packet;
 import io.reticulum.packet.PacketContextType;
 import io.reticulum.utils.DestinationUtils;
 import lombok.Getter;
+import lombok.NonNull;
 import lombok.Setter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -17,9 +18,13 @@ import org.apache.commons.lang3.tuple.Pair;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 import static io.reticulum.constant.DestinationConstant.PR_TAG_WINDOW;
 import static io.reticulum.constant.IdentityConstant.NAME_HASH_LENGTH;
@@ -35,6 +40,7 @@ import static io.reticulum.utils.DestinationUtils.expandName;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.utils.IdentityUtils.getRandomHash;
+import static io.reticulum.utils.IdentityUtils.truncatedHash;
 import static java.lang.System.currentTimeMillis;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Arrays.copyOfRange;
@@ -57,13 +63,13 @@ public class Destination {
     private byte[] hash;
     private boolean acceptLinkRequests = true;
     private Callbacks callbacks = new Callbacks();
-    private Map<?, ?> requestHandlers = new HashMap<>();
+    private Map<String, RequestHandler> requestHandlers = new ConcurrentHashMap<>();
     private DestinationType type;
     private Direction direction;
     private ProofStrategy proofStrategy = PROVE_NONE;
     private int mtu = 0;
-    private Map<Integer, Pair<Long, byte[]>> pathResponses = new HashMap<>();
-    private List<Link> links = new ArrayList<>();
+    private Map<Integer, Pair<Long, byte[]>> pathResponses = new ConcurrentHashMap<>();
+    private List<Link> links = new CopyOnWriteArrayList<>();
     private String name;
     private byte[] nameHash;
     private String hexhash;
@@ -108,6 +114,76 @@ public class Destination {
         Transport.getInstance().registerDestination(this);
     }
 
+    /**
+     * Set or query whether the destination accepts incoming link requests.
+     *
+     * @param accepts if <strong>true</strong> or <strong>false</strong>, this method sets whether the destination accepts incoming link requests.
+     *                If null, the method returns whether the destination currently accepts link requests.
+     * @return <strong>true</strong> or <strong>false</strong> depending on whether the destination accepts incoming link requests, if the <strong>accepts</strong> parameter is null.
+     */
+    public boolean acceptsLinks(Boolean accepts) {
+        if (isNull(accepts)) {
+            return acceptLinkRequests;
+        }
+
+        acceptLinkRequests = accepts;
+
+        return acceptLinkRequests;
+    }
+
+    /**
+     * Registers a function to be called when a link has been established to this destination.
+     *
+     * @param callback A function or method to be called when a new link is established with this destination.
+     */
+    public void setLinkEstablishedCallback(Consumer<Link> callback) {
+        this.callbacks.setLinkEstablished(callback);
+    }
+
+    /**
+     * Registers a function to be called when a packet has been received by this destination.
+     *
+     * @param callback A function or method with the signature <strong>callback(data, packet)</strong> to be called when this destination receives a packet
+     */
+    public void setPacketCallback(BiConsumer<byte[], Packet> callback) {
+        this.callbacks.setPacket(callback);
+    }
+
+    /**
+     * Registers a function to be called when a proof has been requested for a packet sent to this destination.
+     * Allows control over when and if proofs should be returned for received packets.
+     *
+     * @param callback A function or method to with the signature <strong>callback(packet)</strong> be called when a packet that
+     *                 requests a proof is received. The callback must return one of True or False. If the callback
+     *                 returns True, a proof will be sent. If it returns False, a proof will not be sent.
+     */
+    public void setProofRequestedCallback(Consumer<Packet> callback) {
+        this.callbacks.setProofRequested(callback);
+    }
+
+    /**
+     * Registers a request handler.
+     *
+     * @param path The path for the request handler to be registered.
+     * @param responseGenerator Whatever this funcion returns will be sent as a response to the requester. If the function returns null, no response will be sent.
+     * @param allow If <strong>ALLOW_LIST</strong> is set, the request handler will only respond to requests for identified peers in the supplied list.
+     * @param allowedList A list of <strong>byte[]</strong> {@link Identity} hashes.
+     */
+    public void registerRequestHandler(
+            @NonNull final String path,
+            final Function<RequestParams, Object> responseGenerator,
+            final RequestPolicy allow,
+            final List<byte[]> allowedList
+    ) {
+        if (path.isEmpty()) {
+            throw new IllegalArgumentException("Invalid path specified");
+        }
+
+        requestHandlers.put(
+                Hex.encodeHexString(truncatedHash(path.getBytes(UTF_8))),
+                new RequestHandler(path, responseGenerator, allow, allowedList)
+        );
+    }
 
     public Packet announce() {
         return announce(null, false, null, null, true);
