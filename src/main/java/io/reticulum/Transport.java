@@ -3,6 +3,7 @@ package io.reticulum;
 import io.reticulum.destination.Destination;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.ConnectionInterface;
+import io.reticulum.link.Link;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
@@ -138,5 +139,9 @@ public final class Transport implements ExitHandler {
                 }
             }
         }
+    }
+
+    public void registerLink(Link link) {
+
     }
 }

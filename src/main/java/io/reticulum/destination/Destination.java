@@ -1,6 +1,6 @@
 package io.reticulum.destination;
 
-import io.reticulum.Link;
+import io.reticulum.link.Link;
 import io.reticulum.Transport;
 import io.reticulum.cryptography.Fernet;
 import io.reticulum.identity.Identity;

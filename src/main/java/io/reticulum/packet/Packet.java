@@ -21,7 +21,8 @@ public class Packet {
     private int hops;
     private ConnectionInterface receivingInterface;
     private byte[] packetHash;
-
+    private Object destination;
+    private byte[] raw;
     public Packet(Object destination, byte[] proofData, PacketType proof, ConnectionInterface attachedInterface) {
     }
 

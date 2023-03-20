@@ -1,5 +1,6 @@
 package io.reticulum;
 
+import io.reticulum.constant.LinkConstant;
 import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.lang3.ArrayUtils;
 import org.junit.jupiter.api.Test;
@@ -24,6 +25,11 @@ public class TTT {
         assertEquals(expected, Hex.encodeHexString(array));
 
 //        assertEquals(expected, Hex.encodeHexString(BigInteger.valueOf(i).toByteArray()));
+    }
+
+    @Test
+    void f() {
+        System.out.println(LinkConstant.MDU);
     }
 
     public static byte[] intToByteArray(long value) {

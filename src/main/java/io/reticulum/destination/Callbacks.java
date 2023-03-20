@@ -1,6 +1,6 @@
 package io.reticulum.destination;
 
-import io.reticulum.Link;
+import io.reticulum.link.Link;
 import io.reticulum.packet.Packet;
 import lombok.Data;
 

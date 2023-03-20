@@ -1,5 +1,12 @@
 package io.reticulum.constant;
 
+import static io.reticulum.constant.IdentityConstant.AES128_BLOCKSIZE;
+import static io.reticulum.constant.IdentityConstant.FERNET_OVERHEAD;
+import static io.reticulum.constant.ReticulumConstant.DEFAULT_PER_HOP_TIMEOUT;
+import static io.reticulum.constant.ReticulumConstant.HEADER_MINSIZE;
+import static io.reticulum.constant.ReticulumConstant.IFAC_MIN_SIZE;
+import static io.reticulum.constant.ReticulumConstant.MTU;
+
 public class LinkConstant {
 
     /**
@@ -15,4 +22,24 @@ public class LinkConstant {
      * and will be torn down.
      */
     public static final int STALE_TIME = 2 * KEEPALIVE;
+
+    public static final int ECPUBSIZE = 32 + 32;
+    public static final int KEYSIZE = 32;
+
+    public static final double MDU = Math.floor((MTU - IFAC_MIN_SIZE - HEADER_MINSIZE - FERNET_OVERHEAD) / (double) AES128_BLOCKSIZE) * AES128_BLOCKSIZE - 1;
+
+    /**
+     * Timeout for link establishment in seconds per hop to destination.
+     */
+    public static final int ESTABLISHMENT_TIMEOUT_PER_HOP = DEFAULT_PER_HOP_TIMEOUT;
+
+    public static final int TRAFFIC_TIMEOUT_FACTOR = 6;
+    /**
+     * RTT timeout factor used in link timeout calculation.
+     */
+    public static final int KEEPALIVE_TIMEOUT_FACTOR = 4;
+    /**
+     * Grace period in seconds used in link timeout calculation.
+     */
+    public static final int STALE_GRACE = 2;
 }
