@@ -2,11 +2,15 @@ package io.reticulum.destination;
 
 import io.reticulum.Link;
 import io.reticulum.Transport;
+import io.reticulum.cryptography.Fernet;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.ConnectionInterface;
 import io.reticulum.packet.Packet;
 import io.reticulum.packet.PacketContextType;
+import io.reticulum.packet.PacketType;
 import io.reticulum.utils.DestinationUtils;
+import io.reticulum.utils.IdentityUtils;
+import io.reticulum.utils.LinkUtils;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.Setter;
@@ -28,6 +32,7 @@ import java.util.function.Function;
 
 import static io.reticulum.constant.DestinationConstant.PR_TAG_WINDOW;
 import static io.reticulum.constant.IdentityConstant.NAME_HASH_LENGTH;
+import static io.reticulum.destination.DestinationType.GROUP;
 import static io.reticulum.destination.DestinationType.PLAIN;
 import static io.reticulum.destination.DestinationType.SINGLE;
 import static io.reticulum.destination.Direction.IN;
@@ -76,6 +81,8 @@ public class Destination {
     private byte[] defaultAppData;
     private Object callback;
     private Object proofcallback;
+    private Fernet prv;
+    private byte[] prvBytes;
 
     @SneakyThrows
     public Destination(Identity identity, Direction direction, DestinationType type, String appName, String... aspects) {
@@ -185,6 +192,119 @@ public class Destination {
         );
     }
 
+    /**
+     * Deregisters a request handler.
+     *
+     * @param path The path for the request handler to be deregistered.
+     * @return true if the handler was deregistered, otherwise false.
+     */
+    public boolean deregisterRequestHandler(@NonNull final String path) {
+        var pathHash = IdentityUtils.truncatedHash(path.getBytes(UTF_8));
+
+        return nonNull(requestHandlers.remove(Hex.encodeHexString(pathHash)));
+    }
+
+    public void receive(@NonNull final Packet packet) {
+        if (packet.getPacketType() == PacketType.LINKREQUEST) {
+            incomingLinkRequest(packet);
+        } else {
+            var plainText = decrypt(packet.getData());
+            if (nonNull(plainText) && packet.getPacketType() == PacketType.DATA && nonNull(callbacks.getPacket())) {
+                try {
+                    callbacks.getPacket().accept(plainText, packet);
+                } catch (Exception e) {
+                    log.error("Error while executing receive callback from {}.", this);
+                }
+            }
+        }
+    }
+
+    /**
+     * For a DestinationType.GROUP type destination, creates a new symmetric key.
+     */
+    public void createKeys() {
+        if (type == GROUP) {
+            prvBytes = Fernet.generateFernetKey();
+            prv = new Fernet(prvBytes);
+        } else {
+            throw new IllegalStateException("Only for DestinationType.GROUP");
+        }
+    }
+
+    /**
+     * For a DestinationType.GROUP type destination, returns the symmetric private key.
+     *
+     * @return {@link Fernet} key as byte[]
+     */
+    public byte[] getPrivateKey() {
+        if (type == GROUP) {
+            return prvBytes;
+        } else {
+            throw new IllegalStateException("Only for DestinationType.GROUP");
+        }
+    }
+
+    /**
+     * For a DestinationType.GROUP type destination, loads a symmetric private key.
+     *
+     * @param key containing the symmetric key.
+     */
+    public void loadPrivateKey(@NonNull byte[] key) {
+        if (type == GROUP) {
+            this.prvBytes = key;
+            this.prv = new Fernet(this.prvBytes);
+        } else {
+            throw new IllegalStateException("Only for DestinationType.GROUP");
+        }
+    }
+
+    /**
+     * Decrypts information for DestinationType.SINGLE or DestinationType.GROUP type destination.
+     *
+     * @param ciphertext ciphertext: byte[] containing the ciphertext to be decrypted.
+     * @return decrypted
+     */
+    public byte[] decrypt(byte[] ciphertext) {
+        switch (type) {
+            case PLAIN:
+                return ciphertext;
+            case SINGLE:
+                if (nonNull(identity)) {
+                    return identity.decrypt(ciphertext);
+                }
+                break;
+            case GROUP:
+                if (nonNull(prv)) {
+                    try {
+                        return prv.decrypt(ciphertext);
+                    } catch (Exception e) {
+                        log.error("he GROUP destination could not decrypt data.", e);
+                    }
+                } else {
+                    throw new IllegalStateException("No private key held by GROUP destination. Did you create or load one?");
+                }
+                break;
+            default:
+                return null;
+        }
+
+        return null;
+    }
+
+    /**
+     * Signs information for DestinationType.SINGLE type destination.
+     *
+     * @param message byte[] containing the message to be signed.
+     * @return A byte[] containing the message signature, or null if the destination could not sign the message.
+     */
+    public byte[] sign(@NonNull byte[] message) {
+        if (type == SINGLE && nonNull(identity)) {
+            return identity.sign(message);
+        }
+
+        return null;
+    }
+
     public Packet announce() {
         return announce(null, false, null, null, true);
     }
@@ -279,6 +399,15 @@ public class Destination {
         }
 
         return null;
+    }
+
+    private void incomingLinkRequest(@NonNull final Packet packet) {
+        if (acceptLinkRequests) {
+            var link = LinkUtils.validateRequest(this, packet.getData(), packet);
+            if (nonNull(link)) {
+                links.add(link);
+            }
+        }
     }
 
     @Override

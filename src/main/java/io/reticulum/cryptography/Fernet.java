@@ -11,6 +11,7 @@ import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.NoSuchPaddingException;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
@@ -55,6 +56,16 @@ public class Fernet extends Key {
         var cipherText = Arrays.copyOfRange(token, IV_SIZE, token.length - 32);
 
         return decrypt(cipherText, new IvParameterSpec(iv));
+    }
+
+    public static byte[] generateFernetKey() {
+        try (var baos = new ByteArrayOutputStream()) {
+            generateKey().writeTo(baos);
+
+            return baos.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     public byte[] encrypt(final byte[] payload, final IvParameterSpec initializationVector) {
