@@ -3,6 +3,7 @@ package io.reticulum.packet;
 import io.reticulum.destination.Destination;
 import io.reticulum.destination.ProofDestination;
 import io.reticulum.interfaces.ConnectionInterface;
+import io.reticulum.link.Link;
 import lombok.Getter;
 
 /**
@@ -26,7 +27,23 @@ public class Packet {
     public Packet(Object destination, byte[] proofData, PacketType proof, ConnectionInterface attachedInterface) {
     }
 
+    public Packet(Link link, byte[] proofData, PacketType packetType, PacketContextType contextType) {
+
+    }
+
     public Packet(Destination destination, byte[] announceData, PacketType announce, PacketContextType announceContext, ConnectionInterface attachedInterface) {
+
+    }
+
+    public Packet(Destination destination, byte[] requestData, PacketType linkRequest) {
+
+    }
+
+    public Packet(Link link, byte[] proofData, PacketType packetType) {
+
+    }
+
+    public Packet(Link link, byte[] data, PacketContextType packetContextType) {
 
     }
 
@@ -38,7 +55,15 @@ public class Packet {
         return null;
     }
 
-    public void send() {
+    public PacketReceipt send() {
+        return null;
+    }
 
+    public void pack() {
+
+    }
+
+    public byte[] getTruncatedHash() {
+        return null;
     }
 }

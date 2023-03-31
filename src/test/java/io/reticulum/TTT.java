@@ -4,7 +4,11 @@ import io.reticulum.constant.LinkConstant;
 import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.lang3.ArrayUtils;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.msgpack.core.MessagePack;
 
+import java.io.IOException;
 import java.math.BigInteger;
 import java.util.Arrays;
 
@@ -43,5 +47,23 @@ public class TTT {
         }
 
         return result;
+    }
+
+    @ParameterizedTest
+    @CsvSource(value = {
+            "9223372036854775807;cf7fffffffffffffff",
+            "-9223372036854775808;d38000000000000000",
+            "0;00",
+            "-2147483648;d280000000",
+            "2147483647;ce7fffffff",
+            "-32768;d18000",
+            "32767;cd7fff",
+            "-128;d080",
+            "127;7f"
+    }, delimiterString = ";")
+    void ff(long l, String hex) throws IOException {
+        var packer = MessagePack.newDefaultBufferPacker();
+        packer.packLong(l);
+        assertEquals(hex, Hex.encodeHexString(packer.toByteArray()));
     }
 }

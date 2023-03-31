@@ -8,7 +8,7 @@ import java.util.function.Function;
 @Value
 public class RequestHandler {
     String path;
-    Function<RequestParams, Object> responseGenerator;
+    Function<Request, byte[]> responseGenerator;
     RequestPolicy allow;
     List<byte[]> allowedList;
 }

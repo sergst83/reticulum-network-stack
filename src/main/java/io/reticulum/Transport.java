@@ -4,17 +4,21 @@ import io.reticulum.destination.Destination;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.ConnectionInterface;
 import io.reticulum.link.Link;
+import io.reticulum.transport.Hop;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
+import org.apache.commons.codec.binary.Hex;
 
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static io.reticulum.constant.ReticulumConstant.MTU;
+import static io.reticulum.constant.TransportConstant.PATHFINDER_M;
 import static io.reticulum.destination.DestinationType.SINGLE;
 import static io.reticulum.destination.Direction.IN;
 
@@ -36,7 +40,7 @@ public final class Transport implements ExitHandler {
     private final List<ConnectionInterface> localClientInterfaces = new CopyOnWriteArrayList<>();
 
     private final Map<?, ?> announceTable = new ConcurrentHashMap<>();
-    private final Map<?, ?> destinationTable = new ConcurrentHashMap<>();
+    private final Map<String, Hop> destinationTable = new ConcurrentHashMap<>();
     private final Map<?, ?> reverseTable = new ConcurrentHashMap<>();
     private final Map<?, ?> linkTable = new ConcurrentHashMap<>();
     private final Map<?, ?> heldAnnounces = new ConcurrentHashMap<>();
@@ -142,6 +146,20 @@ public final class Transport implements ExitHandler {
     }
 
     public void registerLink(Link link) {
+
+    }
+
+    /**
+     * @param destinationHash
+     * @return The number of hops to the specified destination, or ``RNS.Transport.PATHFINDER_M`` if the number of hops is unknown.
+     */
+    public int hopsTo(byte[] destinationHash) {
+        return Optional.ofNullable(destinationTable.get(Hex.encodeHexString(destinationHash)))
+                .map(Hop::getPathLength)
+                .orElse(PATHFINDER_M);
+    }
+
+    public void activateLink(Link link) {
 
     }
 }

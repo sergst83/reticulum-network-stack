@@ -3,12 +3,14 @@ package io.reticulum.destination;
 import io.reticulum.identity.Identity;
 import lombok.Value;
 
+import java.time.Instant;
+
 @Value
-public class RequestParams {
+public class Request {
     String path;
     byte[] data;
-    Object requestId;
-    Object linkId;
+    byte[] requestId;
+    byte[] linkId;
     Identity remoteIdentity;
-    Object requestedAt;
+    Instant requestedAt;
 }

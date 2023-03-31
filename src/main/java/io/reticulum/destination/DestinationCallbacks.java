@@ -8,7 +8,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 @Data
-public class Callbacks {
+public class DestinationCallbacks {
 
     private Consumer<Link> linkEstablished;
     private BiConsumer<byte[], Packet> packet;

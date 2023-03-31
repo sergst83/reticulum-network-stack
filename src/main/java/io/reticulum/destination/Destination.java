@@ -67,7 +67,7 @@ public class Destination {
     private Identity identity;
     private byte[] hash;
     private boolean acceptLinkRequests = true;
-    private Callbacks callbacks = new Callbacks();
+    private DestinationCallbacks callbacks = new DestinationCallbacks();
     private Map<String, RequestHandler> requestHandlers = new ConcurrentHashMap<>();
     private DestinationType type;
     private Direction direction;
@@ -178,7 +178,7 @@ public class Destination {
      */
     public void registerRequestHandler(
             @NonNull final String path,
-            final Function<RequestParams, Object> responseGenerator,
+            final Function<Request, Object> responseGenerator,
             final RequestPolicy allow,
             final List<byte[]> allowedList
     ) {

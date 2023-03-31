@@ -65,4 +65,3 @@ interfaces:
   "Default Interface":
     type: AutoInterface
     enabled: true
-    discovery_scope: admin
