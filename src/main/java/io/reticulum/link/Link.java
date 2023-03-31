@@ -1,7 +1,8 @@
 package io.reticulum.link;
 
-import io.reticulum.Channel;
 import io.reticulum.Transport;
+import io.reticulum.channel.Channel;
+import io.reticulum.channel.LinkChannelOutlet;
 import io.reticulum.cryptography.Fernet;
 import io.reticulum.destination.Destination;
 import io.reticulum.destination.DestinationType;
@@ -98,7 +99,7 @@ public class Link {
     private ResourceStrategy resourceStrategy = ACCEPT_NONE;
     private List<Resource> outgoingResources = new CopyOnWriteArrayList<>();
     private List<Resource> incomingResources = new CopyOnWriteArrayList<>();
-    private List<?> pendingRequests = new CopyOnWriteArrayList<>();
+    private List<RequestReceipt> pendingRequests = new CopyOnWriteArrayList<>();
     private Instant lastInbound;
     private Instant lastOutbound;
     private BigInteger tx = BigInteger.valueOf(0);
@@ -204,18 +205,6 @@ public class Link {
         this.hash = this.linkId;
     }
 
-    public void setDestination(Object destination) {
-
-    }
-
-    public void establishmentTimeout(int timeout) {
-
-    }
-
-    public void addEstablishmentCost(int length) {
-        establishmentCost.getAndAdd(length);
-    }
-
     public synchronized void handshake() {
         this.status = Status.HANDSHAKE;
 
@@ -230,14 +219,6 @@ public class Link {
         var derivedKey = new byte[32];
         hkdf.generateBytes(derivedKey, 0, derivedKey.length);
         this.derivedKey = derivedKey;
-    }
-
-    private byte[] getContext() {
-        return null;
-    }
-
-    private byte[] getSalt() {
-        return linkId;
     }
 
     @SneakyThrows
@@ -267,14 +248,6 @@ public class Link {
         hadOutbound();
     }
 
-    private byte[] sign(byte[] message) {
-        var signer = new Ed25519Signer();
-        signer.init(true, sigPrv);
-        signer.update(message, 0, message.length);
-
-        return signer.generateSignature();
-    }
-
     @SneakyThrows
     private synchronized void validateProof(Packet packet) {
         if (status == PENDING) {
@@ -296,7 +269,7 @@ public class Link {
                     this.activatedAt = Instant.now();
                     Transport.getInstance().activateLink(this);
 
-                    log.info("Link {}  established with {}, RTT is {} ms", this, destination, rtt);
+                    log.info("Link {} established with {}, RTT is {} ms", this, destination, rtt);
 
                     if (rtt > 0 && establishmentCost.get() > 0) {
                         this.establishmentRate = this.establishmentCost.get() / rtt;
@@ -446,17 +419,11 @@ public class Link {
         return establishmentRate * 8;
     }
 
-    private byte[] decrypt(byte[] data) {
-        try {
-            if (isNull(fernet)) {
-                fernet = new Fernet(derivedKey);
+    private byte[] getSalt() {
+        return linkId;
+    }
 
-                return fernet.decrypt(data);
-            }
-        } catch (Exception e) {
-            log.error("Decryption failed on link {}", this, e);
-        }
-
+    private byte[] getContext() {
         return null;
     }
 
@@ -502,16 +469,30 @@ public class Link {
             teardownPacket.send();
             hadOutbound();
         }
-
         status = CLOSED;
-
         if (initiator) {
             this.teardownReason = INITIATOR_CLOSED;
         } else {
             this.teardownReason = DESTINATION_CLOSED;
         }
-
         linkClosed();
+    }
+
+    private synchronized void teardownPacket(@NonNull Packet packet) {
+        try {
+            var plainText = decrypt(packet.getData());
+            if (Arrays.equals(plainText, linkId)) {
+                status = CLOSED;
+                if (initiator) {
+                    teardownReason = DESTINATION_CLOSED;
+                } else {
+                    teardownReason = INITIATOR_CLOSED;
+                }
+                linkClosed();
+            }
+        } catch (Exception ignore) {
+
+        }
     }
 
     private synchronized void linkClosed() {
@@ -642,19 +623,6 @@ public class Link {
         hadOutbound();
     }
 
-    private void requestResourceConcluded(@NonNull final Resource resource) throws IOException {
-        if (resource.getStatus() == ResourceStatus.COMPLETE) {
-            var packedRequest = resource.getData().readAllBytes();
-            try (var unpacker = MessagePack.newDefaultUnpacker(packedRequest)) {
-                var unpackedRequestValue = unpacker.unpackValue().asArrayValue();
-                var requestId = IdentityUtils.truncatedHash(packedRequest);
-                handleRequest(requestId, UnpackedRequest.fromValue(unpackedRequestValue));
-            }
-        } else {
-            log.debug("Incoming request resource failed with status: {}", resource.getStatus());
-        }
-    }
-
     private void handleRequest(byte[] requestId, @NonNull UnpackedRequest uppackedRequest) throws IOException {
         if (status == ACTIVE) {
             var requestedAt = uppackedRequest.getTime();
@@ -704,6 +672,101 @@ public class Link {
                 }
             }
         }
+    }
+
+    private void handleResponse(byte[] requestId, byte[] responseData, int responseSize, int responseTransferSize) {
+        if (status == ACTIVE) {
+            pendingRequests.stream()
+                    .filter(pendingRequest -> Arrays.equals(pendingRequest.getRequestId(), requestId))
+                    .findFirst()
+                    .flatMap(
+                            pendingRequest -> {
+                                try {
+                                    pendingRequest.setResponseSize(responseSize);
+                                    pendingRequest.setResponseTransferSize(responseTransferSize);
+                                    pendingRequest.responseReceived(responseData);
+                                } catch (Exception e) {
+                                    log.error("Error occurred while handling response.", e);
+                                }
+
+                                return Optional.of(pendingRequest);
+                            }
+                    ).ifPresent(pendingRequests::remove);
+        }
+    }
+
+    private void requestResourceConcluded(@NonNull final Resource resource) throws IOException {
+        if (resource.getStatus() == ResourceStatus.COMPLETE) {
+            var packedRequest = resource.getData().readAllBytes();
+            try (var unpacker = MessagePack.newDefaultUnpacker(packedRequest)) {
+                var unpackedRequestValue = unpacker.unpackValue().asArrayValue();
+                var requestId = IdentityUtils.truncatedHash(packedRequest);
+                handleRequest(requestId, UnpackedRequest.fromValue(unpackedRequestValue));
+            }
+        } else {
+            log.debug("Incoming request resource failed with status: {}", resource.getStatus());
+        }
+    }
+
+    private void responseResourceConcluded(@NonNull Resource resource) throws IOException {
+        if (resource.getStatus() == ResourceStatus.COMPLETE) {
+            try (var unpacker = MessagePack.newDefaultUnpacker(resource.getData())) {
+                var unpackedResponseValue = unpacker.unpackValue().asArrayValue();
+                var unpackedResponse = UnpackedResponse.fromValue(unpackedResponseValue);
+                handleResponse(unpackedResponse.getRequestId(), unpackedResponse.getResponseData(), resource.getTotalSize(), resource.getSize());
+            }
+        } else {
+            log.debug("Incoming response resource failed with status: {}", resource.getStatus());
+            pendingRequests.stream()
+                    .filter(pendingRequest -> Arrays.equals(pendingRequest.getRequestId(), resource.getRequestId()))
+                    .findFirst()
+                    .ifPresent(pendingRequest -> pendingRequest.requestTimedOut(null));
+        }
+    }
+
+    /**
+     * @return {@link Channel} for this link.
+     */
+    public synchronized Channel getChannel() {
+        if (isNull(channel)) {
+            channel = new Channel(new LinkChannelOutlet(this));
+        }
+
+        return channel;
+    }
+
+    public synchronized void receive(Packet packet) {
+
+    }
+
+    public void establishmentTimeout(int timeout) {
+
+    }
+
+    public void addEstablishmentCost(int length) {
+        establishmentCost.getAndAdd(length);
+    }
+
+    private byte[] sign(byte[] message) {
+        var signer = new Ed25519Signer();
+        signer.init(true, sigPrv);
+        signer.update(message, 0, message.length);
+
+        return signer.generateSignature();
+    }
+
+    private byte[] decrypt(byte[] data) {
+        try {
+            if (isNull(fernet)) {
+                fernet = new Fernet(derivedKey);
+
+                return fernet.decrypt(data);
+            }
+        } catch (Exception e) {
+            log.error("Decryption failed on link {}", this, e);
+        }
+
+        return null;
     }
 
     public void setLinkEstablishedCallback(Runnable establishedCallback) {

@@ -1,10 +1,17 @@
 package io.reticulum.link;
 
 import io.reticulum.packet.PacketReceipt;
+import lombok.Data;
 
 import java.util.function.Consumer;
 
+@Data
 public class RequestReceipt {
+    private Link link;
+    private byte[] requestId;
+    private int responseSize;
+    private int responseTransferSize;
+
     public RequestReceipt(
             Link link,
             PacketReceipt packetReceipt,
@@ -26,6 +33,14 @@ public class RequestReceipt {
             long localTimeout,
             int length
     ) {
+
+    }
+
+    public void responseReceived(byte[] responseData) {
+
+    }
+
+    public void requestTimedOut(Object timeout) {
 
     }
 }
