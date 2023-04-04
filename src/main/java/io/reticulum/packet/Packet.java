@@ -4,15 +4,16 @@ import io.reticulum.destination.Destination;
 import io.reticulum.destination.ProofDestination;
 import io.reticulum.interfaces.ConnectionInterface;
 import io.reticulum.link.Link;
-import lombok.Getter;
+import lombok.Data;
 
 /**
  *
  */
-@Getter
+@Data
 public class Packet {
 
     private PacketType packetType;
+    private PacketContextType context;
     private byte[] destinationHash;
     private byte[] data;
 
@@ -24,6 +25,7 @@ public class Packet {
     private byte[] packetHash;
     private Object destination;
     private byte[] raw;
+    private byte[] plaintext;
     public Packet(Object destination, byte[] proofData, PacketType proof, ConnectionInterface attachedInterface) {
     }
 
@@ -65,5 +67,9 @@ public class Packet {
 
     public byte[] getTruncatedHash() {
         return null;
+    }
+
+    public void prove() {
+
     }
 }

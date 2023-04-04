@@ -5,7 +5,7 @@ import lombok.RequiredArgsConstructor;
 
 @Getter
 @RequiredArgsConstructor
-public enum Status {
+public enum LinkStatus {
     PENDING((byte) 0x00),
     HANDSHAKE((byte) 0x01),
     ACTIVE((byte) 0x02),

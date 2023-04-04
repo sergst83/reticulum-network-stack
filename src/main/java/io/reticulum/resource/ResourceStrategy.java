@@ -1,4 +1,4 @@
-package io.reticulum.link;
+package io.reticulum.resource;
 
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;

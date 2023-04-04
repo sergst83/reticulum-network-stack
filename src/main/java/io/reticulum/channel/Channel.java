@@ -8,4 +8,8 @@ public class Channel {
     public void shutdown() {
 
     }
+
+    public void receive(byte[] plaintext) {
+
+    }
 }

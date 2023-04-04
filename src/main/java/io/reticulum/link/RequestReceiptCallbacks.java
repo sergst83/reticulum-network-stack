@@ -2,9 +2,11 @@ package io.reticulum.link;
 
 import lombok.Data;
 
+import java.util.function.Consumer;
+
 @Data
 public class RequestReceiptCallbacks {
-    Object response;
-    Object failed;
-    Object progress;
+    Consumer<RequestReceipt> response;
+    Consumer<RequestReceipt> failed;
+    Consumer<RequestReceipt> progress;
 }

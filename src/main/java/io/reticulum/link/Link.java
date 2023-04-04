@@ -13,6 +13,10 @@ import io.reticulum.interfaces.ConnectionInterface;
 import io.reticulum.packet.Packet;
 import io.reticulum.packet.PacketContextType;
 import io.reticulum.packet.PacketType;
+import io.reticulum.resource.Resource;
+import io.reticulum.resource.ResourceAdvertisement;
+import io.reticulum.resource.ResourceStatus;
+import io.reticulum.resource.ResourceStrategy;
 import io.reticulum.utils.IdentityUtils;
 import lombok.Getter;
 import lombok.NonNull;
@@ -30,6 +34,7 @@ import org.bouncycastle.crypto.params.X25519PrivateKeyParameters;
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
 import org.msgpack.core.MessagePack;
+import org.msgpack.value.ValueFactory;
 
 import java.io.IOException;
 import java.math.BigInteger;
@@ -42,8 +47,12 @@ import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
+import static io.reticulum.constant.IdentityConstant.HASHLENGTH;
+import static io.reticulum.constant.IdentityConstant.KEYSIZE;
 import static io.reticulum.constant.IdentityConstant.SIGLENGTH;
 import static io.reticulum.constant.LinkConstant.ECPUBSIZE;
 import static io.reticulum.constant.LinkConstant.ESTABLISHMENT_TIMEOUT_PER_HOP;
@@ -53,36 +62,53 @@ import static io.reticulum.constant.LinkConstant.MDU;
 import static io.reticulum.constant.LinkConstant.STALE_GRACE;
 import static io.reticulum.constant.LinkConstant.STALE_TIME;
 import static io.reticulum.constant.LinkConstant.TRAFFIC_TIMEOUT_FACTOR;
+import static io.reticulum.constant.ResourceConstant.HASHMAP_IS_EXHAUSTED;
+import static io.reticulum.constant.ResourceConstant.MAPHASH_LEN;
 import static io.reticulum.constant.ResourceConstant.RESPONSE_MAX_GRACE_TIME;
 import static io.reticulum.destination.DestinationType.LINK;
 import static io.reticulum.destination.DestinationType.SINGLE;
 import static io.reticulum.destination.Direction.IN;
+import static io.reticulum.destination.ProofStrategy.PROVE_ALL;
+import static io.reticulum.destination.ProofStrategy.PROVE_APP;
 import static io.reticulum.destination.RequestPolicy.ALLOW_ALL;
 import static io.reticulum.destination.RequestPolicy.ALLOW_LIST;
 import static io.reticulum.destination.RequestPolicy.ALLOW_NONE;
-import static io.reticulum.link.ResourceStrategy.ACCEPT_NONE;
-import static io.reticulum.link.Status.ACTIVE;
-import static io.reticulum.link.Status.CLOSED;
-import static io.reticulum.link.Status.PENDING;
-import static io.reticulum.link.Status.STALE;
+import static io.reticulum.link.LinkStatus.ACTIVE;
+import static io.reticulum.link.LinkStatus.CLOSED;
+import static io.reticulum.link.LinkStatus.PENDING;
+import static io.reticulum.link.LinkStatus.STALE;
 import static io.reticulum.link.TeardownSession.DESTINATION_CLOSED;
 import static io.reticulum.link.TeardownSession.INITIATOR_CLOSED;
 import static io.reticulum.link.TeardownSession.TIMEOUT;
+import static io.reticulum.packet.PacketContextType.CHANNEL;
 import static io.reticulum.packet.PacketContextType.LINKCLOSE;
 import static io.reticulum.packet.PacketContextType.LINKIDENTIFY;
 import static io.reticulum.packet.PacketContextType.LRPROOF;
 import static io.reticulum.packet.PacketContextType.LRRTT;
 import static io.reticulum.packet.PacketContextType.REQUEST;
+import static io.reticulum.packet.PacketContextType.RESOURCE;
+import static io.reticulum.packet.PacketContextType.RESOURCE_ADV;
+import static io.reticulum.packet.PacketContextType.RESOURCE_HMU;
+import static io.reticulum.packet.PacketContextType.RESOURCE_ICL;
+import static io.reticulum.packet.PacketContextType.RESOURCE_PRF;
+import static io.reticulum.packet.PacketContextType.RESOURCE_REQ;
 import static io.reticulum.packet.PacketContextType.RESPONSE;
 import static io.reticulum.packet.PacketType.DATA;
 import static io.reticulum.packet.PacketType.PROOF;
+import static io.reticulum.resource.ResourceStrategy.ACCEPT_ALL;
+import static io.reticulum.resource.ResourceStrategy.ACCEPT_APP;
+import static io.reticulum.resource.ResourceStrategy.ACCEPT_NONE;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.truncatedHash;
+import static java.lang.Character.codePointOf;
+import static java.math.BigInteger.ONE;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Arrays.copyOfRange;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static java.util.concurrent.Executors.defaultThreadFactory;
+import static org.apache.commons.lang3.ArrayUtils.getLength;
+import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
 @Slf4j
 @Getter
@@ -111,7 +137,7 @@ public class Link {
     private int keepalive = KEEPALIVE;
     private int staleTime = STALE_TIME;
     private ReentrantLock watchdogLock = new ReentrantLock();
-    private volatile Status status = PENDING;
+    private volatile LinkStatus status = PENDING;
     private Instant activatedAt;
     private DestinationType type = LINK;
     private Destination owner;
@@ -132,12 +158,13 @@ public class Link {
     private Fernet fernet;
     private byte[] peerPubBytes;
     private X25519PublicKeyParameters peerPub;
+    private byte[] peerSigPubBytes;
+    private Ed25519PublicKeyParameters peerSigPub;
     private byte[] requestData;
     private Packet packet;
     private byte[] hash;
     private byte[] sharedKey;
     private byte[] derivedKey;
-    private byte[] peerSigPubBytes;
     private long establishmentRate;
     private TeardownSession teardownReason;
 
@@ -160,11 +187,11 @@ public class Link {
         pub = prv.generatePublicKey();
         pubBytes = pub.getEncoded();
 
-        sigPub = sigPrv.generatePublicKey();
-        sigPubBytes = sigPub.getEncoded();
+        peerSigPub = sigPrv.generatePublicKey();
+        peerSigPubBytes = peerSigPub.getEncoded();
 
         if (initiator) {
-            requestData = concatArrays(pubBytes, sigPubBytes);
+            requestData = concatArrays(pubBytes, peerSigPubBytes);
             packet = new Packet(destination, requestData, PacketType.LINKREQUEST);
             packet.pack();
             establishmentCost.getAndIncrement();
@@ -193,8 +220,8 @@ public class Link {
         this.peerPubBytes = peerPubBytes;
         this.peerPub = new X25519PublicKeyParameters(this.peerPubBytes);
 
-        this.sigPubBytes = peerSigPubBytes;
-        this.sigPub = new Ed25519PublicKeyParameters(this.sigPubBytes);
+        this.peerSigPubBytes = peerSigPubBytes;
+        this.peerSigPub = new Ed25519PublicKeyParameters(this.peerSigPubBytes);
 
 //        if not hasattr(self.peer_pub, "curve"):
 //            self.peer_pub.curve = Link.CURVE
@@ -206,7 +233,7 @@ public class Link {
     }
 
     public synchronized void handshake() {
-        this.status = Status.HANDSHAKE;
+        this.status = LinkStatus.HANDSHAKE;
 
         var agreement = new X25519Agreement();
         agreement.init(prv);
@@ -223,7 +250,7 @@ public class Link {
 
     @SneakyThrows
     public void prove() {
-        var signedData = concatArrays(linkId, pubBytes, sigPubBytes);
+        var signedData = concatArrays(linkId, pubBytes, peerSigPubBytes);
         var signature = owner.getIdentity().sign(signedData);
 
         var proofData = concatArrays(signature, pubBytes);
@@ -659,8 +686,7 @@ public class Link {
                             if (packedResponse.length <= MDU) {
                                 new Packet(this, packedResponse, DATA, RESPONSE).send();
                             } else {
-                                // todo не используется - удалить, если так и не пригодится нигде или добавить
-                                // response_resource = RNS.Resource(packed_response, self, request_id = request_id, is_response = True)
+                                 var responseResource = new Resource(packedResponse, this, requestId, true);
                             }
                         }
                     }
@@ -695,7 +721,8 @@ public class Link {
         }
     }
 
-    private void requestResourceConcluded(@NonNull final Resource resource) throws IOException {
+    @SneakyThrows
+    private void requestResourceConcluded(@NonNull final Resource resource) {
         if (resource.getStatus() == ResourceStatus.COMPLETE) {
             var packedRequest = resource.getData().readAllBytes();
             try (var unpacker = MessagePack.newDefaultUnpacker(packedRequest)) {
@@ -735,24 +762,226 @@ public class Link {
         return channel;
     }
 
+    @SneakyThrows
     public synchronized void receive(Packet packet) {
+        watchdogLock.lock();
+        if (status == CLOSED
+                && isFalse(
+                initiator && packet.getContext() == PacketContextType.KEEPALIVE
+                        && Arrays.equals(packet.getData(), new byte[]{(byte) 0xFF}
+                )
+        )
+        ) {
+            if (isFalse(packet.getReceivingInterface().equals(attachedInterface))) {
+                log.error("Link-associated packet received on unexpected interface! Someone might be trying to manipulate your communication!");
+            } else {
+                lastOutbound = Instant.now();
+                rx = rx.add(ONE);
+                rxBytes = rxBytes.add(BigInteger.valueOf(packet.getData().length));
+                if (status == STALE) {
+                    status = ACTIVE;
+                }
 
+                if (packet.getPacketType() == DATA) {
+                    if (packet.getContext() == PacketContextType.NONE) {
+                        var plainText = decrypt(packet.getData());
+                        if (nonNull(callbacks.getPacket())) {
+                            defaultThreadFactory()
+                                    .newThread(() -> callbacks.getPacket().accept(plainText, packet))
+                                    .start();
+                        }
+                        if (destination.getProofStrategy() == PROVE_ALL) {
+                            packet.prove();
+                        } else if (destination.getProofStrategy() == PROVE_APP) {
+                            if (nonNull(destination.getCallbacks().getProofRequested())) {
+                                try {
+                                    destination.getCallbacks().getProofRequested().accept(packet);
+                                } catch (Exception e) {
+                                    log.error("Error while executing proof request callback from {}.", this, e);
+                                }
+                            }
+                        }
+                    } else if (packet.getContext() == LINKIDENTIFY) {
+                        var plaintext = decrypt(packet.getData());
+
+                        if (isFalse(initiator) && getLength(plaintext) == KEYSIZE / 8 + SIGLENGTH) {
+                            var publicKey = copyOfRange(plaintext, 0, KEYSIZE / 8);
+                            var signedData = concatArrays(linkId, publicKey);
+                            var signature = copyOfRange(plaintext, KEYSIZE / 8, KEYSIZE / 8 + SIGLENGTH / 8);
+                            var identity = new Identity(false);
+                            identity.loadPublicKey(publicKey);
+
+                            if (identity.validate(signature, signedData)) {
+                                remoteIdentity = identity;
+                                if (nonNull(callbacks.remoteIdentified)) {
+                                    try {
+                                        callbacks.getRemoteIdentified().accept(this, remoteIdentity);
+                                    } catch (Exception e) {
+                                        log.error("Error while executing remote identified callback from {}.", this, e);
+                                    }
+                                }
+                            }
+                        }
+                    } else if (packet.getContext() == REQUEST) {
+                        try {
+                            var requestId = packet.getTruncatedHash();
+                            var packetRequest = decrypt(packet.getData());
+                            try (var unpacker = MessagePack.newDefaultUnpacker(packetRequest)) {
+                                var unpackedRequestValue = unpacker.unpackValue().asArrayValue();
+                                handleRequest(requestId, UnpackedRequest.fromValue(unpackedRequestValue));
+                            }
+                        } catch (Exception e) {
+                            log.error("Error occurred while handling request", e);
+                        }
+                    } else if (packet.getContext() == RESPONSE) {
+                        try {
+                            var packedResponse = decrypt(packet.getData());
+                            try (
+                                    var unpacker = MessagePack.newDefaultUnpacker(packedResponse);
+                                    var packer = MessagePack.newDefaultBufferPacker();
+                            ) {
+                                var unpackedResponseValue = unpacker.unpackValue().asArrayValue();
+                                var unpackedResponse = UnpackedResponse.fromValue(unpackedResponseValue);
+                                packer.packValue(ValueFactory.newBinary(unpackedResponse.getResponseData()));
+                                var transferSize = getLength(packer.toByteArray()) - 2;
+                                handleResponse(
+                                        unpackedResponse.getRequestId(),
+                                        unpackedResponse.getResponseData(),
+                                        transferSize,
+                                        transferSize
+                                );
+                            }
+                        } catch (Exception e) {
+                            log.error("Error occurred while handling response.", e);
+                        }
+                    } else if (packet.getContext() == LRRTT) {
+                        if (isFalse(initiator)) {
+                            rttPacket(packet);
+                        }
+                    } else if (packet.getContext() == LINKCLOSE) {
+                        teardownPacket(packet);
+                    } else if (packet.getContext() == RESOURCE_ADV) {
+                        packet.setPlaintext(decrypt(packet.getData()));
+
+                        if (ResourceAdvertisement.isRequest(packet)) {
+                            Resource.accept(packet, this::requestResourceConcluded);
+                        } else if (ResourceAdvertisement.isResponse(packet)) {
+                            var requestId = ResourceAdvertisement.readRequestId(packet);
+                            for (RequestReceipt pendingRequest : pendingRequests) {
+                                if (Arrays.equals(pendingRequest.getRequestId(), requestId)) {
+                                    Resource.accept(packet, this::responseResourceConcluded, pendingRequest::responseResourceProgress, requestId);
+                                    pendingRequest.setResponseSize(ResourceAdvertisement.readSize(packet));
+                                    pendingRequest.setResponseTransferSize(ResourceAdvertisement.readTransferSize(packet));
+                                    pendingRequest.setStartedAt(Instant.now());
+                                }
+                            }
+                        } else if (resourceStrategy == ACCEPT_NONE) {
+                            // pass
+                        } else if (resourceStrategy == ACCEPT_APP) {
+                            if (nonNull(callbacks.getResource())) {
+                                try {
+                                    var resourceAdvertisement = ResourceAdvertisement.unpack(packet.getPlaintext());
+                                    resourceAdvertisement.setLink(this);
+                                    if (callbacks.getResource().apply(resourceAdvertisement)) {
+                                        Resource.accept(packet, callbacks.getResourceConcluded());
+                                    }
+                                } catch (Exception e) {
+                                    log.error("Error while executing resource accept callback from {}.", this, e);
+                                }
+                            }
+                        } else if (resourceStrategy == ACCEPT_ALL) {
+                            Resource.accept(packet, callbacks.getResourceConcluded());
+                        }
+                    } else if (packet.getContext() == RESOURCE_REQ) {
+                        var plaintext = decrypt(packet.getData());
+                        byte[] resourceHash;
+                        if (codePointOf(new String(copyOfRange(plaintext, 0, 1))) == HASHMAP_IS_EXHAUSTED) {
+                            resourceHash = copyOfRange(plaintext, 1 + MAPHASH_LEN, HASHLENGTH / 8 + 1 + MAPHASH_LEN);
+                        } else {
+                            resourceHash = copyOfRange(plaintext, 1, HASHLENGTH / 8 + 1);
+                        }
+
+                        for (Resource resource : outgoingResources) {
+                            if (Arrays.equals(resource.getHash(), resourceHash)) {
+                                // We need to check that this request has not been
+                                // received before in order to avoid sequencing errors.
+                                if (resource.getReqHashList().stream().noneMatch(reqHash -> Arrays.equals(reqHash, packet.getPacketHash()))) {
+                                    resource.getReqHashList().add(packet.getPacketHash());
+                                    resource.request(plaintext);
+                                }
+                            }
+                        }
+                    } else if (packet.getContext() == RESOURCE_HMU) {
+                        var plaintext = decrypt(packet.getData());
+                        var resourceHash = copyOfRange(plaintext, 0, HASHLENGTH / 8);
+                        for (Resource resource : incomingResources) {
+                            if (Arrays.equals(resourceHash, resource.getHash())) {
+                                resource.hashmapUpdatePacket(plaintext);
+                            }
+                        }
+                    } else if (packet.getContext() == RESOURCE_ICL) {
+                        var plaintext = decrypt(packet.getData());
+                        var resourceHash = copyOfRange(plaintext, 0, HASHLENGTH / 8);
+                        for (Resource resource : incomingResources) {
+                            if (Arrays.equals(resourceHash, resource.getHash())) {
+                                resource.cancel();
+                            }
+                        }
+                    } else if (packet.getContext() == PacketContextType.KEEPALIVE) {
+                        if (isFalse(initiator) && Arrays.equals(packet.getData(), new byte[] {(byte) 0xFF})) {
+                            var keepalivePacket = new Packet(this, new byte[] {(byte) 0xFF}, PacketContextType.KEEPALIVE);
+                            keepalivePacket.send();
+                            hadOutbound();
+                        }
+                    }
+                    // TODO: find the most efficient way to allow multiple
+                    // transfers at the same time, sending resource hash on
+                    // each packet is a huge overhead. Probably some kind
+                    // of hash -> sequence map
+                    else if (packet.getContext() == RESOURCE) {
+                        for (Resource resource : incomingResources) {
+                            resource.receivePart(packet);
+                        }
+                    } else if (packet.getContext() == CHANNEL) {
+                        if (isNull(channel)) {
+                            log.debug("Channel data received without open channel.");
+                        } else {
+                            packet.prove();
+                            var plaintext = decrypt(packet.getData());
+                            channel.receive(plaintext);
+                        }
+                    }
+                } else if (packet.getPacketType() == PROOF) {
+                    if (packet.getContext() == RESOURCE_PRF) {
+                        var resourceHash = copyOfRange(packet.getData(), 0, HASHLENGTH / 8);
+                        for (Resource resource : outgoingResources) {
+                            if (Arrays.equals(resource.getHash(), resourceHash)) {
+                                resource.validateProof(packet.getData());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        watchdogLock.unlock();
     }
 
-    public void establishmentTimeout(int timeout) {
+    private byte[] encrypt(@NonNull final byte[] plaintext) throws IOException {
+        try {
+            if (isNull(fernet)) {
+                try {
+                    fernet = new Fernet(derivedKey);
+                } catch (Exception e) {
+                    log.error("Could not {}  instantiate Fernet while performin encryption on link.", this, e);
+                    throw e;
+                }
+            }
 
-    }
-
-    public void addEstablishmentCost(int length) {
-        establishmentCost.getAndAdd(length);
-    }
-
-    private byte[] sign(byte[] message) {
-        var signer = new Ed25519Signer();
-        signer.init(true, sigPrv);
-        signer.update(message, 0, message.length);
-
-        return signer.generateSignature();
+            return fernet.encrypt(plaintext);
+        } catch (IOException e) {
+            log.error("Encryption on link {} failed.", this, e);
+            throw e;
+        }
     }
 
     private byte[] decrypt(byte[] data) {
@@ -769,11 +998,119 @@ public class Link {
         return null;
     }
 
+    public byte[] sign(byte[] message) {
+        var signer = new Ed25519Signer();
+        signer.init(true, sigPrv);
+        signer.update(message, 0, message.length);
+
+        return signer.generateSignature();
+    }
+
+    public boolean validate(byte[] signature, byte[] message) {
+        try {
+            var verifier = new Ed25519Signer();
+            verifier.init(false, peerSigPub);
+            verifier.update(message, 0, message.length);
+
+            return verifier.verifySignature(signature);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public void setLinkEstablishedCallback(Runnable establishedCallback) {
         callbacks.setLinkEstablished(establishedCallback);
     }
 
+    /**
+     * Registers a function to be called when a link has been torn down.
+     *
+     * @param closedCallback
+     */
     public void setLinkClosedCallback(Consumer<Link> closedCallback) {
         callbacks.setLinkClosed(closedCallback);
+    }
+
+    /**
+     * Registers a function to be called when a packet has been received over this link.
+     *
+     * @param callback
+     */
+    public void setPacketCallback(BiConsumer<byte[], Packet> callback) {
+        callbacks.setPacket(callback);
+    }
+
+    /**
+     * Registers a function to be called when a resource has been advertised over this link. If the function returns
+     * <strong>true</strong> the resource will be accepted. If it returns <strong>false</strong> it will be ignored.
+     *
+     * @param callback
+     */
+    public void setResourceCallback(Function<ResourceAdvertisement, Boolean> callback) {
+        callbacks.setResource(callback);
+    }
+
+    /**
+     * Registers a function to be called when a resource has begun transferring over this link.
+     *
+     * @param callback
+     */
+    public void setResourceStartedCallback(Consumer<Resource> callback) {
+        callbacks.setResourceStarted(callback);
+    }
+
+    /**
+     * Registers a function to be called when a resource has concluded transferring over this link.
+     *
+     * @param callback
+     */
+    public void setResourceConcludedCallback(Consumer<Resource> callback) {
+        callbacks.setResourceConcluded(callback);
+    }
+
+    /**
+     * Registers a function to be called when an initiating peer has identified over this link.
+     *
+     * @param callback
+     */
+    public void setRemoteIdentifiedCallback(BiConsumer<Link, Identity> callback) {
+        callbacks.setRemoteIdentified(callback);
+    }
+
+    public void resourceConcluded(Resource resource) {
+        incomingResources.remove(resource);
+        outgoingResources.remove(resource);
+    }
+
+    public void registerOutgoingResource(@NonNull Resource resource) {
+        outgoingResources.add(resource);
+    }
+
+    public void registerIncomingResource(@NonNull Resource resource) {
+        incomingResources.add(resource);
+    }
+
+    public boolean hasIncomingResource(@NonNull Resource resource) {
+        return incomingResources.contains(resource);
+    }
+
+    public void cancelOutgoingResource(@NonNull Resource resource) {
+        if (isFalse(outgoingResources.remove(resource))) {
+            log.error("Attempt to cancel a non-existing outgoing resource");
+        }
+    }
+
+    public void cancelIncomingResource(@NonNull Resource resource) {
+        if (isFalse(incomingResources.remove(resource))) {
+            log.error("Attempt to cancel a non-existing incoming resource");
+        }
+    }
+
+    public boolean readyForNewResource() {
+        return outgoingResources.isEmpty();
+    }
+
+    public void addEstablishmentCost(int length) {
+        establishmentCost.getAndAdd(length);
     }
 }
