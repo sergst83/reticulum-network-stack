@@ -14,9 +14,4 @@ public class PacketReceipt {
     private boolean proved;
     private Instant concludedAt;
     private PacketReceiptCallbacks callbacks;
-
-
-    public void setTimeoutCallback(Consumer<PacketReceipt> callback) {
-        timeoutCallback = callback;
-    }
 }

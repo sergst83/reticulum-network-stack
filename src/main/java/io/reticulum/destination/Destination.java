@@ -12,6 +12,7 @@ import io.reticulum.utils.DestinationUtils;
 import io.reticulum.utils.IdentityUtils;
 import io.reticulum.utils.LinkUtils;
 import lombok.Getter;
+import lombok.NoArgsConstructor;
 import lombok.NonNull;
 import lombok.Setter;
 import lombok.SneakyThrows;
@@ -63,6 +64,7 @@ import static java.util.Objects.nonNull;
 @Getter
 @Setter
 @Slf4j
+@NoArgsConstructor
 public class Destination {
     private Identity identity;
     private byte[] hash;

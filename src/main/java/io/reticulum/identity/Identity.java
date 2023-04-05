@@ -293,12 +293,12 @@ public class Identity {
             proofData = signature;
         }
 
-        Packet proof;
-        if (isNull(destination)) {
-            proof = new Packet(packet.generatrProofDestination(), proofData, PROOF, packet.getReceivingInterface());
-        } else {
-            proof = new Packet(destination, proofData, PROOF, packet.getReceivingInterface());
-        }
+        var proof = new Packet(
+                isNull(destination) ? packet.generatrProofDestination() : destination,
+                proofData,
+                PROOF,
+                packet.getReceivingInterface()
+        );
         proof.send();
     }
 

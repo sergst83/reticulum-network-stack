@@ -1,6 +1,10 @@
 package io.reticulum;
 
 import io.reticulum.constant.LinkConstant;
+import io.reticulum.destination.DestinationType;
+import io.reticulum.packet.HeaderType;
+import io.reticulum.packet.PacketType;
+import io.reticulum.transport.TransportType;
 import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.lang3.ArrayUtils;
 import org.junit.jupiter.api.Test;
@@ -11,6 +15,7 @@ import org.msgpack.core.MessagePack;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.util.Arrays;
+import java.util.function.Function;
 
 import static io.reticulum.utils.IdentityUtils.getRandomHash;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -65,5 +70,25 @@ public class TTT {
         var packer = MessagePack.newDefaultBufferPacker();
         packer.packLong(l);
         assertEquals(hex, Hex.encodeHexString(packer.toByteArray()));
+    }
+
+    @Test
+    void v() {
+        Function<Integer, String> toBin = i -> String.format("%8s", Integer.toBinaryString(i)).replace(' ', '0');
+
+        var a = HeaderType.HEADER_2.getValue() << 6;
+        System.out.println(toBin.apply(a));
+
+        var b = TransportType.TUNNEL.getValue() << 4;
+        System.out.println(toBin.apply(b));
+
+        var c = DestinationType.LINK.getValue();
+        System.out.println(toBin.apply((int) c));
+
+        var d = PacketType.PROOF.getValue();
+        System.out.println(toBin.apply((int) d));
+
+        var result = a | b | c | d;
+        System.out.println(toBin.apply(result));
     }
 }
