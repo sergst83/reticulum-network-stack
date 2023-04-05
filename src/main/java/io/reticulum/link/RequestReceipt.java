@@ -1,6 +1,7 @@
 package io.reticulum.link;
 
 import io.reticulum.packet.PacketReceipt;
+import io.reticulum.packet.PacketReceiptStatus;
 import io.reticulum.resource.Resource;
 import io.reticulum.resource.ResourceStatus;
 import lombok.Data;
@@ -9,14 +10,18 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Hex;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.function.Consumer;
 
 import static io.reticulum.link.RequestReceiptStatus.DELIVERED;
 import static io.reticulum.link.RequestReceiptStatus.FAILED;
+import static io.reticulum.link.RequestReceiptStatus.READY;
+import static io.reticulum.link.RequestReceiptStatus.RECEIVING;
 import static io.reticulum.link.RequestReceiptStatus.SENT;
 import static java.util.Objects.nonNull;
 import static java.util.concurrent.Executors.defaultThreadFactory;
+import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
 /**
  * An instance of this class is returned by the <strong>request</strong> method of {@link Link}
@@ -35,10 +40,12 @@ public class RequestReceipt {
     private PacketReceipt packetReceipt;
     private RequestReceiptStatus status = SENT;
     private Instant concludedAt;
+    private Instant responseConcludedAt;
     private RequestReceiptCallbacks callbacks = new RequestReceiptCallbacks();
-    private long progress = 0;
+    private double progress = 0;
     private long timeout;
     private Instant resourceResponseTimeout;
+    private byte[] response;
 
     private void init(
             Link link,
@@ -93,20 +100,6 @@ public class RequestReceipt {
         init(link, responseCallback, failedCallback, progressCallback, timeout, requestSize);
     }
 
-    public synchronized void requestTimedOut(PacketReceipt packetReceipt) {
-        this.status = FAILED;
-        this.concludedAt = Instant.now();
-        this.link.getPendingRequests().remove(this);
-
-        if (nonNull(callbacks.getFailed())) {
-            try {
-                callbacks.getFailed().accept(this);
-            } catch (Exception e) {
-                log.error("Error while executing request timed out callback from {}.", this, e);
-            }
-        }
-    }
-
     public synchronized void requestResourceConcluded(@NonNull Resource resource) {
         if (resource.getStatus() == ResourceStatus.COMPLETE) {
             log.debug("Request {} successfully sent as resource.", Hex.encodeHexString(requestId));
@@ -141,10 +134,96 @@ public class RequestReceipt {
         }
     }
 
-    public void responseReceived(byte[] responseData) {
+    public synchronized void requestTimedOut(PacketReceipt packetReceipt) {
+        this.status = FAILED;
+        this.concludedAt = Instant.now();
+        this.link.getPendingRequests().remove(this);
 
+        if (nonNull(callbacks.getFailed())) {
+            try {
+                callbacks.getFailed().accept(this);
+            } catch (Exception e) {
+                log.error("Error while executing request timed out callback from {}.", this, e);
+            }
+        }
     }
 
-    public void responseResourceProgress(Resource resource) {
+    public synchronized void responseResourceProgress(@NonNull Resource resource) {
+        if (isFalse(status == FAILED)) {
+            status = RECEIVING;
+            if (nonNull(packetReceipt)) {
+                packetReceipt.setStatus(PacketReceiptStatus.DELIVERED);
+                packetReceipt.setProved(true);
+                packetReceipt.setConcludedAt(Instant.now());
+                if (nonNull(packetReceipt.getCallbacks().getDelivery())) {
+                    packetReceipt.getCallbacks().getDelivery().accept(packetReceipt);
+                }
+            }
+
+            progress = resource.getProgress();
+
+            if (nonNull(callbacks.getProgress())) {
+                try {
+                    callbacks.getProgress().accept(this);
+                } catch (Exception e) {
+                    log.error("Error while executing response progress callback from {}.", this, e);
+                }
+            }
+        } else {
+            resource.cancel();
+        }
+    }
+
+    public synchronized void responseReceived(byte[] responseData) {
+        if (isFalse(status == FAILED)) {
+            progress = 1.0;
+            response = responseData;
+            status = READY;
+            responseConcludedAt = Instant.now();
+
+            if (nonNull(packetReceipt)) {
+                packetReceipt.setStatus(PacketReceiptStatus.DELIVERED);
+                packetReceipt.setProved(true);
+                packetReceipt.setConcludedAt(Instant.now());
+                if (nonNull(packetReceipt.getCallbacks().getDelivery())) {
+                    packetReceipt.getCallbacks().getDelivery().accept(packetReceipt);
+                }
+            }
+
+            if (nonNull(callbacks.getProgress())) {
+                try {
+                    callbacks.getProgress().accept(this);
+                } catch (Exception e) {
+                    log.error("Error while executing response progress callback from {}.", this, e);
+                }
+            }
+
+            if (nonNull(callbacks.getResponse())) {
+                try {
+                    callbacks.getResponse().accept(this);
+                } catch (Exception e) {
+                    log.error("Error while executing response received callback from {}.", this, e);
+                }
+            }
+        }
+    }
+
+    public byte[] getResponse() {
+        if (status == READY) {
+            return response;
+        } else {
+            return null;
+        }
+    }
+
+    /**
+     * @return The response time of the request in milliseconds.
+     */
+    public Long getResponseTime() {
+        if (status == READY) {
+            return Duration.between(startedAt, responseConcludedAt).toMillis();
+        } else {
+            return null;
+        }
     }
 }

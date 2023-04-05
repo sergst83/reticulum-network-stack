@@ -23,10 +23,13 @@ public class Packet {
     private int hops;
     private ConnectionInterface receivingInterface;
     private byte[] packetHash;
-    private Object destination;
+    private Destination destination;
     private byte[] raw;
     private byte[] plaintext;
-    public Packet(Object destination, byte[] proofData, PacketType proof, ConnectionInterface attachedInterface) {
+    public Packet(Destination destination, byte[] proofData, PacketType proof, ConnectionInterface attachedInterface) {
+    }
+
+    public Packet(ProofDestination destination, byte[] proofData, PacketType proof, ConnectionInterface attachedInterface) {
     }
 
     public Packet(Link link, byte[] proofData, PacketType packetType, PacketContextType contextType) {

@@ -74,4 +74,8 @@ public class Resource {
     public void validateProof(byte[] data) {
 
     }
+
+    public double getProgress() {
+        return 0;
+    }
 }

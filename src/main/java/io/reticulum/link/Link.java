@@ -100,7 +100,6 @@ import static io.reticulum.resource.ResourceStrategy.ACCEPT_APP;
 import static io.reticulum.resource.ResourceStrategy.ACCEPT_NONE;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.truncatedHash;
-import static java.lang.Character.codePointOf;
 import static java.math.BigInteger.ONE;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Arrays.copyOfRange;
@@ -735,7 +734,8 @@ public class Link {
         }
     }
 
-    private void responseResourceConcluded(@NonNull Resource resource) throws IOException {
+    @SneakyThrows
+    private void responseResourceConcluded(@NonNull Resource resource) {
         if (resource.getStatus() == ResourceStatus.COMPLETE) {
             try (var unpacker = MessagePack.newDefaultUnpacker(resource.getData())) {
                 var unpackedResponseValue = unpacker.unpackValue().asArrayValue();
@@ -895,7 +895,7 @@ public class Link {
                     } else if (packet.getContext() == RESOURCE_REQ) {
                         var plaintext = decrypt(packet.getData());
                         byte[] resourceHash;
-                        if (codePointOf(new String(copyOfRange(plaintext, 0, 1))) == HASHMAP_IS_EXHAUSTED) {
+                        if (nonNull(plaintext) && new String(plaintext).codePointAt(0) == HASHMAP_IS_EXHAUSTED) {
                             resourceHash = copyOfRange(plaintext, 1 + MAPHASH_LEN, HASHLENGTH / 8 + 1 + MAPHASH_LEN);
                         } else {
                             resourceHash = copyOfRange(plaintext, 1, HASHLENGTH / 8 + 1);

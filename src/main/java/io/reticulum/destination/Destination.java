@@ -178,7 +178,7 @@ public class Destination {
      */
     public void registerRequestHandler(
             @NonNull final String path,
-            final Function<Request, Object> responseGenerator,
+            final Function<Request, byte[]> responseGenerator,
             final RequestPolicy allow,
             final List<byte[]> allowedList
     ) {

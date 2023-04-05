@@ -20,7 +20,7 @@ public class LinkUtils {
                 var link = new Link(owner, copyOfRange(data, 0, ECPUBSIZE / 2), copyOfRange(data, ECPUBSIZE / 2, ECPUBSIZE));
                 link.setLinkId(packet);
                 link.setDestination(packet.getDestination());
-                link.establishmentTimeout(ESTABLISHMENT_TIMEOUT_PER_HOP + Math.max(1, packet.getHops()));
+                link.setEstablishmentTimeout(ESTABLISHMENT_TIMEOUT_PER_HOP + Math.max(1, packet.getHops()));
                 link.addEstablishmentCost(packet.getRaw().length);
                 log.info("Validating link request {}", link.getLinkId());
                 link.handshake();
