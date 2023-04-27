@@ -3,6 +3,8 @@ package io.reticulum.packet;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
+import java.util.Arrays;
+
 @Getter
 @RequiredArgsConstructor
 public enum PacketType {
@@ -25,4 +27,11 @@ public enum PacketType {
     ;
 
     private final byte value;
+
+    public static PacketType fromValue(final byte value) {
+        return Arrays.stream(values())
+                .filter(packetType -> packetType.getValue() == value)
+                .findFirst()
+                .orElseThrow();
+    }
 }

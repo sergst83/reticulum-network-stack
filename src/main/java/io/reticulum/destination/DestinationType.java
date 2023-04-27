@@ -4,6 +4,8 @@ package io.reticulum.destination;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
+import java.util.Arrays;
+
 @Getter
 @RequiredArgsConstructor
 public enum DestinationType {
@@ -13,4 +15,11 @@ public enum DestinationType {
     LINK((byte) 0x03);
 
     private final byte value;
+
+    public static DestinationType fromValue(final byte value) {
+        return Arrays.stream(values())
+                .filter(type -> type.getValue() == value)
+                .findFirst()
+                .orElseThrow();
+    }
 }

@@ -21,6 +21,7 @@ import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -261,6 +262,39 @@ public class Destination {
     }
 
     /**
+     * Encrypts information for DestinationType.SINGLE or DestinationType.GROUP type destination.
+     *
+     * @param plaintext containing the plaintext to be encrypted
+     * @return encrypted
+     */
+    public byte[] encrypt(byte[] plaintext) {
+        switch (type) {
+            case PLAIN:
+                return plaintext;
+            case SINGLE:
+                if (nonNull(identity)) {
+                    return identity.encrypt(plaintext);
+                }
+                break;
+            case GROUP:
+                if (nonNull(prv)) {
+                    try {
+                        return prv.encrypt(plaintext);
+                    } catch (IOException e) {
+                        log.error("The GROUP destination could not encrypt data.", e);
+                    }
+                } else {
+                    throw new IllegalStateException("No private key held by GROUP destination. Did you create or load one?");
+                }
+                break;
+            default:
+                return null;
+        }
+
+        return null;
+    }
+
+    /**
      * Decrypts information for DestinationType.SINGLE or DestinationType.GROUP type destination.
      *
      * @param ciphertext ciphertext: byte[] containing the ciphertext to be decrypted.
@@ -280,7 +314,7 @@ public class Destination {
                     try {
                         return prv.decrypt(ciphertext);
                     } catch (Exception e) {
-                        log.error("he GROUP destination could not decrypt data.", e);
+                        log.error("The GROUP destination could not decrypt data.", e);
                     }
                 } else {
                     throw new IllegalStateException("No private key held by GROUP destination. Did you create or load one?");

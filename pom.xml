@@ -91,6 +91,11 @@
             <artifactId>fernet-java8</artifactId>
             <version>1.4.2</version>
         </dependency>
+        <dependency>
+            <groupId>com.igormaznitsa</groupId>
+            <artifactId>jbbp</artifactId>
+            <version>2.0.4</version>
+        </dependency>
     </dependencies>
 
     <build>
@@ -111,6 +116,26 @@
                     </annotationProcessorPaths>
                 </configuration>
             </plugin>
+<!--            <plugin>-->
+<!--                <groupId>com.igormaznitsa</groupId>-->
+<!--                <artifactId>jbbp-maven-plugin</artifactId>-->
+<!--                <version>2.0.4</version>-->
+<!--                <executions>-->
+<!--                    <execution>-->
+<!--                        <id>gen-jbbp-src</id>-->
+<!--                        <goals>-->
+<!--                            <goal>generate</goal>-->
+<!--                        </goals>-->
+<!--                    </execution>-->
+<!--                </executions>-->
+<!--                <configuration>-->
+<!--                    <addBinAnnotations>true</addBinAnnotations>-->
+<!--                    <addGettersSetters>true</addGettersSetters>-->
+<!--                    <addNewInstanceMethods>true</addNewInstanceMethods>-->
+<!--                    <source>${project.basedir}/src/main/resources</source>-->
+<!--                    <packageName>io.reticulum.packet.data</packageName>-->
+<!--                </configuration>-->
+<!--            </plugin>-->
         </plugins>
     </build>
 </project>

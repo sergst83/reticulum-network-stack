@@ -4,13 +4,6 @@ import static io.reticulum.constant.LinkConstant.STALE_TIME;
 
 public class TransportConstant {
 
-    // Constants
-    public static final byte BROADCAST = 0x00;
-    public static final byte TRANSPORT = 0x01;
-    public static final byte RELAY = 0x02;
-    public static final byte TUNNEL = 0x03;
-    public static final byte[] types = new byte[]{BROADCAST, TRANSPORT, RELAY, TUNNEL};
-
     public static final byte REACHABILITY_UNREACHABLE = 0x00;
     public static final byte REACHABILITY_DIRECT = 0x01;
     public static final byte REACHABILITY_TRANSPORT = 0x02;

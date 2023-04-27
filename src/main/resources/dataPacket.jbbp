@@ -1,0 +1,18 @@
+val:1 IFAC_SIZE;
+header {
+    flags {
+        bit:2 PacketType;
+        bit:2 DestinationType;
+        bit:2 PropagationType;
+        bit:1 HeaderType;
+        bit:1 AccessCodes;
+    }
+    byte hops;
+}
+byte [header.flags.AccessCodes*IFAC_SIZE] IFAC;
+addresses {
+    byte [16] hash1;
+    byte [header.flags.HeaderType*16] hash2;
+}
+byte context;
+byte [_] data;
