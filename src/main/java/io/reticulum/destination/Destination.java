@@ -1,10 +1,10 @@
 package io.reticulum.destination;
 
-import io.reticulum.link.Link;
 import io.reticulum.Transport;
 import io.reticulum.cryptography.Fernet;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.ConnectionInterface;
+import io.reticulum.link.Link;
 import io.reticulum.packet.Packet;
 import io.reticulum.packet.PacketContextType;
 import io.reticulum.packet.PacketType;
@@ -50,9 +50,9 @@ import static io.reticulum.utils.IdentityUtils.getRandomHash;
 import static io.reticulum.utils.IdentityUtils.truncatedHash;
 import static java.lang.System.currentTimeMillis;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.Arrays.copyOfRange;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
+import static org.apache.commons.lang3.ArrayUtils.subarray;
 
 /**
  * A class used to describe endpoints in a Reticulum Network. Destination
@@ -115,7 +115,7 @@ public class Destination extends AbstractDestination {
 
         // Generate the destination address hash
         this.hash = DestinationUtils.hash(this.identity, appName, arrayLocalAspects);
-        this.nameHash = copyOfRange(
+        this.nameHash = subarray(
                 fullHash(expandName(null, appName, arrayLocalAspects).getBytes(UTF_8)),
                 0,
                 NAME_HASH_LENGTH / 8
@@ -394,7 +394,7 @@ public class Destination extends AbstractDestination {
             announceData = pathResponses.get(tag).getRight();
         } else {
             var randomHash = concatArrays(
-                    copyOfRange(getRandomHash(), 0, 5),
+                    subarray(getRandomHash(), 0, 5),
                     longToByteArray(currentTimeMillis() / 1000, 5)
             );
 

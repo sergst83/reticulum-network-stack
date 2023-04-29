@@ -13,8 +13,8 @@ import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.Arrays.copyOfRange;
 import static java.util.Objects.nonNull;
+import static org.apache.commons.lang3.ArrayUtils.subarray;
 
 public class DestinationUtils {
 
@@ -53,7 +53,7 @@ public class DestinationUtils {
     public static Pair<String, String[]> appAndAspectsFromName(@NonNull String fullName) {
         var array = StringUtils.split(fullName, '.');
 
-        return Pair.of(array[0], copyOfRange(array, 1, array.length));
+        return Pair.of(array[0], subarray(array, 1, array.length));
     }
 
     /**
@@ -69,7 +69,7 @@ public class DestinationUtils {
      * @return A destination name in adressable hash form, for an app_name and a number of aspects
      */
     public static byte[] hash(Identity identity, @NonNull String appName, String... aspects) throws IOException {
-        var addrHashMaterial = copyOfRange(
+        var addrHashMaterial = subarray(
                 fullHash(expandName(null, appName, aspects).getBytes(UTF_8)),
                 0,
                 NAME_HASH_LENGTH / 8
@@ -78,6 +78,6 @@ public class DestinationUtils {
             addrHashMaterial = concatArrays(addrHashMaterial, identity.getHash());
         }
 
-        return copyOfRange(fullHash(addrHashMaterial), 0, TRUNCATED_HASHLENGTH / 8);
+        return subarray(fullHash(addrHashMaterial), 0, TRUNCATED_HASHLENGTH / 8);
     }
 }

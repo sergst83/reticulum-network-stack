@@ -17,10 +17,10 @@ import java.util.function.Consumer;
 
 import static io.reticulum.constant.IdentityConstant.HASHLENGTH;
 import static io.reticulum.constant.IdentityConstant.SIGLENGTH;
-import static java.util.Arrays.copyOfRange;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static java.util.concurrent.Executors.defaultThreadFactory;
+import static org.apache.commons.lang3.ArrayUtils.subarray;
 
 @Data
 @Slf4j
@@ -73,8 +73,8 @@ public class PacketReceipt {
         var dest = (Destination) destination;
         if (proof.length == EXPL_LENGTH) {
             //This is an explicit proof
-            var proofHash = copyOfRange(proof, 0, HASHLENGTH / 8);
-            var signature = copyOfRange(proof, HASHLENGTH / 8, HASHLENGTH / 8 + SIGLENGTH / 8);
+            var proofHash = subarray(proof, 0, HASHLENGTH / 8);
+            var signature = subarray(proof, HASHLENGTH / 8, HASHLENGTH / 8 + SIGLENGTH / 8);
             if (Arrays.equals(proofHash, hash)) {
                 if (dest.getIdentity().validate(signature, hash)) {
                     status = PacketReceiptStatus.DELIVERED;
@@ -103,7 +103,7 @@ public class PacketReceipt {
                 return false;
             }
 
-            var signature = copyOfRange(proof, 0, SIGLENGTH / 8);
+            var signature = subarray(proof, 0, SIGLENGTH / 8);
             if (dest.getIdentity().validate(signature, hash)) {
                 status = PacketReceiptStatus.DELIVERED;
                 proved = true;
@@ -138,8 +138,8 @@ public class PacketReceipt {
         var proof = proofPacket.getData();
         if (proof.length == EXPL_LENGTH) {
             //This is an explicit proof
-            var proofHash = copyOfRange(proof, 0, HASHLENGTH / 8);
-            var signature = copyOfRange(proof, HASHLENGTH / 8, HASHLENGTH / 8 + SIGLENGTH / 8);
+            var proofHash = subarray(proof, 0, HASHLENGTH / 8);
+            var signature = subarray(proof, HASHLENGTH / 8, HASHLENGTH / 8 + SIGLENGTH / 8);
             if (Arrays.equals(proofHash, hash)) {
                 if (link.validate(signature, hash)) {
                     status = PacketReceiptStatus.DELIVERED;

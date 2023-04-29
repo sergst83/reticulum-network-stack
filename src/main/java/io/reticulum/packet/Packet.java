@@ -14,7 +14,6 @@ import io.reticulum.packet.data.DataPacketConverter;
 import io.reticulum.packet.data.Flags;
 import io.reticulum.packet.data.Header;
 import io.reticulum.transport.TransportType;
-import io.reticulum.utils.IdentityUtils;
 import lombok.Data;
 import lombok.NonNull;
 import lombok.SneakyThrows;
@@ -22,6 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.Optional;
 
 import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
 import static io.reticulum.destination.DestinationType.LINK;
@@ -38,9 +38,9 @@ import static io.reticulum.packet.PacketType.PROOF;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.truncatedHash;
 import static java.math.BigInteger.ONE;
-import static java.util.Arrays.copyOfRange;
 import static java.util.Objects.nonNull;
 import static java.util.Objects.requireNonNull;
+import static org.apache.commons.lang3.ArrayUtils.subarray;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
 /**
@@ -450,7 +450,7 @@ public class Packet {
     }
 
     public byte[] getTruncatedHash() {
-        return IdentityUtils.truncatedHash(getHashablePart());
+        return truncatedHash(getHashablePart());
     }
 
     private void updateHash() {
@@ -461,9 +461,9 @@ public class Packet {
     private byte[] getHashablePart() {
         var hashablePart = new byte[]{(byte) (raw[0] & 0b00001111)};
         if (headerType == HEADER_2) {
-            hashablePart = concatArrays(hashablePart, copyOfRange(raw, TRUNCATED_HASHLENGTH / 8 + 2, raw.length));
+            hashablePart = concatArrays(hashablePart, subarray(raw, TRUNCATED_HASHLENGTH / 8 + 2, raw.length));
         } else {
-            hashablePart = concatArrays(hashablePart, copyOfRange(raw, 2, raw.length));
+            hashablePart = concatArrays(hashablePart, subarray(raw, 2, raw.length));
         }
 
         return hashablePart;
@@ -486,5 +486,11 @@ public class Packet {
         }
 
         return flags;
+    }
+
+    public Link getLink() {
+        return (Link) Optional.ofNullable(destination)
+                .filter(dest -> dest.getType() == LINK)
+                .orElse(null);
     }
 }

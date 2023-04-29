@@ -6,12 +6,12 @@ import lombok.NoArgsConstructor;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.security.SecureRandom;
-import java.util.Arrays;
 
-import static io.reticulum.identity.IdentityKnownDestination.saveKnownDestinations;
 import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
+import static io.reticulum.identity.IdentityKnownDestination.saveKnownDestinations;
 import static lombok.AccessLevel.PRIVATE;
 import static org.apache.commons.codec.digest.DigestUtils.getSha256Digest;
+import static org.apache.commons.lang3.ArrayUtils.subarray;
 
 @NoArgsConstructor(access = PRIVATE)
 public class IdentityUtils {
@@ -27,7 +27,7 @@ public class IdentityUtils {
      * @return Truncated SHA-256 hash
      */
     public static byte[] truncatedHash(byte[] data) {
-        return Arrays.copyOfRange(fullHash(data), 0, TRUNCATED_HASHLENGTH / 8);
+        return subarray(fullHash(data), 0, TRUNCATED_HASHLENGTH / 8);
     }
 
     /**

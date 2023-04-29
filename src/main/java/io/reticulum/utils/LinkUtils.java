@@ -10,16 +10,16 @@ import java.time.Instant;
 
 import static io.reticulum.constant.LinkConstant.ECPUBSIZE;
 import static io.reticulum.constant.LinkConstant.ESTABLISHMENT_TIMEOUT_PER_HOP;
-import static java.util.Arrays.copyOfRange;
+import static org.apache.commons.lang3.ArrayUtils.subarray;
 
 @Slf4j
 public class LinkUtils {
     public static Link validateRequest(Destination owner, byte[] data, Packet packet) {
         if (data.length == ECPUBSIZE) {
             try {
-                var link = new Link(owner, copyOfRange(data, 0, ECPUBSIZE / 2), copyOfRange(data, ECPUBSIZE / 2, ECPUBSIZE));
+                var link = new Link(owner, subarray(data, 0, ECPUBSIZE / 2), subarray(data, ECPUBSIZE / 2, ECPUBSIZE));
                 link.setLinkId(packet);
-                link.setDestination(packet.getDestination());
+                link.setDestination((Destination) packet.getDestination());
                 link.setEstablishmentTimeout(ESTABLISHMENT_TIMEOUT_PER_HOP + Math.max(1, packet.getHops()));
                 link.addEstablishmentCost(packet.getRaw().length);
                 log.info("Validating link request {}", link.getLinkId());

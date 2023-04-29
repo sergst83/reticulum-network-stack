@@ -103,11 +103,11 @@ import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.truncatedHash;
 import static java.math.BigInteger.ONE;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.Arrays.copyOfRange;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static java.util.concurrent.Executors.defaultThreadFactory;
 import static org.apache.commons.lang3.ArrayUtils.getLength;
+import static org.apache.commons.lang3.ArrayUtils.subarray;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
 @Slf4j
@@ -279,14 +279,14 @@ public class Link extends AbstractDestination {
     private synchronized void validateProof(Packet packet) {
         if (status == PENDING) {
             if (initiator && packet.getData().length == (SIGLENGTH / 8 + ECPUBSIZE / 2)) {
-                var peerPubBytes = copyOfRange(packet.getData(), SIGLENGTH / 8, SIGLENGTH / 8 + ECPUBSIZE / 2);
-                var peerSigPubBytes = copyOfRange(destination.getIdentity().getPublicKey(), ECPUBSIZE / 2, ECPUBSIZE);
+                var peerPubBytes = subarray(packet.getData(), SIGLENGTH / 8, SIGLENGTH / 8 + ECPUBSIZE / 2);
+                var peerSigPubBytes = subarray(destination.getIdentity().getPublicKey(), ECPUBSIZE / 2, ECPUBSIZE);
                 loadPeer(peerPubBytes, peerSigPubBytes);
                 handshake();
 
                 establishmentCost.getAndAdd(packet.getRaw().length);
                 var signedData = concatArrays(linkId, this.peerPubBytes, this.peerSigPubBytes);
-                var signature = copyOfRange(packet.getData(), 0, SIGLENGTH / 8);
+                var signature = subarray(packet.getData(), 0, SIGLENGTH / 8);
 
                 if (destination.getIdentity().validate(signature, signedData)) {
                     this.rtt = Duration.between(requestTime, Instant.now()).toMillis();
@@ -806,9 +806,9 @@ public class Link extends AbstractDestination {
                         var plaintext = decrypt(packet.getData());
 
                         if (isFalse(initiator) && getLength(plaintext) == KEYSIZE / 8 + SIGLENGTH) {
-                            var publicKey = copyOfRange(plaintext, 0, KEYSIZE / 8);
+                            var publicKey = subarray(plaintext, 0, KEYSIZE / 8);
                             var signedData = concatArrays(linkId, publicKey);
-                            var signature = copyOfRange(plaintext, KEYSIZE / 8, KEYSIZE / 8 + SIGLENGTH / 8);
+                            var signature = subarray(plaintext, KEYSIZE / 8, KEYSIZE / 8 + SIGLENGTH / 8);
                             var identity = new Identity(false);
                             identity.loadPublicKey(publicKey);
 
@@ -897,9 +897,9 @@ public class Link extends AbstractDestination {
                         var plaintext = decrypt(packet.getData());
                         byte[] resourceHash;
                         if (nonNull(plaintext) && new String(plaintext).codePointAt(0) == HASHMAP_IS_EXHAUSTED) {
-                            resourceHash = copyOfRange(plaintext, 1 + MAPHASH_LEN, HASHLENGTH / 8 + 1 + MAPHASH_LEN);
+                            resourceHash = subarray(plaintext, 1 + MAPHASH_LEN, HASHLENGTH / 8 + 1 + MAPHASH_LEN);
                         } else {
-                            resourceHash = copyOfRange(plaintext, 1, HASHLENGTH / 8 + 1);
+                            resourceHash = subarray(plaintext, 1, HASHLENGTH / 8 + 1);
                         }
 
                         for (Resource resource : outgoingResources) {
@@ -914,7 +914,7 @@ public class Link extends AbstractDestination {
                         }
                     } else if (packet.getContext() == RESOURCE_HMU) {
                         var plaintext = decrypt(packet.getData());
-                        var resourceHash = copyOfRange(plaintext, 0, HASHLENGTH / 8);
+                        var resourceHash = subarray(plaintext, 0, HASHLENGTH / 8);
                         for (Resource resource : incomingResources) {
                             if (Arrays.equals(resourceHash, resource.getHash())) {
                                 resource.hashmapUpdatePacket(plaintext);
@@ -922,7 +922,7 @@ public class Link extends AbstractDestination {
                         }
                     } else if (packet.getContext() == RESOURCE_ICL) {
                         var plaintext = decrypt(packet.getData());
-                        var resourceHash = copyOfRange(plaintext, 0, HASHLENGTH / 8);
+                        var resourceHash = subarray(plaintext, 0, HASHLENGTH / 8);
                         for (Resource resource : incomingResources) {
                             if (Arrays.equals(resourceHash, resource.getHash())) {
                                 resource.cancel();
@@ -954,7 +954,7 @@ public class Link extends AbstractDestination {
                     }
                 } else if (packet.getPacketType() == PROOF) {
                     if (packet.getContext() == RESOURCE_PRF) {
-                        var resourceHash = copyOfRange(packet.getData(), 0, HASHLENGTH / 8);
+                        var resourceHash = subarray(packet.getData(), 0, HASHLENGTH / 8);
                         for (Resource resource : outgoingResources) {
                             if (Arrays.equals(resource.getHash(), resourceHash)) {
                                 resource.validateProof(packet.getData());

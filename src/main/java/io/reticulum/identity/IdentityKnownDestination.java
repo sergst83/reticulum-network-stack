@@ -35,6 +35,7 @@ import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static java.util.Objects.requireNonNullElse;
 import static lombok.AccessLevel.PRIVATE;
+import static org.apache.commons.lang3.ArrayUtils.subarray;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
 /**
@@ -106,14 +107,14 @@ public class IdentityKnownDestination {
             if (packet.getPacketType() == ANNOUNCE) {
                 var destinationHash = packet.getDestinationHash();
                 var destinationHashString = Hex.encodeHexString(destinationHash);
-                var publicKey = Arrays.copyOfRange(packet.getData(), 0, KEYSIZE / 8);
-                var nameHash = Arrays.copyOfRange(packet.getData(), KEYSIZE / 8, KEYSIZE / 8 + IdentityConstant.NAME_HASH_LENGTH / 8);
-                var randomHash = Arrays.copyOfRange(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8, KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10);
-                var signature = Arrays.copyOfRange(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10, KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8);
+                var publicKey = subarray(packet.getData(), 0, KEYSIZE / 8);
+                var nameHash = subarray(packet.getData(), KEYSIZE / 8, KEYSIZE / 8 + IdentityConstant.NAME_HASH_LENGTH / 8);
+                var randomHash = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8, KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10);
+                var signature = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10, KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8);
 
                 var appData = new byte[0];
                 if (packet.getData().length > KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8) {
-                    appData = Arrays.copyOfRange(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8, packet.getData().length);
+                    appData = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8, packet.getData().length);
                 } else {
                     appData = null;
                 }
@@ -125,7 +126,7 @@ public class IdentityKnownDestination {
 
                 if (nonNull(announcedIdentity.getSigPub()) && announcedIdentity.validate(signature, signedData)) {
                     var hashHaterial = concatArrays(nameHash, announcedIdentity.getHash());
-                    var expectedHash = Arrays.copyOfRange(fullHash(hashHaterial), 0, TRUNCATED_HASHLENGTH / 8);
+                    var expectedHash = subarray(fullHash(hashHaterial), 0, TRUNCATED_HASHLENGTH / 8);
                     if (Arrays.equals(destinationHash, expectedHash)) {
                         // Check if we already have a public key for this destination
                         // and make sure the public key is not different.

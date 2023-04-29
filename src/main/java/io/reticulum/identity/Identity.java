@@ -27,7 +27,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
-import java.util.Arrays;
 
 import static io.reticulum.constant.IdentityConstant.KEYSIZE;
 import static io.reticulum.packet.PacketType.PROOF;
@@ -35,6 +34,7 @@ import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.truncatedHash;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
+import static org.apache.commons.lang3.ArrayUtils.subarray;
 
 /**
  * This class is used to manage identities in Reticulum. It provides methods
@@ -94,12 +94,12 @@ public class Identity {
      */
     private boolean loadPrivateKey(final byte[] privateKey) {
         try {
-            this.prvBytes = Arrays.copyOfRange(privateKey, 0, KEYSIZE / 8 / 2);
+            this.prvBytes = subarray(privateKey, 0, KEYSIZE / 8 / 2);
             this.prv = new X25519PrivateKeyParameters(prvBytes);
             this.pub = prv.generatePublicKey();
             this.pubBytes = pub.getEncoded();
 
-            this.sigPrvBytes = Arrays.copyOfRange(privateKey, KEYSIZE / 8 / 2, privateKey.length);
+            this.sigPrvBytes = subarray(privateKey, KEYSIZE / 8 / 2, privateKey.length);
             this.sigPrv = new Ed25519PrivateKeyParameters(sigPrvBytes);
             this.sigPub = sigPrv.generatePublicKey();
             this.sigPubBytes = sigPub.getEncoded();
@@ -122,8 +122,8 @@ public class Identity {
      */
     public boolean loadPublicKey(@NonNull final byte[] publicKey) {
         try {
-            pubBytes = Arrays.copyOfRange(publicKey, 0, KEYSIZE / 8 / 2);
-            sigPubBytes = Arrays.copyOfRange(publicKey, KEYSIZE / 8 / 2, publicKey.length);
+            pubBytes = subarray(publicKey, 0, KEYSIZE / 8 / 2);
+            sigPubBytes = subarray(publicKey, KEYSIZE / 8 / 2, publicKey.length);
 
             pub = new X25519PublicKeyParameters(pubBytes);
             sigPub = new Ed25519PublicKeyParameters(sigPubBytes);
@@ -225,7 +225,7 @@ public class Identity {
         if (cipherTextToken.length > KEYSIZE / 8 / 2) {
             byte[] plainText = null;
             try {
-                var peerPubBytes = Arrays.copyOfRange(cipherTextToken, 0, KEYSIZE / 8 / 2);
+                var peerPubBytes = subarray(cipherTextToken, 0, KEYSIZE / 8 / 2);
                 var peerPub = new X25519PublicKeyParameters(peerPubBytes);
 
                 var agreement = new X25519Agreement();
@@ -239,7 +239,7 @@ public class Identity {
                 hkdf.generateBytes(derivedKey, 0, derivedKey.length);
 
                 var fernet = new Fernet(derivedKey);
-                var cipherText = Arrays.copyOfRange(cipherTextToken, KEYSIZE / 8 / 2, cipherTextToken.length);
+                var cipherText = subarray(cipherTextToken, KEYSIZE / 8 / 2, cipherTextToken.length);
                 plainText = fernet.decrypt(cipherText);
             } catch (Exception e) {
                 log.debug("Decryption by {} failed.", hash, e);
