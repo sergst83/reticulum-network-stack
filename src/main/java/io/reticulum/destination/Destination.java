@@ -66,7 +66,7 @@ import static java.util.Objects.nonNull;
 @Setter
 @Slf4j
 @NoArgsConstructor
-public class Destination {
+public class Destination extends AbstractDestination {
     private Identity identity;
     private byte[] hash;
     private boolean acceptLinkRequests = true;

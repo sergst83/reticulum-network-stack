@@ -1,24 +1,30 @@
 package io.reticulum.packet;
 
+import io.reticulum.Transport;
 import io.reticulum.constant.ReticulumConstant;
+import io.reticulum.destination.AbstractDestination;
 import io.reticulum.destination.Destination;
 import io.reticulum.destination.DestinationType;
 import io.reticulum.interfaces.ConnectionInterface;
 import io.reticulum.link.Link;
+import io.reticulum.link.LinkStatus;
 import io.reticulum.packet.data.Addresses;
 import io.reticulum.packet.data.DataPacket;
 import io.reticulum.packet.data.DataPacketConverter;
 import io.reticulum.packet.data.Flags;
 import io.reticulum.packet.data.Header;
 import io.reticulum.transport.TransportType;
+import io.reticulum.utils.IdentityUtils;
 import lombok.Data;
+import lombok.NonNull;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 
-import java.io.IOException;
+import java.math.BigInteger;
 import java.time.Instant;
 
 import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
+import static io.reticulum.destination.DestinationType.LINK;
 import static io.reticulum.packet.HeaderType.HEADER_1;
 import static io.reticulum.packet.HeaderType.HEADER_2;
 import static io.reticulum.packet.PacketContextType.CACHE_REQUEST;
@@ -31,8 +37,11 @@ import static io.reticulum.packet.PacketType.LINKREQUEST;
 import static io.reticulum.packet.PacketType.PROOF;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.truncatedHash;
+import static java.math.BigInteger.ONE;
 import static java.util.Arrays.copyOfRange;
 import static java.util.Objects.nonNull;
+import static java.util.Objects.requireNonNull;
+import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
 /**
  * <a href=https://reticulum.network/manual/understanding.html#wire-format>https://reticulum.network/manual/understanding.html#wire-format</a>
@@ -185,7 +194,7 @@ public class Packet {
     private ConnectionInterface attachedInterface;
     private ConnectionInterface receivingInterface;
     private byte[] packetHash;
-    private Destination destination;
+    private AbstractDestination destination;
     private byte[] raw;
     private byte[] plaintext;
     private TransportType transportType = TransportType.BROADCAST;
@@ -240,26 +249,8 @@ public class Packet {
         this(link, data, null, packetContextType);
     }
 
-    /**
-     * Двоичные влаги в виде числа
-     *
-     * @return флаги в виде
-     */
-    private Flags getPackedFlags() {
-        var flags = new Flags();
-        flags.setHeaderType(headerType);
-        flags.setPropagationType(transportType);
-        flags.setPacketType(packetType);
-        if (context == LRPROOF) {
-            flags.setDestinationType(DestinationType.LINK);
-        } else {
-            flags.setDestinationType(destination.getType());
-        }
-
-        return flags;
-    }
-
-    public synchronized void pack() throws IOException {
+    @SneakyThrows
+    public synchronized void pack() {
         destinationHash = destination.getHash();
         var packetData = new DataPacket();
         var header = new Header(packetData);
@@ -282,7 +273,7 @@ public class Packet {
                     } else if (packetType == PROOF && context == RESOURCE_PRF) {
                         //Resource proofs are not encrypted
                         ciphertext = data;
-                    } else if (packetType == PROOF && destination.getType() == DestinationType.LINK) {
+                    } else if (packetType == PROOF && destination.getType() == LINK) {
                         //Packet proofs over links are not encrypted
                         ciphertext = data;
                     } else if (context == RESOURCE) {
@@ -309,7 +300,7 @@ public class Packet {
                             ciphertext = data;
                         }
                     } else {
-                        throw new IOException("Packet with header type 2 must have a transport ID");
+                        throw new IllegalStateException("Packet with header type 2 must have a transport ID");
                     }
                     break;
             }
@@ -321,7 +312,7 @@ public class Packet {
         raw = DataPacketConverter.toBytes(packetData);
 
         if (raw.length > mtu) {
-            throw new IOException(String.format("Packet size of %s  exceeds MTU of %s bytes", raw.length, mtu));
+            throw new IllegalStateException(String.format("Packet size of %s  exceeds MTU of %s bytes", raw.length, mtu));
         }
 
         packed = true;
@@ -359,12 +350,111 @@ public class Packet {
         }
     }
 
-    private void updateHash() {
-        packetHash = getHash();
-    }
-
     public synchronized byte[] getHash() {
         return truncatedHash(getHashablePart());
+    }
+
+    public ProofDestination generatrProofDestination() {
+        return new ProofDestination(this);
+    }
+
+    /**
+     * Sends the packet.
+     *
+     * @return {@link PacketReceipt} instance if <strong>createReceipt</strong> was set to <strong>true</strong> when the packet
+     * was instantiated, if not returns <strong>null</strong>. If the packet could not be sent <strong>false</strong> is returned.
+     */
+    public synchronized PacketReceipt send() {
+        if (isFalse(sent)) {
+            if (destination.getType() == LINK) {
+                var dest = (Link) destination;
+                if (dest.getStatus() == LinkStatus.CLOSED) {
+                    throw new IllegalStateException("Attempt to transmit over a closed link");
+                } else {
+                    dest.setLastOutbound(Instant.now());
+                    dest.setTx(dest.getTx().add(ONE));
+                    dest.setTxBytes(dest.getTxBytes().add(BigInteger.valueOf(data.length)));
+                }
+            }
+
+            if (isFalse(packed)) {
+                pack();
+            }
+
+            if (Transport.getInstance().outbound(this)) {
+                return receipt;
+            } else {
+                log.error("No interfaces could process the outbound packet");
+                sent = false;
+                receipt = null;
+            }
+        } else {
+            throw new IllegalStateException("Packet was already sent");
+        }
+
+        return null;
+    }
+
+    /**
+     * Re-sends the packet.
+     *
+     * @return {@link PacketReceipt} instance if <strong>createReceipt</strong> was set to <strong>true</strong> when the packet
+     * was instantiated, if not returns <strong>null</strong>. If the packet could not be sent <strong>false</strong> is returned.
+     */
+    public synchronized PacketReceipt resend() {
+        if (sent) {
+            if (Transport.getInstance().outbound(this)) {
+                return receipt;
+            } else {
+                log.error("No interfaces could process the outbound packet");
+                sent = false;
+                receipt = null;
+
+                return null;
+            }
+        } else {
+            throw new IllegalStateException("Packet was not sent yet");
+        }
+    }
+
+    public void prove(final AbstractDestination destination) {
+        if (fromPacked) {
+            if (requireNonNull(destination.getType()) == LINK) {
+                ((Link) this.destination).provePacket(this);
+            } else {
+                var dest = (Destination) this.destination;
+                if (nonNull(dest.getIdentity()) && nonNull(dest.getIdentity().getPrv())) {
+                    dest.getIdentity().prove(this, destination);
+                }
+            }
+        } else {
+            log.error("Could not prove packet associated with neither a destination nor a link");
+        }
+    }
+
+    /**
+     * Generates a special destination that allows Reticulum to direct the proof back to the proved packet's sender
+     *
+     * @return {@link ProofDestination}
+     */
+    public ProofDestination generateProofDestination() {
+        return new ProofDestination(this);
+    }
+
+    public synchronized boolean validateProofPacket(Packet proofPacket) {
+        return receipt.validateProofPacket(proofPacket);
+    }
+
+    public synchronized boolean validateProof(@NonNull final byte[] proof) {
+        return receipt.validateProof(proof, null);
+    }
+
+    public byte[] getTruncatedHash() {
+        return IdentityUtils.truncatedHash(getHashablePart());
+    }
+
+    private void updateHash() {
+        packetHash = getHash();
     }
 
     @SneakyThrows
@@ -379,19 +469,22 @@ public class Packet {
         return hashablePart;
     }
 
-    public ProofDestination generatrProofDestination() {
-        return new ProofDestination(this);
-    }
+    /**
+     * Двоичные влаги в виде числа
+     *
+     * @return флаги в виде
+     */
+    private Flags getPackedFlags() {
+        var flags = new Flags();
+        flags.setHeaderType(headerType);
+        flags.setPropagationType(transportType);
+        flags.setPacketType(packetType);
+        if (context == LRPROOF) {
+            flags.setDestinationType(LINK);
+        } else {
+            flags.setDestinationType(destination.getType());
+        }
 
-    public PacketReceipt send() {
-        return null;
-    }
-
-    public byte[] getTruncatedHash() {
-        return null;
-    }
-
-    public void prove() {
-
+        return flags;
     }
 }

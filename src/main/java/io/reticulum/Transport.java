@@ -4,6 +4,7 @@ import io.reticulum.destination.Destination;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.ConnectionInterface;
 import io.reticulum.link.Link;
+import io.reticulum.packet.Packet;
 import io.reticulum.transport.Hop;
 import lombok.Getter;
 import lombok.NonNull;
@@ -161,5 +162,9 @@ public final class Transport implements ExitHandler {
 
     public void activateLink(Link link) {
 
+    }
+
+    public boolean outbound(@NonNull final Packet packet) {
+        return false;
     }
 }

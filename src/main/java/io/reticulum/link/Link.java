@@ -4,6 +4,7 @@ import io.reticulum.Transport;
 import io.reticulum.channel.Channel;
 import io.reticulum.channel.LinkChannelOutlet;
 import io.reticulum.cryptography.Fernet;
+import io.reticulum.destination.AbstractDestination;
 import io.reticulum.destination.Destination;
 import io.reticulum.destination.DestinationType;
 import io.reticulum.destination.PackedResponse;
@@ -112,7 +113,7 @@ import static org.apache.commons.lang3.BooleanUtils.isFalse;
 @Slf4j
 @Getter
 @Setter
-public class Link {
+public class Link extends AbstractDestination {
 
     private AtomicLong establishmentCost = new AtomicLong(0);
     private byte[] linkId;
@@ -260,7 +261,7 @@ public class Link {
     }
 
     @SneakyThrows
-    private void provePacket(Packet packet) {
+    public void provePacket(Packet packet) {
         var signature = sign(packet.getPacketHash());
         // TODO: Hardcoded as explicit proof for now
         // if Reticulum.shouldUseImplicitProof():
@@ -791,7 +792,7 @@ public class Link {
                                     .start();
                         }
                         if (destination.getProofStrategy() == PROVE_ALL) {
-                            packet.prove();
+                            packet.prove(null);
                         } else if (destination.getProofStrategy() == PROVE_APP) {
                             if (nonNull(destination.getCallbacks().getProofRequested())) {
                                 try {
@@ -946,7 +947,7 @@ public class Link {
                         if (isNull(channel)) {
                             log.debug("Channel data received without open channel.");
                         } else {
-                            packet.prove();
+                            packet.prove(null);
                             var plaintext = decrypt(packet.getData());
                             channel.receive(plaintext);
                         }
@@ -966,7 +967,7 @@ public class Link {
         watchdogLock.unlock();
     }
 
-    private byte[] encrypt(@NonNull final byte[] plaintext) throws IOException {
+    public byte[] encrypt(@NonNull final byte[] plaintext) {
         try {
             if (isNull(fernet)) {
                 try {
@@ -980,7 +981,7 @@ public class Link {
             return fernet.encrypt(plaintext);
         } catch (IOException e) {
             log.error("Encryption on link {} failed.", this, e);
-            throw e;
+            throw new RuntimeException(e);
         }
     }
 

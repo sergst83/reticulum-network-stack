@@ -24,7 +24,9 @@ class DataPacketConverterTest {
         flags.setPacketType(PacketType.PROOF);
         flags.setPropagationType(TransportType.TUNNEL);
         flags.setDestinationType(DestinationType.LINK);
-        var header = new Header( 2, flags);
+        var header = new Header( new DataPacket());
+        header.setHops((byte) 2);
+        header.setFlags(flags);
 
         var data = new DataPacket();
         data.setHeader(header);

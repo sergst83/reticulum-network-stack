@@ -2,6 +2,7 @@ package io.reticulum.identity;
 
 import io.reticulum.Transport;
 import io.reticulum.cryptography.Fernet;
+import io.reticulum.destination.AbstractDestination;
 import io.reticulum.destination.Destination;
 import io.reticulum.packet.Packet;
 import lombok.Getter;
@@ -286,7 +287,8 @@ public class Identity {
         }
     }
 
-    public void prove(@NonNull Packet packet, Destination destination) throws IOException {
+    @SneakyThrows
+    public void prove(@NonNull final Packet packet, final AbstractDestination destination) {
         var signature = sign(packet.getPacketHash());
         var proofData = concatArrays(packet.getPacketHash(), signature);
         if (Transport.getInstance().getOwner().isUseImplicitProof()) {
@@ -294,7 +296,7 @@ public class Identity {
         }
 
         var proof = new Packet(
-                isNull(destination) ? packet.generatrProofDestination() : destination,
+                (Destination) (isNull(destination) ? packet.generatrProofDestination() : destination),
                 proofData,
                 PROOF,
                 packet.getReceivingInterface()
