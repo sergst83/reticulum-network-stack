@@ -53,7 +53,7 @@ public class ResourceUtils {
             resource.setProgressCallback(progressCallback);
             resource.setTotalParts((int) Math.ceil(resource.getSize() / (double) SDU));
             resource.setReceivedCount(0);
-            resource.setOutstandingParts(0);
+            resource.setOutstandingParts(new AtomicInteger(0));
             resource.setParts(new ArrayList<>(resource.getTotalParts()));
             resource.setWindow(WINDOW);
             resource.setWindowMax(WINDOW_MAX);
@@ -89,7 +89,7 @@ public class ResourceUtils {
 
                 resource.hashmapUpdate(0, resource.getHashmapRaw());
 
-                resource.watchdogJob();
+                resource.watchdogJobStarter();
 
                 return resource;
             } else {

@@ -3,6 +3,7 @@ package io.reticulum.resource;
 import io.reticulum.constant.IdentityConstant;
 import io.reticulum.constant.ResourceConstant;
 import io.reticulum.link.Link;
+import io.reticulum.link.LinkStatus;
 import io.reticulum.packet.Packet;
 import io.reticulum.utils.IdentityUtils;
 import lombok.Data;
@@ -45,15 +46,21 @@ import static io.reticulum.constant.ResourceConstant.RANDOM_HASH_SIZE;
 import static io.reticulum.constant.ResourceConstant.SDU;
 import static io.reticulum.constant.ResourceConstant.SENDER_GRACE_TIME;
 import static io.reticulum.packet.PacketContextType.RESOURCE;
+import static io.reticulum.packet.PacketContextType.RESOURCE_ADV;
+import static io.reticulum.packet.PacketContextType.RESOURCE_ICL;
 import static io.reticulum.packet.PacketContextType.RESOURCE_REQ;
+import static io.reticulum.resource.ResourceStatus.ADVERTISED;
+import static io.reticulum.resource.ResourceStatus.COMPLETE;
 import static io.reticulum.resource.ResourceStatus.FAILED;
 import static io.reticulum.resource.ResourceStatus.NONE;
+import static io.reticulum.resource.ResourceStatus.QUEUED;
 import static io.reticulum.resource.ResourceStatus.TRANSFERRING;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.utils.IdentityUtils.truncatedHash;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
+import static java.util.concurrent.Executors.defaultThreadFactory;
 import static org.apache.commons.compress.compressors.CompressorStreamFactory.BZIP2;
 import static org.apache.commons.lang3.ArrayUtils.add;
 import static org.apache.commons.lang3.ArrayUtils.insert;
@@ -75,6 +82,7 @@ public class Resource {
     private Link link;
     private Path storagePath;
     private volatile Instant lastActivity;
+    private volatile Instant advSent;
     private volatile Instant reqSent;
     private volatile Instant reqResp;
     private ResourceStatus status;
@@ -82,6 +90,7 @@ public class Resource {
     private Consumer<Resource> progressCallback;
     private List<Packet> parts;
     private List<byte[]> reqHashlist;
+    private Packet advertisementPacket;
 
     private byte[] requestId;
     private byte[] hash;
@@ -393,15 +402,70 @@ public class Resource {
     }
 
 
+    /**
+     * Advertise the resource. If the other end of the link accepts
+     * the resource advertisement it will begin transferring.
+     */
     private void advertise() {
+        defaultThreadFactory().newThread(this::advertiseJob).start();
+    }
 
+    @SneakyThrows
+    private synchronized void advertiseJob() {
+        this.advertisementPacket = new Packet(link, new ResourceAdvertisement(this).pack(), RESOURCE_ADV);
+        while (isFalse(link.readyForNewResource())) {
+            this.status = QUEUED;
+            Thread.sleep(250);
+        }
+
+        try {
+            advertisementPacket.send();
+            lastActivity = Instant.now();
+            advSent = lastActivity;
+            rtt = 0;
+            status = ADVERTISED;
+            retriesLeft = maxAdvRetries;
+            link.registerOutgoingResource(this);
+
+            log.debug("Sent resource advertisement for {}", this);
+        } catch (Exception e) {
+            log.error("Could not advertise resource.", e);
+            cancel();
+            return;
+        }
+
+        watchdogJobStarter();
     }
 
     /**
      * Cancels transferring the resource.
      */
     public synchronized void cancel() {
+        if (nonNull(status) && status.getValue() < COMPLETE.getValue()) {
+            status = FAILED;
+            if (initiator) {
+                if (link.getStatus() == LinkStatus.ACTIVE) {
+                    try {
+                        var cancelPacket = new Packet(link, hash, RESOURCE_ICL);
+                        cancelPacket.send();
+                    } catch (Exception e) {
+                        log.error("Could not send resource cancel packet.", e);
+                    }
+                }
+                link.cancelOutgoingResource(this);
+            } else {
+                link.cancelOutgoingResource(this);
+            }
 
+            if (nonNull(callback)) {
+                try {
+                    link.resourceConcluded(this);
+                    callback.accept(this);
+                } catch (Exception e) {
+                    log.error("Error while executing callbacks on resource cancel from {}. ", this, e);
+                }
+            }
+        }
     }
 
     public void hashmapUpdatePacket(byte[] plaintext) {
@@ -510,7 +574,11 @@ public class Resource {
         }
     }
 
-    public void watchdogJob() {
+    public void watchdogJobStarter() {
+        defaultThreadFactory().newThread(this::watchdogJob).start();
+    }
+
+    private void watchdogJob() {
 
     }
 

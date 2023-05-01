@@ -150,6 +150,10 @@ public class ResourceAdvertisement {
         return 0;
     }
 
+    public byte[] pack() {
+        return pack(null);
+    }
+
     public byte[] pack(Integer segments) {
         int localSegment = requireNonNullElse(segments, 0);
         var hashmapStart = localSegment * HASHMAP_MAX_LEN;

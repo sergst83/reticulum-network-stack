@@ -1,8 +1,10 @@
 package io.reticulum.resource;
 
+import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
 @RequiredArgsConstructor
+@Getter
 public enum ResourceStatus {
     NONE((byte) 0x00),
     QUEUED((byte) 0x01),
