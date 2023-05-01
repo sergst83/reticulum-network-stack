@@ -26,7 +26,7 @@ reticulum:
   # user, and should generally be turned on. This directive
   # is optional and can be removed for brevity.
 
-  share_instance: true
+  share_instance: false
 
   # If you want to run multiple *different* shared instances
   # on the same system, you will need to specify different

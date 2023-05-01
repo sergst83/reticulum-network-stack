@@ -1,7 +1,5 @@
 package io.reticulum.resource;
 
-import io.reticulum.constant.LinkConstant;
-import io.reticulum.constant.ResourceConstant;
 import io.reticulum.link.Link;
 import io.reticulum.packet.Packet;
 import lombok.Data;
@@ -17,6 +15,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.HashMap;
 
+import static io.reticulum.constant.ResourceConstant.HASHMAP_MAX_LEN;
 import static io.reticulum.constant.ResourceConstant.MAPHASH_LEN;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
@@ -32,12 +31,6 @@ import static org.msgpack.value.ValueFactory.newString;
 @Data
 @NoArgsConstructor
 public class ResourceAdvertisement {
-    private static final int OVERHEAD = 134;
-    private static final double HASHMAP_MAX_LEN = Math.floor(LinkConstant.MDU - OVERHEAD) / MAPHASH_LEN;
-    private static final double COLLISION_GUARD_SIZE = 2 * ResourceConstant.WINDOW_MAX + HASHMAP_MAX_LEN;
-    static {
-        assert HASHMAP_MAX_LEN > 0 : "The configured MTU is too small to include any map hashes in resource advertisments";
-    }
 
     private int t;
     private int d;

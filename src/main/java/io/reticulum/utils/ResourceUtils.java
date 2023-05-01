@@ -11,6 +11,7 @@ import org.apache.commons.codec.binary.Hex;
 
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.function.Consumer;
 
 import static io.reticulum.constant.ResourceConstant.SDU;
@@ -52,7 +53,7 @@ public class ResourceUtils {
             resource.setTotalParts((int) Math.ceil(resource.getSize() / (double) SDU));
             resource.setReceivedCount(0);
             resource.setOutstandingParts(0);
-            resource.setParts(new Object[resource.getTotalParts()]);
+            resource.setParts(new ArrayList<>(resource.getTotalParts()));
             resource.setWindow(WINDOW);
             resource.setWindowMax(WINDOW_MAX);
             resource.setWindowMin(WINDOW_MIN);

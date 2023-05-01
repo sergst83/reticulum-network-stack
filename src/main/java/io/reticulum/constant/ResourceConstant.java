@@ -77,4 +77,11 @@ public class ResourceConstant {
     public static final int WATCHDOG_MAX_SLEEP = 1;
 
     public static final int HASHMAP_IS_NOT_EXHAUSTED = 0x00;
+
+    private static final int OVERHEAD = 134;
+    public static final double HASHMAP_MAX_LEN = Math.floor(LinkConstant.MDU - OVERHEAD) / MAPHASH_LEN;
+    static {
+        assert HASHMAP_MAX_LEN > 0 : "The configured MTU is too small to include any map hashes in resource advertisments";
+    }
+    public static final double COLLISION_GUARD_SIZE = 2 * ResourceConstant.WINDOW_MAX + HASHMAP_MAX_LEN;
 }

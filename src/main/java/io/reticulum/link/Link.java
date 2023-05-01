@@ -724,7 +724,7 @@ public class Link extends AbstractDestination {
     @SneakyThrows
     private void requestResourceConcluded(@NonNull final Resource resource) {
         if (resource.getStatus() == ResourceStatus.COMPLETE) {
-            var packedRequest = resource.getData().readAllBytes();
+            var packedRequest = resource.getData();
             try (var unpacker = MessagePack.newDefaultUnpacker(packedRequest)) {
                 var unpackedRequestValue = unpacker.unpackValue().asArrayValue();
                 var requestId = IdentityUtils.truncatedHash(packedRequest);
@@ -906,8 +906,8 @@ public class Link extends AbstractDestination {
                             if (Arrays.equals(resource.getHash(), resourceHash)) {
                                 // We need to check that this request has not been
                                 // received before in order to avoid sequencing errors.
-                                if (resource.getReqHashList().stream().noneMatch(reqHash -> Arrays.equals(reqHash, packet.getPacketHash()))) {
-                                    resource.getReqHashList().add(packet.getPacketHash());
+                                if (resource.getReqHashlist().stream().noneMatch(reqHash -> Arrays.equals(reqHash, packet.getPacketHash()))) {
+                                    resource.getReqHashlist().add(packet.getPacketHash());
                                     resource.request(plaintext);
                                 }
                             }

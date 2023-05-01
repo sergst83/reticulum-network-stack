@@ -205,6 +205,8 @@ public class Packet {
     private int mtu;
     private byte[] ciphertext;
 
+    private byte[] mapHash;
+
     public Packet(ConnectionInterface attachedInterface) {
         this.attachedInterface = attachedInterface;
         this.mtu = ReticulumConstant.MTU;

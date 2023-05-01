@@ -185,7 +185,9 @@ public class PacketReceipt {
             concludedAt = Instant.now();
 
             if (nonNull(callbacks.getTimeout())) {
-                defaultThreadFactory().newThread(() -> callbacks.getTimeout().accept(this));
+                defaultThreadFactory()
+                        .newThread(() -> callbacks.getTimeout().accept(this))
+                        .start();
             }
         }
     }
