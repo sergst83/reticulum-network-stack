@@ -12,6 +12,7 @@ import org.apache.commons.codec.binary.Hex;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import static io.reticulum.constant.ResourceConstant.SDU;
@@ -66,7 +67,7 @@ public class ResourceUtils {
             resource.setSplit(adv.getL() > 1);
 
             resource.setHashmap(new byte[resource.getTotalParts()]);
-            resource.setHashmapHeight(0);
+            resource.setHashmapHeight(new AtomicInteger(0));
             resource.setWaitingForHmu(false);
 
             resource.setReceivingPart(false);

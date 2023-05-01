@@ -1,5 +1,6 @@
 package io.reticulum.resource;
 
+import io.reticulum.constant.IdentityConstant;
 import io.reticulum.constant.ResourceConstant;
 import io.reticulum.link.Link;
 import io.reticulum.packet.Packet;
@@ -11,6 +12,7 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.compress.compressors.CompressorException;
 import org.apache.commons.compress.compressors.CompressorStreamFactory;
+import org.msgpack.core.MessagePack;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -24,12 +26,16 @@ import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 
 import static io.reticulum.constant.ResourceConstant.AUTO_COMPRESS_MAX_SIZE;
 import static io.reticulum.constant.ResourceConstant.COLLISION_GUARD_SIZE;
+import static io.reticulum.constant.ResourceConstant.HASHMAP_IS_EXHAUSTED;
+import static io.reticulum.constant.ResourceConstant.HASHMAP_IS_NOT_EXHAUSTED;
+import static io.reticulum.constant.ResourceConstant.HASHMAP_MAX_LEN;
 import static io.reticulum.constant.ResourceConstant.MAPHASH_LEN;
 import static io.reticulum.constant.ResourceConstant.MAX_ADV_RETRIES;
 import static io.reticulum.constant.ResourceConstant.MAX_EFFICIENT_SIZE;
@@ -39,12 +45,18 @@ import static io.reticulum.constant.ResourceConstant.RANDOM_HASH_SIZE;
 import static io.reticulum.constant.ResourceConstant.SDU;
 import static io.reticulum.constant.ResourceConstant.SENDER_GRACE_TIME;
 import static io.reticulum.packet.PacketContextType.RESOURCE;
+import static io.reticulum.packet.PacketContextType.RESOURCE_REQ;
+import static io.reticulum.resource.ResourceStatus.FAILED;
 import static io.reticulum.resource.ResourceStatus.NONE;
+import static io.reticulum.resource.ResourceStatus.TRANSFERRING;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.utils.IdentityUtils.truncatedHash;
+import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static org.apache.commons.compress.compressors.CompressorStreamFactory.BZIP2;
+import static org.apache.commons.lang3.ArrayUtils.add;
+import static org.apache.commons.lang3.ArrayUtils.insert;
 import static org.apache.commons.lang3.ArrayUtils.subarray;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
@@ -62,7 +74,9 @@ public class Resource {
     private File inputFile;
     private Link link;
     private Path storagePath;
-    private Instant lastActivity;
+    private volatile Instant lastActivity;
+    private volatile Instant reqSent;
+    private volatile Instant reqResp;
     private ResourceStatus status;
     private Consumer<Resource> callback;
     private Consumer<Resource> progressCallback;
@@ -86,7 +100,7 @@ public class Resource {
     private boolean split;
     private boolean isResponse;
     private boolean initiator;
-    private boolean waitingForHmu;
+    private volatile boolean waitingForHmu;
     private boolean receivingPart;
     private boolean hmuRetryOk;
 
@@ -96,12 +110,12 @@ public class Resource {
     private int uncompressedSize;
     private int compressedSize;
     private int totalParts;
-    private int outstandingParts;
+    private AtomicInteger outstandingParts = new AtomicInteger(0);
     private int window;
     private int windowMax;
     private int windowMin;
     private int windowFlexibility;
-    private int hashmapHeight;
+    private AtomicInteger hashmapHeight = new AtomicInteger(0);
     private int size;
     private int totalSize;
     private int grandTotalParts;
@@ -113,7 +127,6 @@ public class Resource {
     private int partTimeoutFactor;
     private int senderGraceTime;
     private int watchdogJobId;
-    private int reqSent;
     private int reqRespRttRate;
     private int fastRateRounds;
     private int receiverMinConsecutiveHeight;
@@ -155,7 +168,7 @@ public class Resource {
         this.hmuRetryOk = false;
         this.watchdogJobId = 0;
         this.rttRxdBytes = 0;
-        this.reqSent = 0;
+        this.reqSent = null;
         this.reqRespRttRate = 0;
         this.rttRxdBytesAtPartReq = 0;
         this.fastRateRounds = 0;
@@ -384,12 +397,27 @@ public class Resource {
 
     }
 
-    public void cancel() {
+    /**
+     * Cancels transferring the resource.
+     */
+    public synchronized void cancel() {
 
     }
 
     public void hashmapUpdatePacket(byte[] plaintext) {
+        if (isFalse(status == FAILED)) {
+            this.lastActivity = Instant.now();
+            this.retriesLeft = this.maxRetries;
 
+            var packed = subarray(plaintext, IdentityConstant.HASHLENGTH / 8, plaintext.length);
+            try (var packer = MessagePack.newDefaultUnpacker(packed)) {
+                var update = packer.unpackValue().asArrayValue();
+
+                hashmapUpdate(update.get(0).asIntegerValue().asInt(), update.get(1).asBinaryValue().asByteArray());
+            } catch (IOException ex) {
+                throw new RuntimeException(ex);
+            }
+        }
     }
 
     public void receivePart(Packet packet) {
@@ -404,8 +432,82 @@ public class Resource {
         return 0;
     }
 
-    public void hashmapUpdate(int i, byte[] hashmapRaw) {
+    public synchronized void hashmapUpdate(final int segment, @NonNull final byte[] hashmap) {
+        if (isFalse(status == FAILED)) {
+            status = TRANSFERRING;
+            var hashes = hashmap.length / MAPHASH_LEN;
+            for (int i = 0; i < hashes; i++) {
+                var index = i * segment * HASHMAP_MAX_LEN;
+                if (this.hashmap.length - 1 < index) {
+                    this.hashmapHeight.getAndIncrement();
+                }
+                this.hashmap = insert(index, this.hashmap, subarray(hashmap, i * MAPHASH_LEN, (i + 1) * MAPHASH_LEN));
+            }
 
+            this.waitingForHmu = false;
+            requestNext();
+        }
+    }
+
+    /**
+     * Called on incoming resource to send a request for more data
+     */
+    @SneakyThrows
+    private void requestNext() {
+        while (this.receivingPart) {
+            //sleep
+        }
+
+        if (isFalse(status == FAILED)) {
+            if (isFalse(this.waitingForHmu)) {
+                this.outstandingParts.set(0);
+                var hashmapExhausted = HASHMAP_IS_NOT_EXHAUSTED;
+                var requestedHashes = new byte[0];
+
+                var offset = consecutiveCompletedHeight > 0 ? 1 : 0;
+                var i = 0;
+                var pn = consecutiveCompletedHeight + offset;
+                final var searchStart = pn;
+
+                for (Packet part : parts.subList(searchStart, searchStart + this.window)) {
+                    if (isNull(part)) {
+                        if (this.hashmap.length - 1 > pn) {
+                            var partHash = this.hashmap[pn];
+                            requestedHashes = add(requestedHashes, partHash);
+                            this.outstandingParts.getAndIncrement();
+                            i++;
+                        } else {
+                            hashmapExhausted = HASHMAP_IS_EXHAUSTED;
+                        }
+                    }
+
+                    pn++;
+                    if (i >= this.window || hashmapExhausted == HASHMAP_IS_EXHAUSTED) {
+                        break;
+                    }
+                }
+
+                var hmuPart = new byte[hashmapExhausted];
+                if (hashmapExhausted == HASHMAP_IS_EXHAUSTED) {
+                    var lastMapHash = this.hashmap[this.hashmapHeight.get() - 1];
+                    hmuPart = add(hmuPart, lastMapHash);
+                    this.waitingForHmu = false;
+                }
+
+                var requestData = concatArrays(hmuPart, this.hash, requestedHashes);
+                var requestPacket = new Packet(link, requestData, RESOURCE_REQ);
+
+                try {
+                    requestPacket.send();
+                    this.lastActivity = Instant.now();
+                    this.reqSent = lastActivity;
+                    this.reqResp = null;
+                } catch (Exception e) {
+                    log.error("Could not send resource request packet, cancelling resource");
+                    cancel();
+                }
+            }
+        }
     }
 
     public void watchdogJob() {

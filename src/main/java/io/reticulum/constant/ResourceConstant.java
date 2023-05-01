@@ -1,5 +1,7 @@
 package io.reticulum.constant;
 
+import static io.reticulum.constant.LinkConstant.MDU;
+
 public class ResourceConstant {
 
     public static final int RESPONSE_MAX_GRACE_TIME = 10;
@@ -79,9 +81,9 @@ public class ResourceConstant {
     public static final int HASHMAP_IS_NOT_EXHAUSTED = 0x00;
 
     private static final int OVERHEAD = 134;
-    public static final double HASHMAP_MAX_LEN = Math.floor(LinkConstant.MDU - OVERHEAD) / MAPHASH_LEN;
+    public static final int HASHMAP_MAX_LEN = (int) Math.floor((MDU - OVERHEAD) / MAPHASH_LEN);
     static {
         assert HASHMAP_MAX_LEN > 0 : "The configured MTU is too small to include any map hashes in resource advertisments";
     }
-    public static final double COLLISION_GUARD_SIZE = 2 * ResourceConstant.WINDOW_MAX + HASHMAP_MAX_LEN;
+    public static final double COLLISION_GUARD_SIZE = 2 * WINDOW_MAX + HASHMAP_MAX_LEN;
 }
