@@ -89,7 +89,7 @@ public class ResourceUtils {
 
                 resource.hashmapUpdate(0, resource.getHashmapRaw());
 
-                resource.watchdogJobStarter();
+                resource.watchdogJobStart();
 
                 return resource;
             } else {

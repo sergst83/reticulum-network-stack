@@ -5,7 +5,7 @@ import static io.reticulum.constant.LinkConstant.MDU;
 public class ResourceConstant {
 
     public static final int RESPONSE_MAX_GRACE_TIME = 10;
-    public static final int HASHMAP_IS_EXHAUSTED = 0xFF;
+    public static final byte HASHMAP_IS_EXHAUSTED = (byte) 0xFF;
     /**
      * Number of bytes in a map hash
      */
@@ -72,11 +72,11 @@ public class ResourceConstant {
     public static final int PART_TIMEOUT_FACTOR_AFTER_RTT = 2;
     public static final int MAX_RETRIES = 8;
     public static final int MAX_ADV_RETRIES = 4;
-    public static final int SENDER_GRACE_TIME = 10;
-    public static final double RETRY_GRACE_TIME = 0.25;
-    public static final double PER_RETRY_DELAY = 0.5;
+    public static final long SENDER_GRACE_TIME = 10_000;
+    public static final long RETRY_GRACE_TIME = 250;
+    public static final long PER_RETRY_DELAY = 500;
 
-    public static final int WATCHDOG_MAX_SLEEP = 1;
+    public static final int WATCHDOG_MAX_SLEEP = 1_000;
 
     public static final int HASHMAP_IS_NOT_EXHAUSTED = 0x00;
 
@@ -85,5 +85,5 @@ public class ResourceConstant {
     static {
         assert HASHMAP_MAX_LEN > 0 : "The configured MTU is too small to include any map hashes in resource advertisments";
     }
-    public static final double COLLISION_GUARD_SIZE = 2 * WINDOW_MAX + HASHMAP_MAX_LEN;
+    public static final int COLLISION_GUARD_SIZE = 2 * WINDOW_MAX + HASHMAP_MAX_LEN;
 }

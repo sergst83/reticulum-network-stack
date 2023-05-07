@@ -985,7 +985,7 @@ public class Link extends AbstractDestination {
         }
     }
 
-    private byte[] decrypt(byte[] data) {
+    public byte[] decrypt(byte[] data) {
         try {
             if (isNull(fernet)) {
                 fernet = new Fernet(derivedKey);

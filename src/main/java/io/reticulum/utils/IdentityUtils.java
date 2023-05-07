@@ -49,13 +49,15 @@ public class IdentityUtils {
         persistData();
     }
 
-    public static byte[] concatArrays(byte[]... arrays) throws IOException {
+    public static byte[] concatArrays(byte[]... arrays) {
         try (var os = new ByteArrayOutputStream()) {
             for (byte[] array : arrays) {
                 os.write(array);
             }
 
             return os.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
         }
     }
 }

@@ -167,4 +167,8 @@ public final class Transport implements ExitHandler {
     public boolean outbound(@NonNull final Packet packet) {
         return false;
     }
+
+    public void cacheRequest(byte[] hash, Link link) {
+
+    }
 }
