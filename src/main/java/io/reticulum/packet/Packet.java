@@ -1,6 +1,7 @@
 package io.reticulum.packet;
 
 import io.reticulum.Transport;
+import io.reticulum.channel.TPacket;
 import io.reticulum.constant.ReticulumConstant;
 import io.reticulum.destination.AbstractDestination;
 import io.reticulum.destination.Destination;
@@ -175,7 +176,7 @@ import static org.apache.commons.lang3.BooleanUtils.isFalse;
  */
 @Data
 @Slf4j
-public class Packet {
+public class Packet implements TPacket {
 
     private Instant sentAt;
     private boolean fromPacked;
