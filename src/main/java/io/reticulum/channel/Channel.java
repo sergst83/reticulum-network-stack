@@ -8,7 +8,11 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 
+import static java.util.Comparator.comparingInt;
 import static java.util.Objects.nonNull;
+import static java.util.concurrent.Executors.defaultThreadFactory;
+import static java.util.stream.Collectors.collectingAndThen;
+import static java.util.stream.Collectors.toList;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
 @Slf4j
@@ -72,7 +76,45 @@ public class Channel {
         return true;
     }
 
-    public void receive(byte[] plaintext) {
+    public void receive(byte[] raw) {
+        try {
+            var envelop = new Envelope(outlet, raw);
+            synchronized (this) {
+                var message = envelop.unpack(messageFactories);
+                var prevEnv = rxRing.getFirst();
+                if (nonNull(prevEnv) && envelop.getSequence() != (prevEnv.getSequence() + 1) % 0x10000) {
+                    log.debug("Channel: Out of order packet received");
+
+                    return;
+                }
+                var isNew = emplaceEnvelope(envelop, rxRing);
+                pruneRxRing();
+                if (isFalse(isNew)) {
+                    log.debug("Channel: Duplicate message received");
+
+                    return;
+                }
+                log.debug("Message received: {}", message);
+                defaultThreadFactory().newThread(() -> runCallbacks(message)).start();
+            }
+        } catch (Exception e) {
+            log.error("Channel: Error receiving data.", e);
+        }
+    }
+
+    private void pruneRxRing() {
+        // Implementation for fixed window = 1
+        var state = rxRing.stream()
+                .sorted(comparingInt(Envelope::getSequence).reversed())
+                .collect(collectingAndThen(toList(), list -> list.subList(1, list.size())));
+
+        for (Envelope env : state) {
+            env.setTracked(true);
+            rxRing.remove(env);
+        }
+    }
+
+    private synchronized void runCallbacks(MessageBase message) {
 
     }
 }
