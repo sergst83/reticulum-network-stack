@@ -266,4 +266,18 @@ public class LocalClientInterface extends AbstractConnectionInterface {
             readLoop();
         }
     }
+
+    @Override
+    public synchronized void detach() {
+        if (nonNull(socket)) {
+            try {
+                log.debug("Detaching {}", this);
+                socket.close();
+                detached = true;
+                socket = null;
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
 }

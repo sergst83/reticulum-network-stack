@@ -4,6 +4,11 @@ import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonSubTypes.Type;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import io.reticulum.interfaces.auto.AutoInterface;
+import io.reticulum.utils.IdentityUtils;
+
+import java.util.List;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 @JsonTypeInfo(
         use = JsonTypeInfo.Id.NAME,
@@ -24,5 +29,17 @@ public interface ConnectionInterface {
     void processOutgoing(final byte[] data);
 
     void setInterfaceName(String name);
-    public String getInterfaceName();
+    String getInterfaceName();
+
+    default List<?> getAnnounceQueue() {
+        return List.of();
+    }
+
+    default void detach() {
+        //pass
+    }
+
+    default byte[] getHash() {
+        return IdentityUtils.fullHash(getInterfaceName().getBytes(UTF_8));
+    };
 }

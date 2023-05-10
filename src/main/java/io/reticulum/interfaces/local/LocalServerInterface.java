@@ -27,7 +27,7 @@ public class LocalServerInterface extends AbstractConnectionInterface {
         this.interfaceMode = MODE_FULL;
         this.server = new ServerSocket(port);
         this.server.setReuseAddress(true);
-        this.bitrate = 1000_000_000;
+        this.bitrate = 1_000_000_000;
         this.online.set(true);
     }
 

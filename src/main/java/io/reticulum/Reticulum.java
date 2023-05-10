@@ -1,12 +1,12 @@
 package io.reticulum;
 
+import io.reticulum.config.ConfigObj;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.AbstractConnectionInterface;
 import io.reticulum.interfaces.ConnectionInterface;
 import io.reticulum.interfaces.local.LocalClientInterface;
 import io.reticulum.interfaces.local.LocalServerInterface;
 import io.reticulum.utils.IdentityUtils;
-import io.reticulum.config.ConfigObj;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.MapUtils;
@@ -26,10 +26,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static io.reticulum.identity.IdentityKnownDestination.loadKnownDestinations;
-import static io.reticulum.utils.CommonUtils.exit;
-import static io.reticulum.utils.CommonUtils.panic;
-import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.constant.ReticulumConstant.CLEAN_CONSUMER;
 import static io.reticulum.constant.ReticulumConstant.CLEAN_INTERVAL;
 import static io.reticulum.constant.ReticulumConstant.CONFIG_FILE_NAME;
@@ -38,6 +34,10 @@ import static io.reticulum.constant.ReticulumConstant.IFAC_SALT;
 import static io.reticulum.constant.ReticulumConstant.PERSIST_INTERVAL;
 import static io.reticulum.constant.ReticulumConstant.RESOURCE_CACHE;
 import static io.reticulum.constant.TransportConstant.DESTINATION_TIMEOUT;
+import static io.reticulum.identity.IdentityKnownDestination.loadKnownDestinations;
+import static io.reticulum.utils.CommonUtils.exit;
+import static io.reticulum.utils.CommonUtils.panic;
+import static io.reticulum.utils.IdentityUtils.fullHash;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.nonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -78,6 +78,7 @@ public class Reticulum implements ExitHandler {
     private Path configPath;
     @Getter
     private Path storagePath;
+    @Getter
     private Path cachePath;
     private Path resourcePath;
 
@@ -86,6 +87,7 @@ public class Reticulum implements ExitHandler {
     private boolean isSharedInstance = false;
     private boolean isStandaloneInnstance = false;
 
+    @Getter
     private boolean transportEnabled = false;
     @Getter
     private boolean useImplicitProof = true;
