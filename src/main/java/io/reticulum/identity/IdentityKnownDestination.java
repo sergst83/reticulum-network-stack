@@ -103,86 +103,82 @@ public class IdentityKnownDestination {
     }
 
     public static boolean validateAnnounce(final Packet packet) {
-        try {
-            if (packet.getPacketType() == ANNOUNCE) {
-                var destinationHash = packet.getDestinationHash();
-                var destinationHashString = Hex.encodeHexString(destinationHash);
-                var publicKey = subarray(packet.getData(), 0, KEYSIZE / 8);
-                var nameHash = subarray(packet.getData(), KEYSIZE / 8, KEYSIZE / 8 + IdentityConstant.NAME_HASH_LENGTH / 8);
-                var randomHash = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8, KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10);
-                var signature = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10, KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8);
+        if (packet.getPacketType() == ANNOUNCE) {
+            var destinationHash = packet.getDestinationHash();
+            var destinationHashString = Hex.encodeHexString(destinationHash);
+            var publicKey = subarray(packet.getData(), 0, KEYSIZE / 8);
+            var nameHash = subarray(packet.getData(), KEYSIZE / 8, KEYSIZE / 8 + IdentityConstant.NAME_HASH_LENGTH / 8);
+            var randomHash = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8, KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10);
+            var signature = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10, KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8);
 
-                var appData = new byte[0];
-                if (packet.getData().length > KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8) {
-                    appData = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8, packet.getData().length);
-                } else {
-                    appData = null;
-                }
+            var appData = new byte[0];
+            if (packet.getData().length > KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8) {
+                appData = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8, packet.getData().length);
+            } else {
+                appData = null;
+            }
 
-                byte[] signedData = concatArrays(destinationHash, publicKey, nameHash, requireNonNullElse(appData, new byte[0]));
+            byte[] signedData = concatArrays(destinationHash, publicKey, nameHash, requireNonNullElse(appData, new byte[0]));
 
-                var announcedIdentity = new Identity(false);
-                announcedIdentity.loadPublicKey(publicKey);
+            var announcedIdentity = new Identity(false);
+            announcedIdentity.loadPublicKey(publicKey);
 
-                if (nonNull(announcedIdentity.getSigPub()) && announcedIdentity.validate(signature, signedData)) {
-                    var hashHaterial = concatArrays(nameHash, announcedIdentity.getHash());
-                    var expectedHash = subarray(fullHash(hashHaterial), 0, TRUNCATED_HASHLENGTH / 8);
-                    if (Arrays.equals(destinationHash, expectedHash)) {
-                        // Check if we already have a public key for this destination
-                        // and make sure the public key is not different.
-                        if (KNOWN_DESTINATIONS.containsKey(destinationHashString)
-                                && isFalse(Arrays.equals(publicKey, KNOWN_DESTINATIONS.get(destinationHashString).getPublicKey()))) {
-                            // In reality, this should never occur, but in the odd case
-                            // that someone manages a hash collision, we reject the announce.
-                            log.error(
-                                    "Received announce with valid signature and destination hash, but announced public key does not match already known public key.\n" +
-                                            "This may indicate an attempt to modify network paths, or a random hash collision. The announce was rejected."
-                            );
-
-                            return false;
-                        }
-                        remember(packet.getHash(), destinationHash, publicKey, appData);
-
-                        var signalStr = "";
-                        if (nonNull(packet.getRssi()) || nonNull(packet.getSnr())) {
-                            var stringBuilder = new StringBuilder(" [");
-                            if (nonNull(packet.getRssi())) {
-                                stringBuilder.append("RSSI ").append(packet.getRssi()).append("dBm");
-                                if (nonNull(packet.getSnr())) {
-                                    stringBuilder.append(", ");
-                                }
-                            }
-                            if (nonNull(packet.getSnr())) {
-                                stringBuilder.append("SNR ").append(packet.getSnr()).append("dB");
-                            }
-                            stringBuilder.append("]");
-
-                            signalStr = stringBuilder.toString();
-                        }
-
-                        if (nonNull(packet.getTransportId())){
-                            log.trace("Valid announce for {} {} hops away, received via {} on {} {}",
-                                    destinationHashString, packet.getHops(), Hex.encodeHexString(packet.getTransportId()),
-                                    packet.getReceivingInterface(), signalStr);
-                        } else {
-                            log.trace("Valid announce for {} {} hops away, received on {} {}",
-                                    destinationHashString, packet.getHops(), packet.getReceivingInterface(), signalStr);
-                        }
-
-                        return true;
-                    } else {
-                        log.debug("Received invalid announce for {}: Destination mismatch.", destinationHashString);
+            if (nonNull(announcedIdentity.getSigPub()) && announcedIdentity.validate(signature, signedData)) {
+                var hashHaterial = concatArrays(nameHash, announcedIdentity.getHash());
+                var expectedHash = subarray(fullHash(hashHaterial), 0, TRUNCATED_HASHLENGTH / 8);
+                if (Arrays.equals(destinationHash, expectedHash)) {
+                    // Check if we already have a public key for this destination
+                    // and make sure the public key is not different.
+                    if (KNOWN_DESTINATIONS.containsKey(destinationHashString)
+                            && isFalse(Arrays.equals(publicKey, KNOWN_DESTINATIONS.get(destinationHashString).getPublicKey()))) {
+                        // In reality, this should never occur, but in the odd case
+                        // that someone manages a hash collision, we reject the announce.
+                        log.error(
+                                "Received announce with valid signature and destination hash, but announced public key does not match already known public key.\n" +
+                                        "This may indicate an attempt to modify network paths, or a random hash collision. The announce was rejected."
+                        );
 
                         return false;
                     }
+                    remember(packet.getHash(), destinationHash, publicKey, appData);
+
+                    var signalStr = "";
+                    if (nonNull(packet.getRssi()) || nonNull(packet.getSnr())) {
+                        var stringBuilder = new StringBuilder(" [");
+                        if (nonNull(packet.getRssi())) {
+                            stringBuilder.append("RSSI ").append(packet.getRssi()).append("dBm");
+                            if (nonNull(packet.getSnr())) {
+                                stringBuilder.append(", ");
+                            }
+                        }
+                        if (nonNull(packet.getSnr())) {
+                            stringBuilder.append("SNR ").append(packet.getSnr()).append("dB");
+                        }
+                        stringBuilder.append("]");
+
+                        signalStr = stringBuilder.toString();
+                    }
+
+                    if (nonNull(packet.getTransportId())){
+                        log.trace("Valid announce for {} {} hops away, received via {} on {} {}",
+                                destinationHashString, packet.getHops(), Hex.encodeHexString(packet.getTransportId()),
+                                packet.getReceivingInterface(), signalStr);
+                    } else {
+                        log.trace("Valid announce for {} {} hops away, received on {} {}",
+                                destinationHashString, packet.getHops(), packet.getReceivingInterface(), signalStr);
+                    }
+
+                    return true;
                 } else {
-                    log.debug("Received invalid announce for {}: Invalid signature.", destinationHashString);
+                    log.debug("Received invalid announce for {}: Destination mismatch.", destinationHashString);
 
                     return false;
                 }
+            } else {
+                log.debug("Received invalid announce for {}: Invalid signature.", destinationHashString);
+
+                return false;
             }
-        } catch (IOException e) {
-            log.error("Error occurred while validating announce.", e);
         }
 
         return false;

@@ -106,4 +106,8 @@ public class LinkChannelOutlet {
     public String toString() {
         return String.format(this.getClass().getSimpleName() + "(%s)", link);
     }
+
+    public int getMdu() {
+        return LinkConstant.MDU;
+    }
 }

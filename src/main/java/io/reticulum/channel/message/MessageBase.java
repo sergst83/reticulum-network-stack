@@ -1,4 +1,6 @@
-package io.reticulum.channel;
+package io.reticulum.channel.message;
+
+import io.reticulum.channel.Channel;
 
 public abstract class MessageBase {
 
@@ -8,7 +10,7 @@ public abstract class MessageBase {
      *     * Must be unique within all classes registered with a {@link Channel} <br/>
      *     * Must be less than <strong>0xf000</strong>. Values greater than or equal to <strong>0xf000</strong> are reserved. <br/>
      */
-    public abstract int msgType();
+    public abstract Integer msgType();
 
     /**
      * Create and return the binary representation of the message

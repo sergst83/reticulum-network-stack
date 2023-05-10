@@ -26,7 +26,7 @@ public class LinkConstant {
     public static final int ECPUBSIZE = 32 + 32;
     public static final int KEYSIZE = 32;
 
-    public static final double MDU = Math.floor((MTU - IFAC_MIN_SIZE - HEADER_MINSIZE - FERNET_OVERHEAD) / (double) AES128_BLOCKSIZE) * AES128_BLOCKSIZE - 1;
+    public static final int MDU = (int) (Math.floor((MTU - IFAC_MIN_SIZE - HEADER_MINSIZE - FERNET_OVERHEAD) / (double) AES128_BLOCKSIZE) * AES128_BLOCKSIZE - 1);
 
     /**
      * Timeout for link establishment in seconds per hop to destination.

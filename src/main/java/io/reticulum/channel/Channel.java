@@ -1,18 +1,27 @@
 package io.reticulum.channel;
 
+import io.reticulum.channel.message.MessageBase;
+import io.reticulum.packet.Packet;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Objects;
+import java.util.function.Function;
 
+import static io.reticulum.channel.MessageState.MSGSTATE_DELIVERED;
+import static io.reticulum.channel.MessageState.MSGSTATE_SENT;
 import static java.util.Comparator.comparingInt;
+import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static java.util.concurrent.Executors.defaultThreadFactory;
 import static java.util.stream.Collectors.collectingAndThen;
 import static java.util.stream.Collectors.toList;
+import static org.apache.commons.lang3.ArrayUtils.getLength;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
 @Slf4j
@@ -21,8 +30,7 @@ public class Channel {
     private final LinkedList<Envelope> txRing;
     private final LinkedList<Envelope> rxRing;
     private final List<MessageCallbackType> messageCallbacks;
-    private final long nextSequence;
-    private final HashMap<Integer, MessageBase> messageFactories;
+    private int nextSequence;
     private final int maxTries;
 
     public Channel(final LinkChannelOutlet linkChannelOutlet) {
@@ -30,9 +38,28 @@ public class Channel {
         this.txRing = new LinkedList<>();
         this.rxRing = new LinkedList<>();
         this.messageCallbacks = new ArrayList<>();
-        this.nextSequence = 0L;
-        this.messageFactories = new HashMap<>();
+        this.nextSequence = 0;
         this.maxTries = 5;
+    }
+
+    /**
+     * Add a handler for incoming messages. <br/>
+     * <p>
+     * Handlers are processed in the order they are
+     * added. If any handler returns True, processing
+     * of the message stops; handlers after the
+     * returning handler will not be called.
+     *
+     * @param callback Function to call
+     */
+    public synchronized void addMessageHandler(MessageCallbackType callback) {
+        if (isFalse(messageCallbacks.contains(callback))) {
+            messageCallbacks.add(callback);
+        }
+    }
+
+    public synchronized void removeMessageHandler(MessageCallbackType callback) {
+        messageCallbacks.remove(callback);
     }
 
     public synchronized void shutdown() {
@@ -80,7 +107,7 @@ public class Channel {
         try {
             var envelop = new Envelope(outlet, raw);
             synchronized (this) {
-                var message = envelop.unpack(messageFactories);
+                var message = envelop.unpack();
                 var prevEnv = rxRing.getFirst();
                 if (nonNull(prevEnv) && envelop.getSequence() != (prevEnv.getSequence() + 1) % 0x10000) {
                     log.debug("Channel: Out of order packet received");
@@ -115,6 +142,136 @@ public class Channel {
     }
 
     private synchronized void runCallbacks(MessageBase message) {
+        for (MessageCallbackType messageCallback : messageCallbacks) {
+            try {
+                if (messageCallback.apply(message)) {
+                    return;
+                }
+            } catch (Exception e) {
+                log.error("Channel: Error running message callback.", e);
+            }
+        }
+    }
 
+    /**
+     * Check if {@link Channel} is ready to send.
+     *
+     * @return True if ready
+     */
+    public boolean isReadyToSend() {
+        if (isFalse(outlet.isUsable())) {
+            log.trace("Channel: Link is not usable.");
+            return false;
+        }
+
+        synchronized (this) {
+            for (Envelope envelope : txRing) {
+                if (
+                        Objects.equals(envelope.getOutlet(), outlet)
+                        && isFalse(
+                                nonNull(envelope.getPacket())
+                                        || outlet.getPacketState(envelope.getPacket()) == MSGSTATE_SENT
+                        )
+                ) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private void packetTxOp (Packet packet, Function<Envelope, Boolean> op) {
+        var envelop = txRing.stream()
+                .filter(e -> Arrays.equals(outlet.getPacketId(e.getPacket()), outlet.getPacketId(packet)))
+                .findFirst()
+                .orElse(null);
+
+        if (nonNull(envelop) && op.apply(envelop)) {
+            envelop.setTracked(true);
+            if (isFalse(txRing.remove(envelop))) {
+                log.debug("Channel: Envelope not found in TX ring");
+            }
+        }
+
+        if (isNull(envelop)) {
+            log.trace("Channel: Spurious message received");
+        }
+    }
+
+    private void packetDelivered(Packet packet) {
+        packetTxOp(packet, envelope -> true);
+    }
+
+    private long getPacketTimeoutTime(int tries) {
+        return (long) (Math.pow(2, tries - 1) * Math.max(outlet.rtt(), 100) * 5);
+    }
+
+    private void packetTimeout(Packet packet) {
+        Function<Envelope, Boolean> retryEnvelope = envelope -> {
+            if (envelope.getTries() >= maxTries) {
+                log.error("Channel: Retry count exceeded, tearing down Link.");
+                shutdown();
+                outlet.timedOut();
+
+                return true;
+            }
+            envelope.setTries(envelope.getTries() + 1);
+            outlet.resend(envelope.getPacket());
+            outlet.setPacketTimeoutCallback(envelope.getPacket(), this::packetTimeout, getPacketTimeoutTime(envelope.getTries()));
+
+            return false;
+        };
+
+        if (outlet.getPacketState(packet) != MSGSTATE_DELIVERED) {
+            packetTxOp(packet, retryEnvelope);
+        }
+    }
+
+    /**
+     * Send a message. If a message send is attempted and {@link Channel} is not ready, an exception is thrown.
+     *
+     * @param message {@link MessageBase}
+     * @return {@link Envelope}
+     */
+    public Envelope send(MessageBase message) {
+        Envelope envelope;
+        synchronized (this) {
+            if (isFalse(isReadyToSend())) {
+                throw new IllegalStateException("Link is not ready");
+            }
+            envelope = new Envelope(outlet, message, nextSequence);
+            nextSequence = (nextSequence + 1) % 0x10000;
+            emplaceEnvelope(envelope, txRing);
+        }
+
+        if (isNull(envelope)) {
+            throw new RuntimeException("BlockingIOError");
+        }
+
+        envelope.pack();
+        if (getLength(envelope.getRaw()) > outlet.getMdu()) {
+            throw new IllegalStateException(
+                    String.format("Packed message too big for packet %s > %s", getLength(envelope.getRaw()), outlet.getMdu())
+            );
+        }
+        envelope.setPacket(outlet.send(envelope.getRaw()));
+        envelope.setTries(envelope.getTries() + 1);
+        outlet.setPacketDeliveredCallback(envelope.getPacket(), this::packetDelivered);
+        outlet.setPacketTimeoutCallback(envelope.getPacket(), this::packetTimeout, getPacketTimeoutTime(envelope.getTries()));
+
+        return envelope;
+    }
+
+    /**
+     * Maximum Data Unit: the number of bytes available
+     * for a message to consume in a single send. This
+     * value is adjusted from the {@link io.reticulum.link.Link} MDU to accommodate
+     * message header information.
+     *
+     * @return number of bytes available
+     */
+    public int getMdu() {
+        return this.outlet.getMdu() - 6;
     }
 }
