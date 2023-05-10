@@ -1,8 +1,6 @@
 package io.reticulum.channel.message;
 
-import lombok.Data;
-
-public class StreamDataMessage extends MessageBase{=
+public class StreamDataMessage extends MessageBase{
 
     @Override
     public Integer msgType() {
