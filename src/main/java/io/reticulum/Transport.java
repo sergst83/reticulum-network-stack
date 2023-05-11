@@ -9,6 +9,7 @@ import io.reticulum.packet.PacketContextType;
 import io.reticulum.packet.data.DataPacket;
 import io.reticulum.packet.data.DataPacketConverter;
 import io.reticulum.transport.AnnounceEntry;
+import io.reticulum.transport.AnnounceHandler;
 import io.reticulum.transport.Hops;
 import io.reticulum.transport.LinkEntry;
 import io.reticulum.transport.PathRequestEntry;
@@ -56,6 +57,7 @@ import static io.reticulum.constant.IdentityConstant.NAME_HASH_LENGTH;
 import static io.reticulum.constant.LinkConstant.ESTABLISHMENT_TIMEOUT_PER_HOP;
 import static io.reticulum.constant.ReticulumConstant.MTU;
 import static io.reticulum.constant.TransportConstant.AP_PATH_TIME;
+import static io.reticulum.constant.TransportConstant.DESTINATION_TIMEOUT;
 import static io.reticulum.constant.TransportConstant.LOCAL_CLIENT_CACHE_MAXSIZE;
 import static io.reticulum.constant.TransportConstant.LOCAL_REBROADCASTS_MAX;
 import static io.reticulum.constant.TransportConstant.MAX_RATE_TIMESTAMPS;
@@ -64,11 +66,15 @@ import static io.reticulum.constant.TransportConstant.PATHFINDER_M;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_R;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_RW;
 import static io.reticulum.constant.TransportConstant.ROAMING_PATH_TIME;
+import static io.reticulum.destination.DestinationType.LINK;
 import static io.reticulum.destination.DestinationType.PLAIN;
 import static io.reticulum.destination.DestinationType.SINGLE;
 import static io.reticulum.destination.Direction.IN;
 import static io.reticulum.destination.Direction.OUT;
+import static io.reticulum.destination.ProofStrategy.PROVE_ALL;
+import static io.reticulum.destination.ProofStrategy.PROVE_APP;
 import static io.reticulum.identity.IdentityKnownDestination.recall;
+import static io.reticulum.identity.IdentityKnownDestination.recallAppData;
 import static io.reticulum.identity.IdentityKnownDestination.validateAnnounce;
 import static io.reticulum.interfaces.InterfaceMode.MODE_ACCESS_POINT;
 import static io.reticulum.interfaces.InterfaceMode.MODE_ROAMING;
@@ -79,9 +85,11 @@ import static io.reticulum.packet.PacketContextType.LRPROOF;
 import static io.reticulum.packet.PacketContextType.PATH_RESPONSE;
 import static io.reticulum.packet.PacketContextType.RESOURCE_PRF;
 import static io.reticulum.packet.PacketType.ANNOUNCE;
+import static io.reticulum.packet.PacketType.DATA;
 import static io.reticulum.packet.PacketType.LINKREQUEST;
 import static io.reticulum.transport.TransportType.BROADCAST;
 import static io.reticulum.transport.TransportType.TRANSPORT;
+import static io.reticulum.utils.DestinationUtils.hashFromNameAndIdentity;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static java.nio.file.StandardOpenOption.CREATE;
 import static java.nio.file.StandardOpenOption.WRITE;
@@ -127,7 +135,7 @@ public final class Transport implements ExitHandler {
     private final Map<String, LinkEntry> linkTable = new ConcurrentHashMap<>();
     private final Map<?, ?> heldAnnounces = new ConcurrentHashMap<>();
     private final Map<String, Tunnel> tunnels = new ConcurrentHashMap<>();
-    private final List<?> announceHandlers = new CopyOnWriteArrayList<>();
+    private final List<AnnounceHandler> announceHandlers = new CopyOnWriteArrayList<>();
     private final List<Link> activeLinks = new CopyOnWriteArrayList<>();
     private final List<Link> pendingLinks = new CopyOnWriteArrayList<>();
     private final Map<String, ConnectionInterface> pendingLocalPathRequests = new ConcurrentHashMap<>();
@@ -1022,12 +1030,108 @@ public final class Transport implements ExitHandler {
                                 );
 
                                 //If the receiving interface is a tunnel, we add the announce to the tunnels table
+                                if (
+                                        nonNull(packet.getReceivingInterface().getTunnelId())
+                                        && tunnels.containsKey(Hex.encodeHexString(packet.getReceivingInterface().getTunnelId()))
+                                ) {
+                                    var tunnelEntry = tunnels.get(Hex.encodeHexString(packet.getReceivingInterface().getTunnelId()));
+                                    var paths = tunnelEntry.getTunnelPaths();
+                                    paths.put(Hex.encodeHexString(packet.getDestinationHash()), destinationTableEntry);
+                                    expires = Instant.now().plusSeconds(DESTINATION_TIMEOUT);
+                                    tunnelEntry.setExpires(expires);
+                                    log.debug(
+                                            "Path to {} associated with tunnel {}.",
+                                            Hex.encodeHexString(packet.getDestinationHash()),
+                                            Hex.encodeHexString(packet.getReceivingInterface().getTunnelId())
+                                    );
+                                }
 
+                                //Call externally registered callbacks from apps wanting to know when an announce arrives
+                                if (packet.getContext() != PATH_RESPONSE) {
+                                    for (AnnounceHandler handler : announceHandlers) {
+                                        try {
+                                            //Check that the announced destination matches the handlers aspect filter
+                                            var executeCallback = false;
+                                            if (isNull(handler.getAspectFilter())) {
+                                                //If the handlers aspect filter is set to None, we execute the callback in all cases
+                                                executeCallback = true;
+                                            } else {
+                                                var handlerExpectedHash = hashFromNameAndIdentity(handler.getAspectFilter(), announceIdentity);
+                                                if (Arrays.equals(packet.getDestinationHash(), handlerExpectedHash)) {
+                                                    executeCallback = true;
+                                                }
+                                            }
+
+                                            if (executeCallback) {
+                                                handler.receivedAnnounce(
+                                                        packet.getDestinationHash(),
+                                                        announceIdentity,
+                                                        recallAppData(packet.getDestinationHash())
+                                                );
+                                            }
+                                        } catch (Exception e) {
+                                            log.error("Error while processing external announce callback.", e);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
+
+            //Handling for linkrequests to local destinations
+            else if (packet.getPacketType() == LINKREQUEST) {
+                if (isNull(packet.getTransportId()) || Arrays.equals(packet.getTransportId(), identity.getHash())) {
+                    for (Destination destination : destinations) {
+                        if (
+                                Arrays.equals(destination.getHash(), packet.getDestinationHash())
+                                && destination.getType() == packet.getDestinationType()
+                        ) {
+                            packet.setDestination(destination);
+                            destination.receive(packet);
+                        }
+                    }
+                }
+            }
+
+            //Handling for local data packets
+            else if (packet.getPacketType() == DATA) {
+                if (packet.getDestinationType() == LINK) {
+                    for (Link link : activeLinks) {
+                        if (Arrays.equals(link.getLinkId(), packet.getDestinationHash())) {
+                            packet.setDestination(link);
+                            link.receive(packet);
+                        }
+                    }
+                } else {
+                    for (Destination destination : destinations) {
+                        if (
+                                Arrays.equals(destination.getHash(), packet.getDestinationHash())
+                                && destination.getType() == packet.getDestinationType()
+                        ) {
+                            packet.setDestination(destination);
+                            destination.receive(packet);
+
+                            if (destination.getProofStrategy() == PROVE_ALL) {
+                                packet.prove(null);
+                            } else if (destination.getProofStrategy() == PROVE_APP) {
+                                if (nonNull(destination.getCallbacks().getProofRequested())) {
+                                    try {
+                                        if (destination.getCallbacks().getProofRequested().apply(packet)) {
+                                            packet.prove(null);
+                                        }
+                                    } catch (Exception e) {
+                                        log.error("Error while executing proof request callback.", e);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            //Handling for proofs and link-request proofs
         }
 
         jobsLocked.unlock();

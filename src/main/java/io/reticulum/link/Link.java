@@ -796,7 +796,7 @@ public class Link extends AbstractDestination {
                         } else if (destination.getProofStrategy() == PROVE_APP) {
                             if (nonNull(destination.getCallbacks().getProofRequested())) {
                                 try {
-                                    destination.getCallbacks().getProofRequested().accept(packet);
+                                    destination.getCallbacks().getProofRequested().apply(packet);
                                 } catch (Exception e) {
                                     log.error("Error while executing proof request callback from {}.", this, e);
                                 }

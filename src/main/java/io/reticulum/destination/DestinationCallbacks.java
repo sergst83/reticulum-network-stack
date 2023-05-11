@@ -6,12 +6,13 @@ import lombok.Data;
 
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 @Data
 public class DestinationCallbacks {
 
     private Consumer<Link> linkEstablished;
     private BiConsumer<byte[], Packet> packet;
-    private Consumer<Packet> proofRequested;
+    private Function<Packet, Boolean> proofRequested;
 
 }

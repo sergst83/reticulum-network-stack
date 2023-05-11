@@ -5,7 +5,6 @@ import lombok.NonNull;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
 
-import java.io.IOException;
 import java.util.StringJoiner;
 
 import static io.reticulum.constant.IdentityConstant.NAME_HASH_LENGTH;
@@ -59,7 +58,7 @@ public class DestinationUtils {
     /**
      * @return A destination name in adressable hash form, for a full name string and Identity instance
      */
-    public static byte[] hashFromNameAndIdentity(@NonNull String fullName, Identity identity) throws IOException {
+    public static byte[] hashFromNameAndIdentity(@NonNull String fullName, Identity identity) {
         var appAndAspects = appAndAspectsFromName(fullName);
 
         return hash(identity, appAndAspects.getLeft(), appAndAspects.getRight());
@@ -68,7 +67,7 @@ public class DestinationUtils {
     /**
      * @return A destination name in adressable hash form, for an app_name and a number of aspects
      */
-    public static byte[] hash(Identity identity, @NonNull String appName, String... aspects) throws IOException {
+    public static byte[] hash(Identity identity, @NonNull String appName, String... aspects) {
         var addrHashMaterial = subarray(
                 fullHash(expandName(null, appName, aspects).getBytes(UTF_8)),
                 0,

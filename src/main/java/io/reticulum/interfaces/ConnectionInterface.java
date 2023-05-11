@@ -85,4 +85,8 @@ public interface ConnectionInterface {
     default byte[] getHash() {
         return IdentityUtils.fullHash(getInterfaceName().getBytes(UTF_8));
     };
+
+    default byte[] getTunnelId() {
+        return null;
+    };
 }
