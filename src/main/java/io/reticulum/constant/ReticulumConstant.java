@@ -58,7 +58,7 @@ public class ReticulumConstant {
     // from interface speed, but a better general approach would most
     // probably be to let Reticulum somehow continously build a map of
     // per-hop latencies and use this map for the timeout calculation.
-    public static final int DEFAULT_PER_HOP_TIMEOUT = 6;
+    public static final int DEFAULT_PER_HOP_TIMEOUT = 6_000;
 
     /**
      * Constant specifying the truncated hash length (in bits) used by Reticulum

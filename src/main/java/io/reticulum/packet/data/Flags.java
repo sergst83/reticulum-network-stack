@@ -67,7 +67,7 @@ public class Flags {
         }
     }
 
-    public Flags fromByte(final byte flags) {
+    public static Flags fromByte(final byte flags) {
         try (var baos = new ByteArrayOutputStream()) {
             baos.write(flags);
 

@@ -17,7 +17,7 @@ public class TransportConstant {
 
     public static final int PATHFINDER_R = 1;          // Retransmit retries
     public static final int PATHFINDER_G = 5;         // Retry grace period
-    public static final double PATHFINDER_RW = 0.5;      // Random window for announce rebroadcast
+    public static final double PATHFINDER_RW = 500;      // Random window for announce rebroadcast
     public static final int PATHFINDER_E = 60 * 60 * 24 * 7; // Path expiration of one week
     public static final int AP_PATH_TIME = 60 * 60 * 24;  // Path expiration of one day for Access Point paths
     public static final int ROAMING_PATH_TIME = 60 * 60 * 6;   // Path expiration of 6 hours for Roaming paths
@@ -36,5 +36,6 @@ public class TransportConstant {
     public static final int DESTINATION_TIMEOUT = 60 * 60 * 24 * 7;   // Destination table entries are removed if unused for one week
     public static final int MAX_RECEIPTS = 1024;   // Maximum number of receipts to keep track of
     public static final int MAX_RATE_TIMESTAMPS = 16;  // Maximum number of announce timestamps to keep per destination
+    public static final int LOCAL_CLIENT_CACHE_MAXSIZE = 512; //
 
 }

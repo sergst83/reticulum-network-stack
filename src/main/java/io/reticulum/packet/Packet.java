@@ -34,6 +34,7 @@ import static io.reticulum.packet.PacketContextType.LRPROOF;
 import static io.reticulum.packet.PacketContextType.RESOURCE;
 import static io.reticulum.packet.PacketContextType.RESOURCE_PRF;
 import static io.reticulum.packet.PacketType.ANNOUNCE;
+import static io.reticulum.packet.PacketType.DATA;
 import static io.reticulum.packet.PacketType.LINKREQUEST;
 import static io.reticulum.packet.PacketType.PROOF;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
@@ -200,7 +201,7 @@ public class Packet implements TPacket {
     private byte[] plaintext;
     private TransportType transportType = TransportType.BROADCAST;
     private HeaderType headerType = HEADER_1;
-    private PacketType packetType = PacketType.DATA;
+    private PacketType packetType = DATA;
     private DestinationType destinationType;
     private PacketReceipt receipt;
     private int mtu;
@@ -223,6 +224,26 @@ public class Packet implements TPacket {
         this.createReceipt = createReceipt;
     }
 
+    public Packet(
+            Destination announceDestination,
+            byte[] announceData,
+            PacketType packetType,
+            PacketContextType announceContext,
+            HeaderType headerType,
+            TransportType transportType,
+            byte[] transportId,
+            ConnectionInterface localClientInterface
+    ) {
+        this(localClientInterface);
+        this.destination = announceDestination;
+        this.packetType = packetType;
+        this.context = announceContext;
+        this.data = announceData;
+        this.transportId = transportId;
+        this.headerType = headerType;
+        this.transportType = transportType;
+    }
+
     public Packet(Destination destination, byte[] data, PacketType packetType, PacketContextType context, ConnectionInterface attachedInterface) {
         this(destination, data, packetType, context, attachedInterface, true);
     }
@@ -235,9 +256,12 @@ public class Packet implements TPacket {
         this(destination, requestData, linkRequest, null);
     }
 
+    public Packet(byte[] raw) {
+        this((Destination) null, raw, DATA);
+    }
 
     public Packet(Link link, byte[] data, PacketType packetType, PacketContextType contextType) {
-        this(null);
+        this((ConnectionInterface) null);
         this.raw = data;
         this.packed = true;
         this.fromPacked = true;

@@ -11,19 +11,19 @@ public enum PacketType {
     /**
      * Data packets
      */
-    DATA((byte) 0x00),
+    DATA((byte) 0b00),
     /**
      * Announces
      */
-    ANNOUNCE((byte) 0x01),
+    ANNOUNCE((byte) 0b01),
     /**
      * Link requests
      */
-    LINKREQUEST((byte) 0x02),
+    LINKREQUEST((byte) 0b10),
     /**
      * Proofs
      */
-    PROOF((byte) 0x03),
+    PROOF((byte) 0b11),
     ;
 
     private final byte value;
