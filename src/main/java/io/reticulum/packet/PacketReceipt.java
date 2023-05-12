@@ -17,6 +17,8 @@ import java.util.function.Consumer;
 
 import static io.reticulum.constant.IdentityConstant.HASHLENGTH;
 import static io.reticulum.constant.IdentityConstant.SIGLENGTH;
+import static io.reticulum.constant.PacketConstant.EXPL_LENGTH;
+import static io.reticulum.constant.PacketConstant.IMPL_LENGTH;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static java.util.concurrent.Executors.defaultThreadFactory;
@@ -25,9 +27,6 @@ import static org.apache.commons.lang3.ArrayUtils.subarray;
 @Data
 @Slf4j
 public class PacketReceipt {
-    private static final int EXPL_LENGTH = HASHLENGTH / 8 + SIGLENGTH / 8;
-    private static final int IMPL_LENGTH = SIGLENGTH / 8;
-
     private AbstractDestination destination;
     private Instant sentAt;
     private boolean sent;

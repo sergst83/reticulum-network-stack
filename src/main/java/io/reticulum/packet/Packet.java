@@ -38,6 +38,7 @@ import static io.reticulum.packet.PacketType.DATA;
 import static io.reticulum.packet.PacketType.LINKREQUEST;
 import static io.reticulum.packet.PacketType.PROOF;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
+import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.utils.IdentityUtils.truncatedHash;
 import static java.math.BigInteger.ONE;
 import static java.util.Objects.nonNull;
@@ -378,7 +379,7 @@ public class Packet implements TPacket {
     }
 
     public synchronized byte[] getHash() {
-        return truncatedHash(getHashablePart());
+        return fullHash(getHashablePart());
     }
 
     public ProofDestination generatrProofDestination() {

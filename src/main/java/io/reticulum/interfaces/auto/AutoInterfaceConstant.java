@@ -24,7 +24,6 @@ public final class AutoInterfaceConstant {
     static final List<String> ALL_IGNORE_IFS     = List.of("lo0");
     static final List<String> DARWIN_IGNORE_IFS = List.of("awdl0", "llw0", "lo0", "en5");
     static final List<String> ANDROID_IGNORE_IFS = List.of("dummy0", "lo", "tun0");
-    static final boolean IN = true;
     static final int BITRATE_GUESS = 10 * 1000 * 1000;
 
     static final BiPredicate<NetworkInterface, AutoInterface> DARWIN_PREDICATE = (netIface, autoInterface) -> {

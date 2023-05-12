@@ -167,7 +167,7 @@ public class Destination extends AbstractDestination {
      *                 requests a proof is received. The callback must return one of True or False. If the callback
      *                 returns True, a proof will be sent. If it returns False, a proof will not be sent.
      */
-    public void setProofRequestedCallback(Consumer<Packet> callback) {
+    public void setProofRequestedCallback(Function<Packet, Boolean> callback) {
         this.callbacks.setProofRequested(callback);
     }
 

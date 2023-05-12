@@ -32,6 +32,26 @@ public class LocalClientInterface extends AbstractConnectionInterface {
     private static final byte ESC_MASK = 0x20;
     private static final int HW_MTU = 1064;
 
+    @Override
+    public boolean OUT() {
+        return false;
+    }
+
+    @Override
+    public boolean IN() {
+        return true;
+    }
+
+    @Override
+    public boolean FWD() {
+        return false;
+    }
+
+    @Override
+    public boolean RPT() {
+        return false;
+    }
+
     private static byte[] escape(byte[] data) {
         var result = new byte[0];
         if (nonNull(data) && data.length > 0) {

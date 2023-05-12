@@ -115,6 +115,26 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     private ExecutorService cachedTreadPoolExecutor = newCachedThreadPool();
 
     @Override
+    public boolean OUT() {
+        return false;
+    }
+
+    @Override
+    public boolean IN() {
+        return true;
+    }
+
+    @Override
+    public boolean FWD() {
+        return false;
+    }
+
+    @Override
+    public boolean RPT() {
+        return false;
+    }
+
+    @Override
     public void setEnabled(boolean enabled) {
         if (IS_OS_WINDOWS) {
             log.error(
@@ -137,6 +157,9 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
             log.trace("{} could not autoconfigure. This interface currently provides no connectivity.", getInterfaceName());
         } else {
             receives = true;
+
+            bitrate = BITRATE_GUESS;
+
             var peering_wait = secToMillisec(getAnnounceInterval() * 1.2);
             log.info("{}  discovering peers for {} seconds...", this.getInterfaceName(), MILLISECONDS.toSeconds(peering_wait));
 
@@ -184,7 +207,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
                 .isPresent();
     }
 
-    private boolean initMulticastDiscoveryListeners(List<NetworkInterface> networkInterfaceList) throws InterruptedException {
+    private boolean initMulticastDiscoveryListeners(List<NetworkInterface> networkInterfaceList) {
         multicastDiscoveryListenerExecutor = newFixedThreadPool(networkInterfaceList.size());
         return networkInterfaceList.stream()
                 .map(

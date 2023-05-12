@@ -58,7 +58,7 @@ public class DataPacket {
     public DataPacket write(final JBBPBitOutputStream Out) throws IOException {
         header.write(Out);
         if (this.header.getFlags().isAccessCodes()) {
-            Out.writeBytes(this.ifac, assrtExprNotNeg(this.ifac_size), JBBPByteOrder.BIG_ENDIAN);
+            Out.writeBytes(this.ifac, this.ifac.length, JBBPByteOrder.BIG_ENDIAN);
         }
         addresses.write(Out);
         Out.write(this.context.getValue());

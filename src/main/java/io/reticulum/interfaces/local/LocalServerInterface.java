@@ -32,6 +32,26 @@ public class LocalServerInterface extends AbstractConnectionInterface {
     }
 
     @Override
+    public boolean OUT() {
+        return false;
+    }
+
+    @Override
+    public boolean IN() {
+        return true;
+    }
+
+    @Override
+    public boolean FWD() {
+        return false;
+    }
+
+    @Override
+    public boolean RPT() {
+        return false;
+    }
+
+    @Override
     public void run() {
         while (!server.isClosed()) {
             try (var socket = server.accept()) {

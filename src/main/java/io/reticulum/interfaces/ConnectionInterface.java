@@ -5,9 +5,11 @@ import com.fasterxml.jackson.annotation.JsonSubTypes.Type;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.auto.AutoInterface;
+import io.reticulum.transport.AnnounceQueueEntry;
 import io.reticulum.utils.IdentityUtils;
 
-import java.util.List;
+import java.time.Instant;
+import java.util.Queue;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
@@ -19,6 +21,11 @@ import static java.nio.charset.StandardCharsets.UTF_8;
         @Type(value = AutoInterface.class, name = "AutoInterface")
 })
 public interface ConnectionInterface {
+
+    boolean OUT();
+    boolean IN();
+    boolean FWD();
+    boolean RPT();
 
     default String getType() {
         return getClass().getSimpleName();
@@ -74,9 +81,15 @@ public interface ConnectionInterface {
 
     InterfaceMode getMode();
 
-    default List<?> getAnnounceQueue() {
-        return List.of();
-    }
+    Queue<AnnounceQueueEntry> getAnnounceQueue();
+
+    Double getAnnounceCap();
+    void setAnnounceCap(double newAnnounceCap);
+
+    Instant getAnnounceAllowedAt();
+    void  setAnnounceAllowedAt(Instant announceAllowedAt);
+
+    int getBitrate();
 
     default void detach() {
         //pass
@@ -88,5 +101,27 @@ public interface ConnectionInterface {
 
     default byte[] getTunnelId() {
         return null;
+    }
+
+    default ConnectionInterface getParentInterface() {
+        return null;
+    }
+
+    default boolean isLocalSharedInstance() {
+        return false;
+    }
+
+    default boolean isConnectedToSharedInstance() {
+        return false;
+    }
+
+    void processAnnounceQueue();
+
+    default void setTunnelId(byte[] tunnelId) {
+
     };
+
+    default boolean wantsTunnel() {
+        return false;
+    }
 }

@@ -12,6 +12,9 @@ import lombok.ToString;
 import org.apache.commons.lang3.StringUtils;
 
 import java.math.BigInteger;
+import java.time.Instant;
+import java.util.LinkedList;
+import java.util.Queue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -77,6 +80,8 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
 
     @JsonProperty("announce_cap")
     protected double announceCap = ANNOUNCE_CAP / 100;
+    protected Instant announceAllowedAt;
+    protected Queue<?> announceQueue = new LinkedList<>();
 
     public void setIfacSize(int newIfacSize) {
         if (newIfacSize >= IFAC_MIN_SIZE * 8) {
@@ -144,5 +149,10 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
 
     public String getInterfaceName() {
         return String.format(this.getClass().getSimpleName() + "[%s]", interfaceName);
+    }
+
+    @Override
+    public InterfaceMode getMode() {
+        return interfaceMode;
     }
 }

@@ -10,6 +10,8 @@ public class TransportConstant {
 
     public static final String APP_NAME = "rnstransport";
 
+    public static final long JOB_INTERVAL = 250; //ms
+
     /**
      * Maximum amount of hops that Reticulum will transport a packet.
      */
