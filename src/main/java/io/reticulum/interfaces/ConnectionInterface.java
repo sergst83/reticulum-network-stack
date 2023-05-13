@@ -117,9 +117,7 @@ public interface ConnectionInterface {
 
     void processAnnounceQueue();
 
-    default void setTunnelId(byte[] tunnelId) {
-
-    };
+    default void setTunnelId(byte[] tunnelId) {}
 
     default boolean wantsTunnel() {
         return false;

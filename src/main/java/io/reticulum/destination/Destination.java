@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BiConsumer;
@@ -76,7 +77,7 @@ public class Destination extends AbstractDestination {
     private Direction direction;
     private ProofStrategy proofStrategy = PROVE_NONE;
     private int mtu = 0;
-    private Map<Integer, Pair<Long, byte[]>> pathResponses = new ConcurrentHashMap<>();
+    private Map<String, Pair<Long, byte[]>> pathResponses = new ConcurrentHashMap<>();
     private List<Link> links = new CopyOnWriteArrayList<>();
     private String name;
     private byte[] nameHash;
@@ -349,6 +350,10 @@ public class Destination extends AbstractDestination {
         return announce(null, pathResponse, null, null, true);
     }
 
+    public Packet announce(boolean pathResponse, byte[] tag, ConnectionInterface attachedInterface) {
+        return announce(null, pathResponse, attachedInterface, tag, true);
+    }
+
     /**
      * Creates an announce packet for this destination and broadcasts it on all
      * relevant interfaces. Application specific data can be added to the announce.
@@ -357,12 +362,11 @@ public class Destination extends AbstractDestination {
      * @param pathResponse Internal flag used by {@link Transport}. Ignore.
      * @return {@link Packet}
      */
-    @SneakyThrows
     public Packet announce(
             final byte[] appData,
             final boolean pathResponse,
             final ConnectionInterface attachedInterface,
-            final Integer tag,
+            final byte[] tag,
             final boolean send
     ) {
         var localAppData = nonNull(appData) ? Arrays.copyOf(appData, appData.length) : null;
@@ -370,7 +374,7 @@ public class Destination extends AbstractDestination {
             throw new IllegalStateException("Only SINGLE destination types can be announced");
         }
 
-        var staleResponses = new ArrayList<Integer>();
+        var staleResponses = new ArrayList<String>();
         var now = currentTimeMillis();
         pathResponses.forEach((entryTag, entry) -> {
             if (now > entry.getLeft() + PR_TAG_WINDOW) {
@@ -381,7 +385,7 @@ public class Destination extends AbstractDestination {
         staleResponses.forEach(pathResponses::remove);
 
         byte[] announceData;
-        if (pathResponse && nonNull(tag) && pathResponses.containsKey(tag)) {
+        if (pathResponse && nonNull(tag) && pathResponses.containsKey(Hex.encodeHexString(tag))) {
             // This code is currently not used, since Transport will block duplicate
             // path requests based on tags. When multi-path support is implemented in
             // Transport, this will allow Transport to detect redundant paths to the
@@ -390,8 +394,8 @@ public class Destination extends AbstractDestination {
             // received via multiple paths. The difference in reception time will
             // potentially also be useful in determining characteristics of the
             // multiple available paths, and to choose the best one.
-            log.trace("Using cached announce data for answering path request with tag {}", tag);
-            announceData = pathResponses.get(tag).getRight();
+            log.debug("Using cached announce data for answering path request with tag {}", Hex.encodeHexString(tag));
+            announceData = pathResponses.get(Hex.encodeHexString(tag)).getRight();
         } else {
             var randomHash = concatArrays(
                     subarray(getRandomHash(), 0, 5),
@@ -416,7 +420,10 @@ public class Destination extends AbstractDestination {
                 announceData = concatArrays(announceData, localAppData);
             }
 
-            pathResponses.put(tag, Pair.of(currentTimeMillis(), announceData));
+            pathResponses.put(
+                    Hex.encodeHexString(Objects.requireNonNullElse(tag, new byte[0])),
+                    Pair.of(currentTimeMillis(), announceData)
+            );
         }
 
         PacketContextType announceContext;

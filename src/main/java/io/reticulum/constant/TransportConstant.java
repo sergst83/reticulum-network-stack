@@ -1,8 +1,16 @@
 package io.reticulum.constant;
 
+import io.reticulum.interfaces.InterfaceMode;
+
+import java.util.List;
+
 import static io.reticulum.constant.LinkConstant.STALE_TIME;
+import static io.reticulum.interfaces.InterfaceMode.MODE_ACCESS_POINT;
+import static io.reticulum.interfaces.InterfaceMode.MODE_GATEWAY;
 
 public class TransportConstant {
+
+    public static final List<InterfaceMode> DISCOVER_PATHS_FOR = List.of(MODE_ACCESS_POINT, MODE_GATEWAY);
 
     public static final byte REACHABILITY_UNREACHABLE = 0x00;
     public static final byte REACHABILITY_DIRECT = 0x01;
@@ -29,7 +37,10 @@ public class TransportConstant {
     public static final int LOCAL_REBROADCASTS_MAX = 2;        // How many local rebroadcasts of an announce is allowed
 
     public static final int PATH_REQUEST_TIMEOUT = 15;        // Default timuout for client path requests in seconds
-    public static final double PATH_REQUEST_GRACE = 0.35;     // Grace time before a path announcement is made, allows directly reachable peers to respond first
+    /**
+     * milliseconds
+     */
+    public static final long PATH_REQUEST_GRACE = 350;     // Grace time before a path announcement is made, allows directly reachable peers to respond first
     public static final int PATH_REQUEST_RW = 2;         // Path request random window
     public static final int PATH_REQUEST_MI = 5;       // Minimum interval in seconds for automated path requests
 

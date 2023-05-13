@@ -72,6 +72,7 @@ import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
 import static io.reticulum.constant.TransportConstant.APP_NAME;
 import static io.reticulum.constant.TransportConstant.AP_PATH_TIME;
 import static io.reticulum.constant.TransportConstant.DESTINATION_TIMEOUT;
+import static io.reticulum.constant.TransportConstant.DISCOVER_PATHS_FOR;
 import static io.reticulum.constant.TransportConstant.JOB_INTERVAL;
 import static io.reticulum.constant.TransportConstant.LOCAL_CLIENT_CACHE_MAXSIZE;
 import static io.reticulum.constant.TransportConstant.LOCAL_REBROADCASTS_MAX;
@@ -80,6 +81,8 @@ import static io.reticulum.constant.TransportConstant.PATHFINDER_E;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_M;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_R;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_RW;
+import static io.reticulum.constant.TransportConstant.PATH_REQUEST_GRACE;
+import static io.reticulum.constant.TransportConstant.PATH_REQUEST_TIMEOUT;
 import static io.reticulum.constant.TransportConstant.ROAMING_PATH_TIME;
 import static io.reticulum.destination.DestinationType.GROUP;
 import static io.reticulum.destination.DestinationType.LINK;
@@ -116,6 +119,7 @@ import static io.reticulum.transport.TransportType.BROADCAST;
 import static io.reticulum.transport.TransportType.TRANSPORT;
 import static io.reticulum.utils.DestinationUtils.hashFromNameAndIdentity;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
+import static io.reticulum.utils.IdentityUtils.getRandomHash;
 import static java.nio.file.StandardOpenOption.CREATE;
 import static java.nio.file.StandardOpenOption.WRITE;
 import static java.util.Objects.isNull;
@@ -154,19 +158,20 @@ public final class Transport implements ExitHandler {
     private final List<ConnectionInterface> localClientInterfaces = new CopyOnWriteArrayList<>();
 
     private final Map<String, AnnounceEntry> announceTable = new ConcurrentHashMap<>();
+    private final Map<String, AnnounceEntry> heldAnnounces = new ConcurrentHashMap<>();
     private final Map<String, RateEntry> announceRateTable = new ConcurrentHashMap<>();
     private final List<AnnounceHandler> announceHandlers = new CopyOnWriteArrayList<>();
     private final Queue<AnnounceQueueEntry> announceQueue = new ConcurrentLinkedQueue<>();
     private final Map<String, Hops> destinationTable = new ConcurrentHashMap<>();
     private final Map<String, ReversEntry> reverseTable = new ConcurrentHashMap<>();
     private final Map<String, LinkEntry> linkTable = new ConcurrentHashMap<>();
-    private final Map<?, ?> heldAnnounces = new ConcurrentHashMap<>();
     private final Map<String, Tunnel> tunnels = new ConcurrentHashMap<>();
     private final List<Link> activeLinks = new CopyOnWriteArrayList<>();
     private final List<Link> pendingLinks = new CopyOnWriteArrayList<>();
     private final Map<String, ConnectionInterface> pendingLocalPathRequests = new ConcurrentHashMap<>();
     private final Map<String, PathRequestEntry> discoveryPathRequests = new ConcurrentHashMap<>();
     private final List<byte[]> packetHashList = new CopyOnWriteArrayList<>();
+    private final List<byte[]> discoveryPrTags = new CopyOnWriteArrayList<>();
     private final List<PacketReceipt> receipts = new CopyOnWriteArrayList<>();
 
     //Transport control destinations are used for control purposes like path requests
@@ -1694,8 +1699,7 @@ public final class Transport implements ExitHandler {
 
                                                 var waitTime = Math.max(Duration.between(Instant.now(), anInterface.getAnnounceAllowedAt()).toMillis(), 0);
                                                 if (isFalse(queuedAnnounces)) {
-                                                    Executors.newSingleThreadScheduledExecutor()
-                                                            .scheduleAtFixedRate(anInterface::processAnnounceQueue, 0, waitTime, TimeUnit.MILLISECONDS);
+                                                    Executors.defaultThreadFactory().newThread(anInterface::processAnnounceQueue).start();
                                                 }
                                                 log.debug(
                                                         "Added announce to queue (height {}) on {} for processing in {} ms",
@@ -2010,6 +2014,206 @@ public final class Transport implements ExitHandler {
     }
 
     private void pathRequestHandler(byte[] data, Packet packet) {
+        try {
+            // If there is at least bytes enough for a destination
+            // hash in the packet, we assume those bytes are the
+            // destination being requested.
+            if (getLength(data) >= TRUNCATED_HASHLENGTH / 8) {
+                var destinationHash = subarray(data, 0, TRUNCATED_HASHLENGTH / 8);
+                // If there is also enough bytes for a transport
+                // instance ID and at least one tag byte, we
+                // assume the next bytes to be the trasport ID
+                // of the requesting transport instance.
+                var requestTransportInstance = getLength(data) > (TRUNCATED_HASHLENGTH / 8 * 2)
+                        ? subarray(data, TRUNCATED_HASHLENGTH / 8, TRUNCATED_HASHLENGTH / 8 * 2)
+                        : null;
+                byte[] tagBytes = null;
+                if (getLength(data) > (TRUNCATED_HASHLENGTH / 8 * 2)) {
+                    tagBytes = subarray(data, TRUNCATED_HASHLENGTH / 8 * 2, data.length);
+                } else if (getLength(data) > (TRUNCATED_HASHLENGTH / 8)) {
+                    tagBytes = subarray(data, TRUNCATED_HASHLENGTH / 8, data.length);
+                }
+
+                if (nonNull(tagBytes)) {
+                    if (tagBytes.length > (TRUNCATED_HASHLENGTH / 8)) {
+                        tagBytes = subarray(tagBytes, 0, TRUNCATED_HASHLENGTH / 8);
+                    }
+
+                    var uniqueTag = concatArrays(destinationHash, tagBytes);
+                    if (discoveryPrTags.stream().noneMatch(bytes -> Arrays.equals(bytes, uniqueTag))) {
+                        discoveryPrTags.add(uniqueTag);
+
+                        pathRequest(
+                                destinationHash,
+                                fromLocalClient(packet),
+                                packet.getReceivingInterface(),
+                                requestTransportInstance,
+                                tagBytes
+                        );
+                    } else {
+                        log.debug("Ignoring duplicate path request for {} with tag {}",
+                                Hex.encodeHexString(destinationHash), Hex.encodeHexString(uniqueTag));
+                    }
+                } else {
+                    log.debug("Ignoring tagless path request for {}.", Hex.encodeHexString(destinationHash));
+                }
+            }
+        } catch (Exception e) {
+            log.error("Error while handling path request.", e);
+        }
+    }
+
+    private void pathRequest(
+            byte[] destinationHash,
+            boolean isFromLocalClient,
+            ConnectionInterface attachedInterface,
+            byte[] requestorTransportId,
+            byte[] tag
+    ) {
+        var shouldSearchForUnknown = false;
+
+        if (nonNull(attachedInterface)) {
+            if (owner.isTransportEnabled() && DISCOVER_PATHS_FOR.contains(attachedInterface.getMode())) {
+                shouldSearchForUnknown = true;
+            }
+        }
+
+        log.debug("Path request for {} on {}", Hex.encodeHexString(destinationHash), attachedInterface);
+
+        if (localClientInterfaces.size() > 0) {
+            if (destinationTable.containsKey(Hex.encodeHexString(destinationHash))) {
+                var destinationInterface = destinationTable.get(Hex.encodeHexString(destinationHash)).getInterface();
+
+                if (isLocalClientInterface(destinationInterface)) {
+                    pendingLocalPathRequests.put(
+                            Hex.encodeHexString(destinationHash),
+                            attachedInterface
+                    );
+                }
+            }
+        }
+
+        var localDestination = destinations.stream()
+                .filter(destination -> Arrays.equals(destination.getHash(), destinationHash))
+                .findFirst()
+                .orElse(null);
+        if (nonNull(localDestination)) {
+            localDestination.announce(true, tag, attachedInterface);
+
+            log.debug("Answering path request for {} on {}, destination is local to this system",
+                    Hex.encodeHexString(destinationHash), attachedInterface);
+        } else if (
+                (getOwner().isTransportEnabled() || isFromLocalClient)
+                && destinationTable.containsKey(Hex.encodeHexString(destinationHash))
+        ) {
+            var hopEntry = destinationTable.get(Hex.encodeHexString(destinationHash));
+            var packet = hopEntry.getPacket();
+            var nextHop = hopEntry.getVia();
+            var receivedFrom = hopEntry.getPacket().getTransportId(); //todo в питоне тут ошибка
+
+            if (nonNull(requestorTransportId) && Arrays.equals(requestorTransportId, nextHop)) {
+                // TODO: Find a bandwidth efficient way to invalidate our
+                // known path on this signal. The obvious way of signing
+                // path requests with transport instance keys is quite
+                // inefficient. There is probably a better way. Doing
+                // path invalidation here would decrease the network
+                // convergence time. Maybe just drop it?
+                log.debug("Not answering path request for {}, since next hop is the requestor", Hex.encodeHexString(destinationHash));
+            } else {
+                log.debug("Answering path request for {} on {}", Hex.encodeHexString(destinationHash), attachedInterface);
+
+                var now = Instant.now();
+                var retries = PATHFINDER_R;
+                var localRebroadcasts = 0;
+                var blockRebroadcasts = true;
+                var announceHops = packet.getHops();
+                var retransmitTimeout = isFromLocalClient ? now : now.plusMillis(PATH_REQUEST_GRACE);
+
+                // This handles an edge case where a peer sends a past
+                // request for a destination just after an announce for
+                // said destination has arrived, but before it has been
+                // rebroadcast locally. In such a case the actual announce
+                // is temporarily held, and then reinserted when the path
+                // request has been served to the peer.
+                if (announceTable.containsKey(Hex.encodeHexString(destinationHash))) {
+                    var heldEntry = announceTable.get(Hex.encodeHexString(destinationHash));
+                    heldAnnounces.put(Hex.encodeHexString(destinationHash), heldEntry);
+                }
+
+                announceTable.put(
+                        Hex.encodeHexString(destinationHash),
+                        AnnounceEntry.builder()
+                                .timestamp(now)
+                                .retransmitTimeout(retransmitTimeout)
+                                .retries(retries)
+                                .transportId(receivedFrom)
+                                .hops(announceHops)
+                                .localRebroadcasts(localRebroadcasts)
+                                .blockRebroadcasts(blockRebroadcasts)
+                                .packet(packet)
+                                .attachedInterface(attachedInterface)
+                                .build()
+                );
+            }
+        } else if (isFromLocalClient) {
+            //Forward path request on all interfaces except the local client
+            log.debug("Forwarding path request from local client for {} on {} to all other interfaces",
+                    Hex.encodeHexString(destinationHash), attachedInterface);
+            var requestTag = getRandomHash();
+            for (ConnectionInterface connectionInterface : interfaces) {
+                if (isFalse(Objects.equals(connectionInterface, attachedInterface))) {
+                    requestPath(destinationHash, connectionInterface, requestTag, false);
+                }
+            }
+        } else if (shouldSearchForUnknown) {
+            if (discoveryPathRequests.containsKey(Hex.encodeHexString(destinationHash))) {
+                log.debug("There is already a waiting path request for {} on behalf of path request on {}",
+                        Hex.encodeHexString(destinationHash), attachedInterface);
+
+            } else {
+                //Forward path request on all interfaces except the requestor interface
+                log.debug("Attempting to discover unknown path to {} on behalf of path request on {}",
+                        Hex.encodeHexString(destinationHash), attachedInterface);
+
+                discoveryPathRequests.put(Hex.encodeHexString(destinationHash),
+                        PathRequestEntry.builder()
+                                .destinationHash(destinationHash)
+                                .timeout(Instant.now().plusSeconds(PATH_REQUEST_TIMEOUT))
+                                .requestingInterface(attachedInterface)
+                                .build()
+                );
+
+                for (ConnectionInterface connectionInterface : interfaces) {
+                    if (isFalse(Objects.equals(connectionInterface, attachedInterface))) {
+                        //Use the previously extracted tag from this path request
+                        // on the new path requests as well, to avoid potential loops
+                        requestPath(destinationHash, connectionInterface, tag, true);
+                    }
+                }
+            }
+        } else if (isFalse(isFromLocalClient) && localClientInterfaces.size() > 0) {
+            //Forward the path request on all local client interfaces
+            log.debug("Forwarding path request for {} on {} to local clients", Hex.encodeHexString(destinationHash), attachedInterface);
+            for (ConnectionInterface connectionInterface : localClientInterfaces) {
+                requestPath(destinationHash, connectionInterface, null, false);
+            }
+        } else {
+            log.debug("Ignoring path request for {} on {}, no path known", Hex.encodeHexString(destinationHash), attachedInterface);
+        }
+    }
+
+    /**
+     * @param destinationHash non null
+     * @param onInterface default is null
+     * @param tag default is null
+     * @param recursive default is false
+     */
+    private void requestPath(
+            @NonNull byte[] destinationHash,
+            ConnectionInterface onInterface,
+            byte[] tag,
+            boolean recursive
+    ) {
 
     }
 
