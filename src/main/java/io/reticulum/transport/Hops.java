@@ -9,7 +9,7 @@ import java.time.Instant;
 import java.util.List;
 
 @Data
-@Builder
+@Builder(toBuilder = true)
 public class Hops {
     private Instant timestamp; //0
     private byte[] via; //1

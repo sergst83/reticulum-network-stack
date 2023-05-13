@@ -18,8 +18,10 @@ import io.reticulum.transport.PathRequestEntry;
 import io.reticulum.transport.RateEntry;
 import io.reticulum.transport.ReversEntry;
 import io.reticulum.transport.Tunnel;
+import io.reticulum.utils.IdentityUtils;
 import lombok.Getter;
 import lombok.NonNull;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.collections4.CollectionUtils;
@@ -66,6 +68,7 @@ import static io.reticulum.constant.LinkConstant.ECPUBSIZE;
 import static io.reticulum.constant.LinkConstant.ESTABLISHMENT_TIMEOUT_PER_HOP;
 import static io.reticulum.constant.PacketConstant.EXPL_LENGTH;
 import static io.reticulum.constant.ReticulumConstant.ANNOUNCE_CAP;
+import static io.reticulum.constant.ReticulumConstant.HEADER_MINSIZE;
 import static io.reticulum.constant.ReticulumConstant.MAX_QUEUED_ANNOUNCES;
 import static io.reticulum.constant.ReticulumConstant.MTU;
 import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
@@ -119,6 +122,7 @@ import static io.reticulum.transport.TransportType.BROADCAST;
 import static io.reticulum.transport.TransportType.TRANSPORT;
 import static io.reticulum.utils.DestinationUtils.hashFromNameAndIdentity;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
+import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.utils.IdentityUtils.getRandomHash;
 import static java.nio.file.StandardOpenOption.CREATE;
 import static java.nio.file.StandardOpenOption.WRITE;
@@ -162,6 +166,7 @@ public final class Transport implements ExitHandler {
     private final Map<String, RateEntry> announceRateTable = new ConcurrentHashMap<>();
     private final List<AnnounceHandler> announceHandlers = new CopyOnWriteArrayList<>();
     private final Queue<AnnounceQueueEntry> announceQueue = new ConcurrentLinkedQueue<>();
+    private final Map<String, Instant> pathRequests = new ConcurrentHashMap<>();
     private final Map<String, Hops> destinationTable = new ConcurrentHashMap<>();
     private final Map<String, ReversEntry> reverseTable = new ConcurrentHashMap<>();
     private final Map<String, LinkEntry> linkTable = new ConcurrentHashMap<>();
@@ -235,7 +240,7 @@ public final class Transport implements ExitHandler {
             var destinationTablePath = owner.getStoragePath().resolve("destination_table");
             if (Files.isReadable(destinationTablePath) && isFalse(owner.isConnectedToSharedInstance())) {
                 try (var unpacker = MessagePack.newDefaultUnpacker(Files.readAllBytes(destinationTablePath))) {
-                    for (Value value: unpacker.unpackValue().asArrayValue().list()) {
+                    for (Value value : unpacker.unpackValue().asArrayValue().list()) {
                         var serialisedEntry = value.asArrayValue();
 
                         var destinationHash = serialisedEntry.get(0).asBinaryValue().asByteArray();
@@ -290,7 +295,7 @@ public final class Transport implements ExitHandler {
             var tunnelTablePath = owner.getStoragePath().resolve("tunnels");
             if (Files.isReadable(tunnelTablePath) && isFalse(owner.isConnectedToSharedInstance())) {
                 try (var unpacker = MessagePack.newDefaultUnpacker(Files.readAllBytes(tunnelTablePath))) {
-                    for (Value value: unpacker.unpackValue().asArrayValue()) {
+                    for (Value value : unpacker.unpackValue().asArrayValue()) {
                         var serialisedTunnel = value.asArrayValue();
 
                         var tunnelId = serialisedTunnel.get(0).asBinaryValue().asByteArray();
@@ -1445,7 +1450,7 @@ public final class Transport implements ExitHandler {
                     //Check if this proof neds to be transported
                     if (
                             (owner.isTransportEnabled() || fromLocalClient || proofForLocalClient)
-                                && reverseTable.containsKey(Hex.encodeHexString(packet.getDestinationHash()))
+                                    && reverseTable.containsKey(Hex.encodeHexString(packet.getDestinationHash()))
                     ) {
                         var reverseEntry = reverseTable.remove(Hex.encodeHexString(packet.getDestinationHash()));
                         if (Objects.equals(packet.getReceivingInterface(), reverseEntry.getOutboundInterface())) {
@@ -1497,9 +1502,9 @@ public final class Transport implements ExitHandler {
         //Check if we have a known path for the destination in the path table
         if (
                 packet.getPacketType() != ANNOUNCE
-                && packet.getDestination().getType() != PLAIN
-                && packet.getDestination().getType() != GROUP
-                && destinationTable.containsKey(Hex.encodeHexString(packet.getDestinationHash()))
+                        && packet.getDestination().getType() != PLAIN
+                        && packet.getDestination().getType() != GROUP
+                        && destinationTable.containsKey(Hex.encodeHexString(packet.getDestinationHash()))
         ) {
             var hopsEntry = destinationTable.get(Hex.encodeHexString(packet.getDestinationHash()));
             var outboundInterface = hopsEntry.getInterface();
@@ -1608,7 +1613,7 @@ public final class Transport implements ExitHandler {
                                             log.debug("Blocking announce broadcast on {} due to roaming-mode next-hop interface",
                                                     anInterface.getInterfaceName());
                                             shouldTransmit = false;
-                                        } else if (fromInterface.getMode() == MODE_BOUNDARY){
+                                        } else if (fromInterface.getMode() == MODE_BOUNDARY) {
                                             log.debug("Blocking announce broadcast on {}  due to boundary-mode next-hop interfacee",
                                                     anInterface.getInterfaceName());
                                             shouldTransmit = false;
@@ -1742,10 +1747,10 @@ public final class Transport implements ExitHandler {
             //Don't generate receipt if it has been explicitly disabled
             if (
                     isTrue(packet.isCreateReceipt())
-                    && packet.getPacketType() == DATA //Only generate receipts for DATA packets
-                    && packet.getDestination().getType() == PLAIN //Don't generate receipts for PLAIN destinations
-                    && isFalse(packet.getContext().getValue() >= KEEPALIVE.getValue() && packet.getContext().getValue() <= LRPROOF.getValue()) //Don't generate receipts for link-related packets
-                    && isFalse(packet.getContext().getValue() >= RESOURCE.getValue() && packet.getContext().getValue() <= RESOURCE_RCL.getValue()) //Don't generate receipts for resource packets
+                            && packet.getPacketType() == DATA //Only generate receipts for DATA packets
+                            && packet.getDestination().getType() == PLAIN //Don't generate receipts for PLAIN destinations
+                            && isFalse(packet.getContext().getValue() >= KEEPALIVE.getValue() && packet.getContext().getValue() <= LRPROOF.getValue()) //Don't generate receipts for link-related packets
+                            && isFalse(packet.getContext().getValue() >= RESOURCE.getValue() && packet.getContext().getValue() <= RESOURCE_RCL.getValue()) //Don't generate receipts for resource packets
             ) {
                 packet.setReceipt(new PacketReceipt(packet));
                 receipts.add(packet.getReceipt());
@@ -2104,7 +2109,7 @@ public final class Transport implements ExitHandler {
                     Hex.encodeHexString(destinationHash), attachedInterface);
         } else if (
                 (getOwner().isTransportEnabled() || isFromLocalClient)
-                && destinationTable.containsKey(Hex.encodeHexString(destinationHash))
+                        && destinationTable.containsKey(Hex.encodeHexString(destinationHash))
         ) {
             var hopEntry = destinationTable.get(Hex.encodeHexString(destinationHash));
             var packet = hopEntry.getPacket();
@@ -2203,10 +2208,15 @@ public final class Transport implements ExitHandler {
     }
 
     /**
+     * Requests a path to the destination from the network. If
+     * another reachable peer on the network knows a path, it
+     * will announce it.
+     *
      * @param destinationHash non null
-     * @param onInterface default is null
-     * @param tag default is null
-     * @param recursive default is false
+     * @param onInterface     default is null. If specified, the path request will only be sent on this interface.
+     *                        In normal use, Reticulum handles this automatically, and this parameter should not be used
+     * @param tag             default is null
+     * @param recursive       default is false
      */
     private void requestPath(
             @NonNull byte[] destinationHash,
@@ -2214,11 +2224,136 @@ public final class Transport implements ExitHandler {
             byte[] tag,
             boolean recursive
     ) {
+        var requestTag = Objects.requireNonNullElseGet(tag, IdentityUtils::getRandomHash);
+        var pathRequestData = owner.isTransportEnabled()
+                ? concatArrays(destinationHash, identity.getHash(), requestTag)
+                : concatArrays(destinationHash, requestTag);
 
+        var pathRequestDst = new Destination(null, OUT, PLAIN, APP_NAME, "path", "request");
+        var packet = new Packet(pathRequestDst, pathRequestData, DATA, onInterface);
+
+        if (nonNull(onInterface) && recursive) {
+            var queuedAnnounces = CollectionUtils.isNotEmpty(onInterface.getAnnounceQueue());
+            if (queuedAnnounces) {
+                log.debug("Blocking recursive path request on {}  due to queued announces", onInterface);
+                return;
+            } else {
+                var now = Instant.now();
+                if (now.isBefore(onInterface.getAnnounceAllowedAt())) {
+                    log.debug("Blocking recursive path request on {} due to active announce cap", onInterface);
+                    return;
+                } else {
+                    var txTime = (pathRequestData.length + HEADER_MINSIZE) * 8 / onInterface.getBitrate();
+                    var waitTime = (long) (txTime / onInterface.getAnnounceCap());
+                    onInterface.setAnnounceAllowedAt(now.plusSeconds(waitTime));
+                }
+            }
+        }
+
+        packet.send();
+        pathRequests.put(Hex.encodeHexString(destinationHash), Instant.now());
     }
 
     private void tunnelSynthesizeHandler(byte[] data, Packet packet) {
+        try {
+            var expectedLength = (KEYSIZE + HASHLENGTH + TRUNCATED_HASHLENGTH + SIGLENGTH) / 8;
+            if (getLength(data) == expectedLength) {
+                var publicKey = subarray(data, 0, KEYSIZE / 8);
+                var interfaceHash = subarray(data, KEYSIZE / 8, (KEYSIZE + HASHLENGTH) / 8);
+                var tunnelIdData = concatArrays(publicKey, interfaceHash);
+                var tunnelId = fullHash(tunnelIdData);
+                var randomHash = subarray(data, (KEYSIZE + HASHLENGTH) / 8, (KEYSIZE + HASHLENGTH + TRUNCATED_HASHLENGTH) / 8);
 
+                var signature = subarray(data, (KEYSIZE + HASHLENGTH + TRUNCATED_HASHLENGTH) / 8, expectedLength);
+                var signedData = concatArrays(tunnelIdData, randomHash);
+
+                var remoteTransportIdentity = new Identity(false);
+                remoteTransportIdentity.loadPublicKey(publicKey);
+
+                if (remoteTransportIdentity.validate(signature, signedData)) {
+                    handleTunnel(tunnelId, packet.getReceivingInterface());
+                }
+            }
+        } catch (Exception e) {
+            log.error("An error occurred while validating tunnel establishment packet.", e);
+        }
+    }
+
+    @SneakyThrows
+    private void handleTunnel(byte[] tunnelId, ConnectionInterface iface) {
+        var expires = Instant.now().plusSeconds(DESTINATION_TIMEOUT);
+        Map<String, Hops> paths = new HashMap<>();
+        if (isFalse(tunnels.containsKey(Hex.encodeHexString(tunnelId)))) {
+            log.debug("Tunnel endpoint {} established.", Hex.encodeHexString(tunnelId));
+            iface.setTunnelId(tunnelId);
+            tunnels.put(
+                    Hex.encodeHexString(tunnelId),
+                    Tunnel.builder()
+                            .tunnelId(tunnelId)
+                            .expires(expires)
+                            .tunnelPaths(paths)
+                            .anInterface(iface)
+                            .build()
+            );
+        } else {
+            log.debug("Tunnel endpoint {} reappeared. Restoring paths...", Hex.encodeHexString(tunnelId));
+            var tunnelEntry = tunnels.get(Hex.encodeHexString(tunnelId));
+            tunnelEntry.setAnInterface(iface);
+            tunnelEntry.setExpires(expires);
+            iface.setTunnelId(tunnelId);
+            paths = tunnelEntry.getTunnelPaths();
+
+            var deprecatedPaths = new LinkedList<byte[]>();
+            for (Map.Entry<String, Hops> entry : paths.entrySet()) {
+                var destinationHash = Hex.decodeHex(entry.getKey());
+                var pathEntry = entry.getValue();
+                var packet = pathEntry.getPacket();
+                var announceHops = pathEntry.getHops();
+                expires = pathEntry.getExpires();
+
+                var shouldAdd = false;
+                if (destinationTable.containsKey(Hex.encodeHexString(destinationHash))) {
+                    var oldEntry = destinationTable.get(Hex.encodeHexString(destinationHash));
+                    var oldHops = oldEntry.getHops();
+                    var oldExpires = oldEntry.getExpires();
+                    if (announceHops < oldHops || Instant.now().isAfter(oldExpires)) {
+                        shouldAdd = true;
+                    } else {
+                        log.debug("Did not restore path to {} because a newer path with fewer hops exist", Hex.encodeHexString(packet.getDestinationHash()));
+                    }
+                } else {
+                    if (Instant.now().isBefore(expires)) {
+                        shouldAdd = true;
+                    } else {
+                        log.debug("Did not restore path to {} because it has expired", Hex.encodeHexString(packet.getDestinationHash()));
+                    }
+                }
+
+                if (shouldAdd) {
+                    destinationTable.put(
+                            Hex.encodeHexString(destinationHash),
+                            pathEntry.toBuilder()
+                                    .timestamp(Instant.now())
+                                    .anInterface(iface)
+                                    .build()
+                    );
+
+                    log.debug(
+                            "Restored path to {} is now {} hops away via {}",
+                            Hex.encodeHexString(packet.getDestinationHash()),
+                            announceHops,
+                            Hex.encodeHexString(pathEntry.getVia())
+                    );
+                } else {
+                    deprecatedPaths.add(destinationHash);
+                }
+            }
+
+            for (byte[] deprecatedPath : deprecatedPaths) {
+                log.debug("Removing path to {} from tunnel {}", Hex.encodeHexString(deprecatedPath), Hex.encodeHexString(tunnelId));
+                paths.remove(Hex.encodeHexString(deprecatedPath));
+            }
+        }
     }
 
     private void synthesizeTunnel(ConnectionInterface anInterface) {
@@ -2226,6 +2361,19 @@ public final class Transport implements ExitHandler {
     }
 
     private void jobs() {
+        List<?> outgoing = new LinkedList<>();
+        List<?> pathRequests = new LinkedList<>();
 
+        try {
+            if (jobsLocked.tryLock()) {
+
+                //Process active and pending link lists
+                if (Instant.now().isAfter()) {
+                    for (Link pendingLink : pendingLinks) {
+
+                    }
+                }
+            }
+        }
     }
 }

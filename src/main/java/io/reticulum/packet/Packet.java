@@ -249,8 +249,8 @@ public class Packet implements TPacket {
         this(destination, data, packetType, context, attachedInterface, true);
     }
 
-    public Packet(Destination destination, byte[] proofData, PacketType proof, ConnectionInterface attachedInterface) {
-        this(destination, proofData, proof, null, attachedInterface);
+    public Packet(Destination destination, byte[] data, PacketType packetType, ConnectionInterface attachedInterface) {
+        this(destination, data, packetType, null, attachedInterface);
     }
 
     public Packet(Destination destination, byte[] requestData, PacketType linkRequest) {

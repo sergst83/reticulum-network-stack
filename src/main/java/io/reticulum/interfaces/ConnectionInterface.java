@@ -117,6 +117,11 @@ public interface ConnectionInterface {
 
     void processAnnounceQueue();
 
+    /**
+     * Have to be threadsafe
+     *
+     * @param tunnelId
+     */
     default void setTunnelId(byte[] tunnelId) {}
 
     default boolean wantsTunnel() {
