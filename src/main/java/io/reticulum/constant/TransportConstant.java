@@ -44,7 +44,7 @@ public class TransportConstant {
     public static final int PATH_REQUEST_RW = 2;         // Path request random window
     public static final int PATH_REQUEST_MI = 5;       // Minimum interval in seconds for automated path requests
 
-    public static final double LINK_TIMEOUT = STALE_TIME * 1.25;
+    public static final long LINK_TIMEOUT = (long) (STALE_TIME * 1.25);
     public static final int REVERSE_TIMEOUT = 30 * 60;     // Reverse table entries are removed after 30 minutes
     public static final int DESTINATION_TIMEOUT = 60 * 60 * 24 * 7;   // Destination table entries are removed if unused for one week
     public static final int MAX_RECEIPTS = 1024;   // Maximum number of receipts to keep track of
@@ -52,5 +52,7 @@ public class TransportConstant {
     public static final int LOCAL_CLIENT_CACHE_MAXSIZE = 512; //
     public static final long LINKS_CHECK_INTERVAL = 1000; //ms
     public static final long ANNOUNCES_CHECK_INTERVAL = 1000; //ms
+    public static final int MAX_PR_TAGS = 32_000;
+    public static final long TABLES_CULL_INTERVAL = 5_000; //ms
 
 }

@@ -79,8 +79,10 @@ import static io.reticulum.constant.TransportConstant.DESTINATION_TIMEOUT;
 import static io.reticulum.constant.TransportConstant.DISCOVER_PATHS_FOR;
 import static io.reticulum.constant.TransportConstant.JOB_INTERVAL;
 import static io.reticulum.constant.TransportConstant.LINKS_CHECK_INTERVAL;
+import static io.reticulum.constant.TransportConstant.LINK_TIMEOUT;
 import static io.reticulum.constant.TransportConstant.LOCAL_CLIENT_CACHE_MAXSIZE;
 import static io.reticulum.constant.TransportConstant.LOCAL_REBROADCASTS_MAX;
+import static io.reticulum.constant.TransportConstant.MAX_PR_TAGS;
 import static io.reticulum.constant.TransportConstant.MAX_RATE_TIMESTAMPS;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_E;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_G;
@@ -90,7 +92,9 @@ import static io.reticulum.constant.TransportConstant.PATHFINDER_RW;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_GRACE;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_MI;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_TIMEOUT;
+import static io.reticulum.constant.TransportConstant.REVERSE_TIMEOUT;
 import static io.reticulum.constant.TransportConstant.ROAMING_PATH_TIME;
+import static io.reticulum.constant.TransportConstant.TABLES_CULL_INTERVAL;
 import static io.reticulum.destination.DestinationType.GROUP;
 import static io.reticulum.destination.DestinationType.LINK;
 import static io.reticulum.destination.DestinationType.PLAIN;
@@ -153,6 +157,7 @@ public final class Transport implements ExitHandler {
     private final AtomicBoolean jobsRunning = new AtomicBoolean(false);
     private final AtomicReference<Instant> linksLastChecked = new AtomicReference<>();
     private final AtomicReference<Instant> announcesLastChecked = new AtomicReference<>();
+    private final AtomicReference<Instant> tablesLastCulled = new AtomicReference<>(Instant.EPOCH);
 
     private static volatile Transport INSTANCE;
     @Getter
@@ -2403,11 +2408,7 @@ public final class Transport implements ExitHandler {
                         }
                     }
 
-                    for (Link link : activeLinks) {
-                        if (link.getStatus() == CLOSED) {
-                            activeLinks.remove(link);
-                        }
-                    }
+                    activeLinks.removeIf(link -> link.getStatus() == CLOSED);
 
                     linksLastChecked.set(Instant.now());
                 }
@@ -2473,12 +2474,170 @@ public final class Transport implements ExitHandler {
                 }
 
                 //Cull the packet hashlist if it has reached its max size
+                if (discoveryPrTags.size() > MAX_PR_TAGS) {
+                    var list = discoveryPrTags.subList(discoveryPrTags.size() - MAX_PR_TAGS, discoveryPrTags.size() - 1);
+                    discoveryPrTags.clear();
+                    discoveryPrTags.addAll(list);
+                }
+
+                if (Instant.now().isAfter(tablesLastCulled.get().plusMillis(TABLES_CULL_INTERVAL))) {
+                    //Cull the reverse table according to timeout
+                    List<String> staleReverseEntries = new LinkedList<>();
+                    for (String truncatedPacketHashHex : reverseTable.keySet()) {
+                        var reverseEntry = reverseTable.get(truncatedPacketHashHex);
+                        if (Instant.now().isAfter(reverseEntry.getTimestamp().plusSeconds(REVERSE_TIMEOUT))) {
+                            staleReverseEntries.add(truncatedPacketHashHex);
+                        }
+                    }
+
+                    //Cull the link table according to timeout
+                    List<String> staleLinks = new LinkedList<>();
+                    for (String linkIdHex : linkTable.keySet()) {
+                        var linkEntry = linkTable.get(linkIdHex);
+
+                        if (linkEntry.isValidated()) {
+                            if (Instant.now().isAfter(linkEntry.getTimestamp().plusSeconds(LINK_TIMEOUT))) {
+                                staleLinks.add(linkIdHex);
+                            }
+                        } else {
+                            if (Instant.now().isAfter(linkEntry.getProofTimestamp())) {
+                                staleLinks.add(linkIdHex);
+
+                                var lastPathRequest = pathRequests.getOrDefault(
+                                        Hex.encodeHexString(linkEntry.getDestinationHash()),
+                                        Instant.EPOCH
+                                );
+
+                                // If this link request was originated from a local client
+                                // attempt to rediscover a path to the destination, if this
+                                // has not already happened recently.
+                                var lrTokenHops = linkEntry.getHops();
+                                if (lrTokenHops == 0 && Duration.between(lastPathRequest, Instant.now()).toSeconds() > PATH_REQUEST_MI) {
+                                    log.debug("Trying to rediscover path for {} since an attempted local client link was never established",
+                                            Hex.encodeHexString(linkEntry.getDestinationHash()));
+                                    if (pathRequestList.stream().noneMatch(bytes -> Arrays.equals(bytes, linkEntry.getDestinationHash()))) {
+                                        pathRequestList.add(linkEntry.getDestinationHash());
+                                    }
+
+                                    if (isFalse(owner.isTransportEnabled())) {
+                                        // Drop current path if we are not a transport instance, to
+                                        // allow using higher-hop count paths or reused announces
+                                        // from newly adjacent transport instances.
+                                        expirePath(linkEntry.getDestinationHash());
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    //Cull the path table
+                    List<String> stalePaths = new LinkedList<>();
+                    for (String destinationHashHex : destinationTable.keySet()) {
+                        var destinationEntry = destinationTable.get(destinationHashHex);
+                        var attachedInterface = destinationEntry.getInterface();
+
+                        Instant destinationExpiry;
+                        if (nonNull(attachedInterface) && attachedInterface.getMode() == MODE_ACCESS_POINT) {
+                            destinationExpiry = destinationEntry.getTimestamp().plusSeconds(AP_PATH_TIME);
+                        } else if (nonNull(attachedInterface) && attachedInterface.getMode() == MODE_ROAMING) {
+                            destinationExpiry = destinationEntry.getTimestamp().plusSeconds(ROAMING_PATH_TIME);
+                        } else {
+                            destinationExpiry = destinationEntry.getTimestamp().plusSeconds(DESTINATION_TIMEOUT);
+                        }
+
+                        if (Instant.now().isAfter(destinationExpiry)) {
+                            stalePaths.add(destinationHashHex);
+                            log.debug("Path to {} timed out and was removed", destinationHashHex);
+                        } else if (isFalse(interfaces.contains(attachedInterface))) {
+                            stalePaths.add(destinationHashHex);
+                            log.debug("Path to {} was removed since the attached interface no longer exists", destinationHashHex);
+                        }
+                    }
+
+                    //Cull the pending discovery path requests table
+                    List<String> staleDiscoveryPathRequests = new LinkedList<>();
+                    for (String destinationHashHex : discoveryPathRequests.keySet()) {
+                        var entry = discoveryPathRequests.get(destinationHashHex);
+
+                        if (Instant.now().isAfter(entry.getTimeout())) {
+                            staleDiscoveryPathRequests.add(destinationHashHex);
+                            log.debug("Waiting path request for {} timed out and was removed", destinationHashHex);
+                        }
+                    }
+
+                    //Cull the tunnel table
+                    List<String> staleTunnels = new LinkedList<>();
+                    var ti = 0;
+                    for (String tunnelIdHex : tunnels.keySet()) {
+                        var tunnelEntry = tunnels.get(tunnelIdHex);
+
+                        var expires = tunnelEntry.getExpires();
+                        if (Instant.now().isAfter(expires)) {
+                            staleTunnels.add(tunnelIdHex);
+                            log.debug("Tunnel {} timed out and was removed", tunnelIdHex);
+                        } else {
+                            List<String> staleTunnelPaths = new LinkedList<>();
+                            var tunnelPaths = tunnelEntry.getTunnelPaths();
+                            for (String tunnelPath : tunnelPaths.keySet()) {
+                                var tunnelPathEntry = tunnelPaths.get(tunnelPath);
+
+                                if (Instant.now().isAfter(tunnelPathEntry.getTimestamp().plusSeconds(DESTINATION_TIMEOUT))) {
+                                    staleTunnelPaths.add(tunnelPath);
+                                    log.debug("Tunnel path to {} timed out and was removed", tunnelPath);
+                                }
+                            }
+
+                            for (String staleTunnelPath : staleTunnelPaths) {
+                                tunnelPaths.remove(staleTunnelPath);
+                                ti++;
+                            }
+                        }
+                    }
+
+                    if (ti > 0) {
+                        log.debug("Removed {} tunnel paths", ti);
+                    }
+
+                    staleReverseEntries.forEach(reverseTable::remove);
+                    if (isFalse(staleReverseEntries.isEmpty())) {
+                        log.debug("Released {} reverse table entries", staleReverseEntries.size());
+                    }
+
+                    staleLinks.forEach(linkTable::remove);
+                    if (isFalse(staleLinks.isEmpty())) {
+                        log.debug("Released {} links", staleLinks.size());
+                    }
+
+                    stalePaths.forEach(destinationTable::remove);
+                    if (isFalse(stalePaths.isEmpty())) {
+                        log.debug("Removed {} waiting path requests", stalePaths.size());
+                    }
+
+                    staleDiscoveryPathRequests.forEach(discoveryPathRequests::remove);
+                    if (isFalse(staleDiscoveryPathRequests.isEmpty())) {
+                        log.debug("Removed {} waiting path requests", staleDiscoveryPathRequests.size());
+                    }
+
+                    staleTunnels.forEach(tunnels::remove);
+                    if (isFalse(staleTunnels.isEmpty())) {
+                        log.debug("Removed {} tunnels", staleTunnels.size());
+                    }
+
+                    tablesLastCulled.set(Instant.now());
+                }
+
+                jobsLocked.unlock();
+            } else {
+                //Transport jobs were locked, do nothing
             }
         } catch (Exception e) {
             log.error("An exception occurred while running Transport jobs.", e);
         }
 
         jobsRunning.set(false);
+
+        outgoing.forEach(Packet::send);
+        pathRequestList.forEach(destinationHash -> requestPath(destinationHash, null, null, false));
     }
 
     private void expirePath(byte[] destinationHash) {
