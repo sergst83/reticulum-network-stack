@@ -70,6 +70,7 @@ import static org.apache.commons.lang3.ArrayUtils.subarray;
 public class Destination extends AbstractDestination {
     private Identity identity;
     private byte[] hash;
+    private String hexHash;
     private boolean acceptLinkRequests = true;
     private DestinationCallbacks callbacks = new DestinationCallbacks();
     private Map<String, RequestHandler> requestHandlers = new ConcurrentHashMap<>();
@@ -81,7 +82,6 @@ public class Destination extends AbstractDestination {
     private List<Link> links = new CopyOnWriteArrayList<>();
     private String name;
     private byte[] nameHash;
-    private String hexhash;
     private byte[] defaultAppData;
     private Object callback;
     private Object proofcallback;
@@ -121,7 +121,7 @@ public class Destination extends AbstractDestination {
                 0,
                 NAME_HASH_LENGTH / 8
         );
-        this.hexhash = Hex.encodeHexString(this.hash);
+        this.hexHash = Hex.encodeHexString(this.hash);
         Transport.getInstance().registerDestination(this);
     }
 
@@ -455,6 +455,6 @@ public class Destination extends AbstractDestination {
 
     @Override
     public String toString() {
-        return "<" + name + "/" + hexhash + ">";
+        return "<" + name + "/" + hexHash + ">";
     }
 }

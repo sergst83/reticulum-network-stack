@@ -5,7 +5,6 @@ import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.ConnectionInterface;
 import io.reticulum.link.Link;
 import io.reticulum.packet.Packet;
-import io.reticulum.packet.PacketContextType;
 import io.reticulum.packet.PacketReceipt;
 import io.reticulum.packet.data.DataPacket;
 import io.reticulum.packet.data.DataPacketConverter;
@@ -57,6 +56,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -72,19 +72,23 @@ import static io.reticulum.constant.ReticulumConstant.HEADER_MINSIZE;
 import static io.reticulum.constant.ReticulumConstant.MAX_QUEUED_ANNOUNCES;
 import static io.reticulum.constant.ReticulumConstant.MTU;
 import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
+import static io.reticulum.constant.TransportConstant.ANNOUNCES_CHECK_INTERVAL;
 import static io.reticulum.constant.TransportConstant.APP_NAME;
 import static io.reticulum.constant.TransportConstant.AP_PATH_TIME;
 import static io.reticulum.constant.TransportConstant.DESTINATION_TIMEOUT;
 import static io.reticulum.constant.TransportConstant.DISCOVER_PATHS_FOR;
 import static io.reticulum.constant.TransportConstant.JOB_INTERVAL;
+import static io.reticulum.constant.TransportConstant.LINKS_CHECK_INTERVAL;
 import static io.reticulum.constant.TransportConstant.LOCAL_CLIENT_CACHE_MAXSIZE;
 import static io.reticulum.constant.TransportConstant.LOCAL_REBROADCASTS_MAX;
 import static io.reticulum.constant.TransportConstant.MAX_RATE_TIMESTAMPS;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_E;
+import static io.reticulum.constant.TransportConstant.PATHFINDER_G;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_M;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_R;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_RW;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_GRACE;
+import static io.reticulum.constant.TransportConstant.PATH_REQUEST_MI;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_TIMEOUT;
 import static io.reticulum.constant.TransportConstant.ROAMING_PATH_TIME;
 import static io.reticulum.destination.DestinationType.GROUP;
@@ -109,6 +113,7 @@ import static io.reticulum.packet.PacketContextType.CACHE_REQUEST;
 import static io.reticulum.packet.PacketContextType.CHANNEL;
 import static io.reticulum.packet.PacketContextType.KEEPALIVE;
 import static io.reticulum.packet.PacketContextType.LRPROOF;
+import static io.reticulum.packet.PacketContextType.NONE;
 import static io.reticulum.packet.PacketContextType.PATH_RESPONSE;
 import static io.reticulum.packet.PacketContextType.RESOURCE;
 import static io.reticulum.packet.PacketContextType.RESOURCE_PRF;
@@ -146,6 +151,8 @@ public final class Transport implements ExitHandler {
     private final Lock savingTunnelTable = new ReentrantLock();
     private final Lock jobsLocked = new ReentrantLock();
     private final AtomicBoolean jobsRunning = new AtomicBoolean(false);
+    private final AtomicReference<Instant> linksLastChecked = new AtomicReference<>();
+    private final AtomicReference<Instant> announcesLastChecked = new AtomicReference<>();
 
     private static volatile Transport INSTANCE;
     @Getter
@@ -1193,8 +1200,8 @@ public final class Transport implements ExitHandler {
                                 var announceIdentity = recall(packet.getDestinationHash());
                                 var announceDestination = new Destination(announceIdentity, OUT, SINGLE, "unknown", "unknown");
                                 announceDestination.setHash(packet.getDestinationHash());
-                                announceDestination.setHexhash(Hex.encodeHexString(announceDestination.getHash()));
-                                var announceContext = PacketContextType.NONE;
+                                announceDestination.setHexHash(Hex.encodeHexString(announceDestination.getHash()));
+                                var announceContext = NONE;
                                 var announceData = packet.getData();
 
                                 // TODO: 11.05.2023 Shouldn't the context be PATH_RESPONSE in the first case here?
@@ -2356,24 +2363,129 @@ public final class Transport implements ExitHandler {
         }
     }
 
-    private void synthesizeTunnel(ConnectionInterface anInterface) {
-
-    }
-
     private void jobs() {
-        List<?> outgoing = new LinkedList<>();
-        List<?> pathRequests = new LinkedList<>();
+        List<Packet> outgoing = new LinkedList<>();
+        List<byte[]> pathRequestList = new LinkedList<>();
+        jobsRunning.set(true);
 
         try {
             if (jobsLocked.tryLock()) {
 
                 //Process active and pending link lists
-                if (Instant.now().isAfter()) {
-                    for (Link pendingLink : pendingLinks) {
+                if (Instant.now().isAfter(linksLastChecked.get().plusMillis(LINKS_CHECK_INTERVAL))) {
+                    for (Link link : pendingLinks) {
+                        if (link.getStatus() == CLOSED) {
+                            // If we are not a Transport Instance, finding a pending link
+                            // that was never activated will trigger an expiry of the path
+                            // to the destination, and an attempt to rediscover the path.
+                            if (isFalse(owner.isTransportEnabled())) {
+                                expirePath(link.getDestination().getHash());
 
+                                // If we are connected to a shared instance, it will take
+                                // care of sending out a new path request. If not, we will
+                                // send one directly.
+                                if (isFalse(owner.isConnectedToSharedInstance())) {
+                                    var lastPathRequest = Instant.EPOCH;
+                                    if (pathRequests.containsKey(Hex.encodeHexString(link.getDestination().getHash()))) {
+                                        lastPathRequest = pathRequests.get(Hex.encodeHexString(link.getDestination().getHash()));
+                                    }
+
+                                    if (Duration.between(lastPathRequest, Instant.now()).toSeconds() > PATH_REQUEST_MI) {
+                                        log.debug("Trying to rediscover path for {} since an attempted link was never established",
+                                                Hex.encodeHexString(link.getDestination().getHash()));
+                                        if (pathRequestList.stream().noneMatch(bytes -> Arrays.equals(bytes, link.getDestination().getHash()))) {
+                                            pathRequestList.add(link.getDestination().getHash());
+                                        }
+                                    }
+                                }
+                            }
+                            pendingLinks.remove(link);
+                        }
                     }
+
+                    for (Link link : activeLinks) {
+                        if (link.getStatus() == CLOSED) {
+                            activeLinks.remove(link);
+                        }
+                    }
+
+                    linksLastChecked.set(Instant.now());
                 }
+
+                //Process receipts list for timed-out packets
+                if (Instant.now().isAfter(announcesLastChecked.get().plusMillis(ANNOUNCES_CHECK_INTERVAL))) {
+                    for (String destinationHashString : announceTable.keySet()) {
+                        var announceEntry = announceTable.get(destinationHashString);
+                        if (announceEntry.getRetries() > PATHFINDER_R) {
+                            log.debug("Completed announce processing for {}, retry limit reached", destinationHashString);
+                            announceTable.remove(destinationHashString);
+                            break;
+                        } else {
+                            if (Instant.now().isAfter(announceEntry.getRetransmitTimeout())) {
+                                announceEntry.setRetransmitTimeout(Instant.now().plusSeconds(PATHFINDER_G).plusMillis(PATHFINDER_RW));
+                                announceEntry.setRetries(announceEntry.getRetries() + 1);
+                                var packet = announceEntry.getPacket();
+                                var blockRebroadcasts = announceEntry.isBlockRebroadcasts();
+                                var attachedInterface = announceEntry.getAttachedInterface();
+                                var announceContext = blockRebroadcasts ? PATH_RESPONSE : NONE;
+                                var announceData = packet.getData();
+                                var announceIdentity = recall(packet.getDestinationHash());
+                                var announceDestination = new Destination(announceIdentity, OUT, SINGLE, "unknown", "unknown");
+                                announceDestination.setHash(packet.getDestinationHash());
+                                announceDestination.setHexHash(Hex.encodeHexString(announceDestination.getHash()));
+
+                                var newPacket = new Packet(
+                                        announceDestination,
+                                        announceData,
+                                        ANNOUNCE,
+                                        announceContext,
+                                        HEADER_2,
+                                        TRANSPORT,
+                                        identity.getHash(),
+                                        attachedInterface
+                                );
+                                newPacket.setHops(announceEntry.getHops());
+
+                                if (blockRebroadcasts) {
+                                    log.debug("Rebroadcasting announce as path response for {} with hop count {}",
+                                            announceDestination.getHexHash(), newPacket.getHops());
+                                } else {
+                                    log.debug("Rebroadcasting announce for {} with hop count {}",
+                                            announceDestination.getHexHash(), newPacket.getHops());
+                                }
+
+                                outgoing.add(newPacket);
+
+                                // This handles an edge case where a peer sends a past
+                                // request for a destination just after an announce for
+                                // said destination has arrived, but before it has been
+                                // rebroadcast locally. In such a case the actual announce
+                                // is temporarily held, and then reinserted when the path
+                                // request has been served to the peer.
+                                for (String destinationHashHex : heldAnnounces.keySet()) {
+                                    announceTable.put(destinationHashHex, heldAnnounces.get(destinationHashHex));
+                                    log.debug("Reinserting held announce into table");
+                                }
+                            }
+                        }
+                    }
+                    announcesLastChecked.set(Instant.now());
+                }
+
+                //Cull the packet hashlist if it has reached its max size
             }
+        } catch (Exception e) {
+            log.error("An exception occurred while running Transport jobs.", e);
         }
+
+        jobsRunning.set(false);
+    }
+
+    private void expirePath(byte[] destinationHash) {
+
+    }
+
+    private void synthesizeTunnel(ConnectionInterface anInterface) {
+
     }
 }
