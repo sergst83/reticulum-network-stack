@@ -2640,11 +2640,36 @@ public final class Transport implements ExitHandler {
         pathRequestList.forEach(destinationHash -> requestPath(destinationHash, null, null, false));
     }
 
-    private void expirePath(byte[] destinationHash) {
+    private boolean expirePath(byte[] destinationHash) {
+        if (destinationTable.containsKey(Hex.encodeHexString(destinationHash))) {
+            var entry = destinationTable.get(Hex.encodeHexString(destinationHash));
+            entry.setTimestamp(Instant.EPOCH);
+            tablesLastCulled.set(Instant.EPOCH);
 
+            return true;
+        }
+
+        return false;
     }
 
-    private void synthesizeTunnel(ConnectionInterface anInterface) {
+    private void synthesizeTunnel(ConnectionInterface iface) {
+        var interfaceHash = iface.getHash();
+        var publicKey = identity.getPublicKey();
+        var randomHash = getRandomHash();
 
+        var tunnelIdData = concatArrays(publicKey, interfaceHash);
+        var tunnelId = fullHash(tunnelIdData);
+
+        var signedData = concatArrays(tunnelIdData, randomHash);
+        var signature = identity.sign(signedData);
+
+        var data = concatArrays(signedData, signature);
+
+        var tnlSnthDst = new Destination(null, OUT, PLAIN, APP_NAME, "tunnel", "synthesize");
+
+        var packet = new Packet(tnlSnthDst, data, DATA, iface);
+        packet.send();
+
+        iface.setWantsTunnel(false);
     }
 }

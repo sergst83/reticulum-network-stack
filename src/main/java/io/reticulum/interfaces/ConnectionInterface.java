@@ -127,4 +127,6 @@ public interface ConnectionInterface {
     default boolean wantsTunnel() {
         return false;
     }
+
+    default void setWantsTunnel(boolean wantsTunnel) {}
 }
