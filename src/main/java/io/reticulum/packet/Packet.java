@@ -182,27 +182,20 @@ public class Packet implements TPacket {
 
     private Instant sentAt;
     private boolean fromPacked;
-    private boolean createReceipt;
     private boolean sent;
     private boolean packed;
     private Flags flags;
-    private PacketContextType context;
     private byte[] destinationHash;
     private byte[] data;
 
     private Integer rssi;
     private Integer snr;
-    private byte[] transportId;
     private int hops;
-    private ConnectionInterface attachedInterface;
     private ConnectionInterface receivingInterface;
     private byte[] packetHash;
     private AbstractDestination destination;
     private byte[] raw;
     private byte[] plaintext;
-    private TransportType transportType = TransportType.BROADCAST;
-    private HeaderType headerType = HEADER_1;
-    private PacketType packetType = DATA;
     private DestinationType destinationType;
     private PacketReceipt receipt;
     private int mtu;
@@ -210,19 +203,72 @@ public class Packet implements TPacket {
 
     private byte[] mapHash;
 
-    public Packet(ConnectionInterface attachedInterface) {
-        this.attachedInterface = attachedInterface;
+    //дефолтные значения
+    private TransportType transportType = TransportType.BROADCAST;
+    private HeaderType headerType = HEADER_1;
+    private PacketType packetType = DATA;
+    private boolean createReceipt = true;
+    private PacketContextType context = null;
+    private byte[] transportId = null;
+    private ConnectionInterface attachedInterface = null;
+
+    private Packet(
+            AbstractDestination destination,
+            byte[] data,
+            PacketType packetType,
+            PacketContextType context,
+            TransportType transportType,
+            HeaderType headerType,
+            byte[] transportId,
+            ConnectionInterface attachedInterface,
+            Boolean createReceipt
+    ) {
+        if (nonNull(destination)) {
+            if (nonNull(transportType)) {
+                this.transportType = transportType;
+            }
+            if (nonNull(headerType)) {
+                this.headerType = headerType;
+            }
+            if (nonNull(packetType)) {
+                this.packetType = packetType;
+            }
+            if (nonNull(createReceipt)) {
+                this.createReceipt = createReceipt;
+            }
+
+            this.context = context;
+
+            this.hops = 0;
+            this.destination = destination;
+            this.transportId = transportId;
+            this.data = data;
+            this.flags = getPackedFlags();
+
+            this.raw = null;
+            this.packed = false;
+            this.sent = false;
+            this.receipt = null;
+            this.fromPacked = false;
+        } else {
+            this.raw = data;
+            this.packed = true;
+            this.fromPacked = true;
+            this.createReceipt = false;
+        }
+
         this.mtu = ReticulumConstant.MTU;
+        this.sentAt = null;
+        this.packetHash = null;
+
+        this.attachedInterface = attachedInterface;
+        this.receivingInterface = null;
+        this.rssi = null;
+        this.snr = null;
     }
 
     public Packet(Destination destination, byte[] data, PacketType packetType, PacketContextType context, ConnectionInterface attachedInterface, boolean createReceipt) {
-        this(attachedInterface);
-        this.packetType = packetType;
-        this.destination = destination;
-        this.context = context;
-        this.data = data;
-        this.flags = getPackedFlags();
-        this.createReceipt = createReceipt;
+        this(destination, data, packetType, context, null, null, null, attachedInterface, createReceipt);
     }
 
     public Packet(
@@ -235,46 +281,35 @@ public class Packet implements TPacket {
             byte[] transportId,
             ConnectionInterface localClientInterface
     ) {
-        this(localClientInterface);
-        this.destination = announceDestination;
-        this.packetType = packetType;
-        this.context = announceContext;
-        this.data = announceData;
-        this.transportId = transportId;
-        this.headerType = headerType;
-        this.transportType = transportType;
+        this(announceDestination, announceData, packetType, announceContext, transportType, headerType, transportId, localClientInterface, null);
     }
 
     public Packet(Destination destination, byte[] data, PacketType packetType, PacketContextType context, ConnectionInterface attachedInterface) {
-        this(destination, data, packetType, context, attachedInterface, true);
+        this(destination, data, packetType, context, null, null, null, attachedInterface, null);
     }
 
     public Packet(Destination destination, byte[] data, PacketType packetType, ConnectionInterface attachedInterface) {
-        this(destination, data, packetType, null, attachedInterface);
+        this(destination, data, packetType, null, null, null, null, attachedInterface, null);
     }
 
     public Packet(Destination destination, byte[] requestData, PacketType linkRequest) {
-        this(destination, requestData, linkRequest, null);
+        this(destination, requestData, linkRequest, null, null, null, null, null, null);
     }
 
     public Packet(byte[] raw) {
-        this((Destination) null, raw, DATA);
+        this(null, raw, null, null, null, null, null, null, null);
     }
 
-    public Packet(Link link, byte[] data, PacketType packetType, PacketContextType contextType) {
-        this((ConnectionInterface) null);
-        this.raw = data;
-        this.packed = true;
-        this.fromPacked = true;
-        this.createReceipt = false;
+    public Packet(Link link, byte[] data, PacketType packetType, PacketContextType context) {
+        this(link, data, packetType, context, null, null, null, null, null);
     }
 
     public Packet(Link link, byte[] data, PacketType packetType) {
-        this(link, data, packetType, null);
+        this(link, data, packetType, null, null, null, null, null, null);
     }
 
-    public Packet(Link link, byte[] data, PacketContextType packetContextType) {
-        this(link, data, null, packetContextType);
+    public Packet(Link link, byte[] data, PacketContextType context) {
+        this(link, data, null, context, null, null, null, null, null);
     }
 
     @SneakyThrows
@@ -334,6 +369,8 @@ public class Packet implements TPacket {
             }
         }
 
+        packetData.setHeader(header);
+        packetData.setAddresses(address);
         packetData.setContext(context);
         packetData.setData(ciphertext);
 
@@ -434,7 +471,7 @@ public class Packet implements TPacket {
             if (Transport.getInstance().outbound(this)) {
                 return receipt;
             } else {
-                log.error("No interfaces could process the outbound packet");
+                log.error("No interfaces could process (resend) the outbound packet");
                 sent = false;
                 receipt = null;
 

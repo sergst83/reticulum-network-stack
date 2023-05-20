@@ -342,8 +342,8 @@ public class Destination extends AbstractDestination {
         return null;
     }
 
-    public Packet announce() {
-        return announce(null, false, null, null, true);
+    public Packet announce(byte[] appData) {
+        return announce(appData, false, null, null, true);
     }
 
     public Packet announce(boolean pathResponse) {
@@ -370,7 +370,7 @@ public class Destination extends AbstractDestination {
             final boolean send
     ) {
         var localAppData = nonNull(appData) ? Arrays.copyOf(appData, appData.length) : null;
-        if (this.type == SINGLE) {
+        if (this.type != SINGLE) {
             throw new IllegalStateException("Only SINGLE destination types can be announced");
         }
 

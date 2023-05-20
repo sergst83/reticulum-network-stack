@@ -2,7 +2,6 @@ package io.reticulum.interfaces;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import io.reticulum.Transport;
 import io.reticulum.identity.Identity;
 import io.reticulum.transport.AnnounceQueueEntry;
 import lombok.AllArgsConstructor;
@@ -40,19 +39,16 @@ import static java.util.stream.Collectors.toList;
 @Slf4j
 public abstract class AbstractConnectionInterface extends Thread implements ConnectionInterface {
 
-    protected boolean IN = false;
-
     @JsonProperty("outgoing")
     protected boolean OUT = false;
+    protected boolean IN = false;
     protected boolean FWD = false;
     protected boolean RPT = false;
     protected AtomicBoolean online = new AtomicBoolean(false);
     protected String interfaceName;
-    protected int bitrate;
     protected AtomicReference<BigInteger> rxb = new AtomicReference<>(ZERO);
     protected AtomicReference<BigInteger> txb = new AtomicReference<>(ZERO);
 
-    protected Transport transport;
     protected Identity identity;
     protected boolean enabled;
     protected byte[] ifacKey;
@@ -71,7 +67,7 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
     protected String ifacNetKey;
 
     @JsonProperty("bitrate")
-    protected Integer configuredBitrate;
+    protected Integer bitrate;
 
     @JsonProperty("announce_rate_target")
     protected Integer announceRateTarget;
@@ -105,9 +101,9 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
         }
     }
 
-    public void setConfiguredBitrate(int bitrate) {
+    public void setBitrate(int bitrate) {
         if (bitrate >= MINIMUM_BITRATE) {
-            configuredBitrate = bitrate;
+            this.bitrate = bitrate;
         }
     }
 
@@ -211,6 +207,26 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
                 log.error("The announce queue for this interface has been cleared.");
             }
         }
+    }
+
+    @Override
+    public boolean OUT() {
+        return OUT;
+    }
+
+    @Override
+    public boolean IN() {
+        return IN;
+    }
+
+    @Override
+    public boolean FWD() {
+        return FWD;
+    }
+
+    @Override
+    public boolean RPT() {
+        return RPT;
     }
 
     public String toString() {

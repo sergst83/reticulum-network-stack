@@ -1,12 +1,16 @@
 package io.reticulum.interfaces.auto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import io.reticulum.Transport;
 import io.reticulum.interfaces.AbstractConnectionInterface;
+import io.reticulum.utils.IdentityUtils;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.tuple.MutablePair;
 
@@ -20,10 +24,12 @@ import java.net.MulticastSocket;
 import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.StringJoiner;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
@@ -33,6 +39,7 @@ import static io.reticulum.interfaces.auto.AutoInterfaceConstant.BITRATE_GUESS;
 import static io.reticulum.interfaces.auto.AutoInterfaceConstant.DEFAULT_DATA_PORT;
 import static io.reticulum.interfaces.auto.AutoInterfaceConstant.DEFAULT_DISCOVERY_PORT;
 import static io.reticulum.interfaces.auto.AutoInterfaceConstant.DEFAULT_IFAC_SIZE;
+import static io.reticulum.interfaces.auto.AutoInterfaceConstant.MULTI_IF_DEQUE_LEN;
 import static io.reticulum.interfaces.auto.AutoInterfaceConstant.PEERING_TIMEOUT;
 import static io.reticulum.interfaces.auto.DiscoveryScope.SCOPE_LINK;
 import static io.reticulum.utils.IdentityUtils.fullHash;
@@ -61,7 +68,8 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
 
     {
         ifacSize = DEFAULT_IFAC_SIZE;
-        configuredBitrate = BITRATE_GUESS;
+        bitrate = BITRATE_GUESS;
+        IN = true;
     }
 
     @JsonProperty("group_id")
@@ -81,17 +89,25 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
 
     @JsonProperty("ignored_interfaces")
     private List<String> ignoredInterfaces = List.of();
+
+    @JsonIgnore
     private Map<Peer, MutablePair<NetworkInterface, Long>> peers = new ConcurrentHashMap<>();
+    @JsonIgnore
     private Map<NetworkInterface, Thread> interfaceServers = new ConcurrentHashMap<>();
+    @JsonIgnore
     private Map<NetworkInterface, Long> multicastEchoes = new ConcurrentHashMap<>();
+    @JsonIgnore
     private Map<NetworkInterface, Boolean> timedOutInterfaces = new ConcurrentHashMap<>();
+    @JsonIgnore
     private AtomicBoolean carrierChanged = new AtomicBoolean(false);
 
+    private Deque<String> mifDeque = new ConcurrentLinkedDeque<>();
+
     private String mcastDiscoveryAddress;
-    private double announceInterval = PEERING_TIMEOUT / 6;
-    private double peerJobInterval = PEERING_TIMEOUT * 1.1;
-    private double peeringTimeout = PEERING_TIMEOUT;
-    private double multicastEchoTimeout = PEERING_TIMEOUT / 2;
+    private long announceInterval = PEERING_TIMEOUT / 6;
+    private long peerJobInterval = (long) (PEERING_TIMEOUT * 1.1);
+    private long peeringTimeout = PEERING_TIMEOUT;
+    private long multicastEchoTimeout = PEERING_TIMEOUT / 2;
     private boolean receives;
 
     private List<NetworkInterface> interfaceList = new CopyOnWriteArrayList<>();
@@ -111,26 +127,6 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     @Setter(PRIVATE)
     @Getter(PRIVATE)
     private ExecutorService cachedTreadPoolExecutor = newCachedThreadPool();
-
-    @Override
-    public boolean OUT() {
-        return false;
-    }
-
-    @Override
-    public boolean IN() {
-        return true;
-    }
-
-    @Override
-    public boolean FWD() {
-        return false;
-    }
-
-    @Override
-    public boolean RPT() {
-        return false;
-    }
 
     @Override
     public void setEnabled(boolean enabled) {
@@ -156,10 +152,8 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
         } else {
             receives = true;
 
-            bitrate = BITRATE_GUESS;
-
-            var peering_wait = secToMillisec(getAnnounceInterval() * 1.2);
-            log.info("{}  discovering peers for {} seconds...", this.getInterfaceName(), MILLISECONDS.toSeconds(peering_wait));
+            var peeringWait = secToMillisec(getAnnounceInterval() * 1.2);
+            log.info("{}  discovering peers for {} seconds...", this.getInterfaceName(), MILLISECONDS.toSeconds(peeringWait));
 
             //Запускаем udp сервера на всех интерфейсам в своих потоках для слушания соединений
             initNetworkInterfaceServers(interfaceList);
@@ -326,17 +320,21 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
         }
     }
 
+    @Override
     public void processIncoming(final byte[] data) {
-        rxb.updateAndGet(previous -> previous.add(BigInteger.valueOf(data.length)));
-        transport.inbound(data);
+        var dataHash = Hex.encodeHexString(IdentityUtils.fullHash(data));
+        if (isFalse(mifDeque.contains(dataHash))) {
+            while (mifDeque.size() >= MULTI_IF_DEQUE_LEN) {
+                mifDeque.pop();
+            }
+            mifDeque.add(dataHash);
+            rxb.updateAndGet(previous -> previous.add(BigInteger.valueOf(data.length)));
+            Transport.getInstance().inbound(data, this);
+        }
     }
 
     @Override
     public void processOutgoing(byte[] data) {
-        //pass
-    }
-
-    private void processOutgoung(final byte[] data) {
         for (Peer peer : peers.keySet()) {
             try(var socket = new DatagramSocket(getDataPort())) {
                 var packet = new DatagramPacket(data, data.length, peer.getAddress(), peer.getPort());
@@ -345,6 +343,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
                 log.error("Could not transmit on {}.", this.getInterfaceName(), e);
             }
         }
+
         txb.updateAndGet(previous -> previous.add(BigInteger.valueOf(data.length)));
     }
 

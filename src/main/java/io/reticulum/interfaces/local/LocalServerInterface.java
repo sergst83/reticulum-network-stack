@@ -19,8 +19,7 @@ public class LocalServerInterface extends AbstractConnectionInterface {
     @Getter
     private final AtomicInteger clients = new AtomicInteger(0);
 
-    public LocalServerInterface(Transport transport, int port) throws IOException {
-        this.transport = transport;
+    public LocalServerInterface(int port) throws IOException {
         this.IN = true;
         this.OUT = false;
         this.interfaceName = "Reticulum";
@@ -29,26 +28,6 @@ public class LocalServerInterface extends AbstractConnectionInterface {
         this.server.setReuseAddress(true);
         this.bitrate = 1_000_000_000;
         this.online.set(true);
-    }
-
-    @Override
-    public boolean OUT() {
-        return false;
-    }
-
-    @Override
-    public boolean IN() {
-        return true;
-    }
-
-    @Override
-    public boolean FWD() {
-        return false;
-    }
-
-    @Override
-    public boolean RPT() {
-        return false;
     }
 
     @Override
@@ -63,14 +42,14 @@ public class LocalServerInterface extends AbstractConnectionInterface {
     }
 
     private void incomingConnection(Socket socket) {
-        var spawnedInterface = new LocalClientInterface(transport, interfaceName, socket);
+        var spawnedInterface = new LocalClientInterface(interfaceName, socket);
         spawnedInterface.setIN(IN);
         spawnedInterface.setOUT(OUT);
         spawnedInterface.setParentInterface(this);
         spawnedInterface.setBitrate(bitrate);
         log.trace("Accepting new connection to shared instance: {}", spawnedInterface.getInterfaceName());
-        transport.getInterfaces().add(spawnedInterface);
-        transport.getLocalClientInterfaces().add(spawnedInterface);
+        Transport.getInstance().getInterfaces().add(spawnedInterface);
+        Transport.getInstance().getLocalClientInterfaces().add(spawnedInterface);
         clients.incrementAndGet();
         spawnedInterface.start();
     }

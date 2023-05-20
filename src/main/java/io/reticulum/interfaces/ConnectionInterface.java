@@ -89,7 +89,7 @@ public interface ConnectionInterface {
     Instant getAnnounceAllowedAt();
     void  setAnnounceAllowedAt(Instant announceAllowedAt);
 
-    int getBitrate();
+    Integer getBitrate();
 
     default void detach() {
         //pass

@@ -55,9 +55,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static io.reticulum.constant.IdentityConstant.HASHLENGTH;
@@ -150,13 +148,13 @@ import static org.msgpack.value.ValueFactory.newTimestamp;
 
 @Slf4j
 public final class Transport implements ExitHandler {
-    private final Lock savingPacketHashlist = new ReentrantLock();
-    private final Lock savingPathTable = new ReentrantLock();
-    private final Lock savingTunnelTable = new ReentrantLock();
-    private final Lock jobsLocked = new ReentrantLock();
-    private final AtomicBoolean jobsRunning = new AtomicBoolean(false);
-    private final AtomicReference<Instant> linksLastChecked = new AtomicReference<>();
-    private final AtomicReference<Instant> announcesLastChecked = new AtomicReference<>();
+    private final ReentrantLock savingPacketHashlistLock = new ReentrantLock();
+    private final ReentrantLock savingPathTableLock = new ReentrantLock();
+    private final ReentrantLock savingTunnelTableLock = new ReentrantLock();
+    private final ReentrantLock jobsLock = new ReentrantLock();
+
+    private final AtomicReference<Instant> linksLastChecked = new AtomicReference<>(Instant.EPOCH);
+    private final AtomicReference<Instant> announcesLastChecked = new AtomicReference<>(Instant.EPOCH);
     private final AtomicReference<Instant> tablesLastCulled = new AtomicReference<>(Instant.EPOCH);
 
     private static volatile Transport INSTANCE;
@@ -165,30 +163,84 @@ public final class Transport implements ExitHandler {
     @Getter
     private Identity identity;
 
+    /**
+     * All active interfaces
+     */
     @Getter
     private final List<ConnectionInterface> interfaces = new CopyOnWriteArrayList<>();
+    /**
+     * All active destinations
+     */
     @Getter
     private final List<Destination> destinations = new CopyOnWriteArrayList<>();
 
+    /**
+     *     Interfaces for communicating with local clients connected to a shared Reticulum instance
+     */
     @Getter
     private final List<ConnectionInterface> localClientInterfaces = new CopyOnWriteArrayList<>();
 
+    /**
+     * A table for storing announces currently waiting to be retransmitted
+     */
     private final Map<String, AnnounceEntry> announceTable = new ConcurrentHashMap<>();
+    /**
+     * A table containing temporarily held announce-table entries
+     */
     private final Map<String, AnnounceEntry> heldAnnounces = new ConcurrentHashMap<>();
+    /**
+     * A table for keeping track of announce rates
+     */
     private final Map<String, RateEntry> announceRateTable = new ConcurrentHashMap<>();
+    /**
+     * A table storing externally registered announce handlers
+     */
     private final List<AnnounceHandler> announceHandlers = new CopyOnWriteArrayList<>();
     private final Queue<AnnounceQueueEntry> announceQueue = new ConcurrentLinkedQueue<>();
+    /**
+     * A table for storing path request timestamps
+     */
     private final Map<String, Instant> pathRequests = new ConcurrentHashMap<>();
+    /**
+     * A lookup table containing the next hop to a given destination
+     */
     private final Map<String, Hops> destinationTable = new ConcurrentHashMap<>();
+    /**
+     * A lookup table for storing packet hashes used to return proofs and replies
+     */
     private final Map<String, ReversEntry> reverseTable = new ConcurrentHashMap<>();
+    /**
+     * A lookup table containing hops for links
+     */
     private final Map<String, LinkEntry> linkTable = new ConcurrentHashMap<>();
+    /**
+     * A table storing tunnels to other transport instances
+     */
     private final Map<String, Tunnel> tunnels = new ConcurrentHashMap<>();
+    /**
+     * Links that are active
+     */
     private final List<Link> activeLinks = new CopyOnWriteArrayList<>();
+    /**
+     * Links that are being established
+     */
     private final List<Link> pendingLinks = new CopyOnWriteArrayList<>();
     private final Map<String, ConnectionInterface> pendingLocalPathRequests = new ConcurrentHashMap<>();
+    /**
+     * A table for keeping track of path requests on behalf of other nodes
+     */
     private final Map<String, PathRequestEntry> discoveryPathRequests = new ConcurrentHashMap<>();
+    /**
+     * A list of packet hashes for duplicate detection
+     */
     private final List<byte[]> packetHashList = new CopyOnWriteArrayList<>();
+    /**
+     * A table for keeping track of tagged path requests
+     */
     private final List<byte[]> discoveryPrTags = new CopyOnWriteArrayList<>();
+    /**
+     * Receipts of all outgoing packets for proof processing
+     */
     private final List<PacketReceipt> receipts = new CopyOnWriteArrayList<>();
 
     //Transport control destinations are used for control purposes like path requests
@@ -196,10 +248,9 @@ public final class Transport implements ExitHandler {
     private final List<Destination> controlDestinations = new CopyOnWriteArrayList<>();
 
     private final Deque<Pair<byte[], Integer>> localClientRssiCache = new ConcurrentLinkedDeque<>();
-    private final Deque<Object> localClientSnrCache = new ConcurrentLinkedDeque<>();
+    private final Deque<Pair<byte[], Integer>> localClientSnrCache = new ConcurrentLinkedDeque<>();
 
-    private Transport(@NonNull Reticulum reticulum) {
-        this.owner = reticulum;
+    private void init() {
         var transportIdentityPath = owner.getStoragePath().resolve("transport_identity");
         if (Files.isReadable(transportIdentityPath)) {
             identity = Identity.fromFile(transportIdentityPath);
@@ -238,7 +289,7 @@ public final class Transport implements ExitHandler {
         }
 
         //Create transport-specific destinations
-        var pathRequestDestination = new Destination((Identity) null, IN, PLAIN, APP_NAME, "path", "request");
+        var pathRequestDestination = new Destination(null, IN, PLAIN, APP_NAME, "path", "request");
         pathRequestDestination.setPacketCallback(this::pathRequestHandler);
         controlDestinations.add(pathRequestDestination);
         controlHashes.add(pathRequestDestination.getHash());
@@ -375,6 +426,10 @@ public final class Transport implements ExitHandler {
         }
     }
 
+    private Transport(@NonNull Reticulum reticulum) {
+        this.owner = reticulum;
+    }
+
     public static Transport start(@NonNull Reticulum reticulum) {
         Transport transport = INSTANCE;
         if (transport == null) {
@@ -382,13 +437,14 @@ public final class Transport implements ExitHandler {
                 transport = INSTANCE;
                 if (transport == null) {
                     INSTANCE = transport = new Transport(reticulum);
+                    transport.init();
                 }
             }
         }
 
         Executors
                 .newSingleThreadScheduledExecutor()
-                .scheduleAtFixedRate(transport::jobs, 10, JOB_INTERVAL, TimeUnit.MILLISECONDS);
+                .scheduleWithFixedDelay(transport::jobs, 10, JOB_INTERVAL, TimeUnit.MILLISECONDS);
 
         log.info("Transport instance {} started", transport.identity.getHexHash());
 
@@ -450,7 +506,7 @@ public final class Transport implements ExitHandler {
         }
 
         try {
-            if (savingPacketHashlist.tryLock(5, TimeUnit.SECONDS)) {
+            if (savingPacketHashlistLock.tryLock(5, TimeUnit.SECONDS)) {
                 var saveStart = Instant.now();
 
                 if (isFalse(owner.isTransportEnabled())) {
@@ -482,7 +538,7 @@ public final class Transport implements ExitHandler {
         } catch (Exception e) {
             log.error("Error", e);
         } finally {
-            savingPacketHashlist.unlock();
+            savingPacketHashlistLock.unlock();
         }
     }
 
@@ -492,7 +548,7 @@ public final class Transport implements ExitHandler {
         }
 
         try {
-            if (savingPathTable.tryLock(5, TimeUnit.SECONDS)) {
+            if (savingPathTableLock.tryLock(5, TimeUnit.SECONDS)) {
                 var saveStart = Instant.now();
 
                 log.debug("Saving path table to storage...");
@@ -538,7 +594,7 @@ public final class Transport implements ExitHandler {
         } catch (Exception e) {
             log.error("Error", e);
         } finally {
-            savingPathTable.unlock();
+            savingPathTableLock.unlock();
         }
     }
 
@@ -622,7 +678,7 @@ public final class Transport implements ExitHandler {
         }
 
         try {
-            if (savingTunnelTable.tryLock(5, TimeUnit.SECONDS)) {
+            if (savingTunnelTableLock.tryLock(5, TimeUnit.SECONDS)) {
                 var start = Instant.now();
 
                 log.debug("Saving tunnel table to storage...");
@@ -684,17 +740,13 @@ public final class Transport implements ExitHandler {
         } catch (Exception e) {
             log.error("Error", e);
         } finally {
-            savingTunnelTable.unlock();
+            savingTunnelTableLock.unlock();
         }
     }
 
-    public void inbound(byte[] raw) {
-        inbound(raw, null);
-    }
-
     // TODO: 12.05.2023 подлежит рефакторингу.
-    public void inbound(byte[] raw, ConnectionInterface iface) {
-        byte[] localRaw = null;
+    public void inbound(final byte[] raw, final ConnectionInterface iface) {
+        byte[] localRaw;
         //If interface access codes are enabled, we must authenticate each packet.
         if (getLength(raw) > 2) {
             if (nonNull(iface) && nonNull(iface.getIdentity())) {
@@ -753,20 +805,21 @@ public final class Transport implements ExitHandler {
                     //If the flag is set, drop the packet
                     return;
                 }
+
+                localRaw = raw;
             }
         } else {
             return;
         }
 
-        while (jobsRunning.get()) {
+        while (isFalse(jobsLock.tryLock())) {
             //sleep
+            log.debug("jobs locked by {}", jobsLock);
         }
 
         if (isNull(identity)) {
             return;
         }
-
-        jobsLocked.lock();
 
         var packet = new Packet(localRaw);
         if (isFalse(packet.unpack())) {
@@ -1498,15 +1551,14 @@ public final class Transport implements ExitHandler {
             }
         }
 
-        jobsLocked.unlock();
+        jobsLock.unlock();
     }
 
     // TODO: 12.05.2023 подлежит рефакторингу.
     public boolean outbound(@NonNull final Packet packet) {
-        while (jobsRunning.get()) {
+        while (isFalse(jobsLock.tryLock())) {
             //sleep
         }
-        jobsLocked.lock();
 
         var sent = false;
         var outboundTime = Instant.now();
@@ -1771,7 +1823,7 @@ public final class Transport implements ExitHandler {
             cache(packet, false);
         }
 
-        jobsLocked.unlock();
+        jobsLock.unlock();
 
         return sent;
     }
@@ -1865,11 +1917,11 @@ public final class Transport implements ExitHandler {
     }
 
     private boolean interfaceToSharedInstance(ConnectionInterface iface) {
-        return iface.isConnectedToSharedInstance();
+        return nonNull(iface) && iface.isConnectedToSharedInstance();
     }
 
     private boolean isLocalClientInterface(ConnectionInterface iface) {
-        return nonNull(iface.getParentInterface()) && iface.getParentInterface().isLocalSharedInstance();
+        return nonNull(iface) && nonNull(iface.getParentInterface()) && iface.getParentInterface().isLocalSharedInstance();
     }
 
     public void sharedConnectionDisappeared() {
@@ -1985,6 +2037,14 @@ public final class Transport implements ExitHandler {
             //The packet is not in the local cache, query the network.
             new Packet(destination, packetHash, CACHE_REQUEST).send();
         }
+    }
+
+    public void registerAnnounceHandler(AnnounceHandler announceHandler) {
+        announceHandlers.add(announceHandler);
+    }
+
+    public void deregisterAnnounceHandler(AnnounceHandler announceHandler) {
+        announceHandlers.remove(announceHandler);
     }
 
     private void transmit(ConnectionInterface iface, byte[] raw) {
@@ -2371,10 +2431,9 @@ public final class Transport implements ExitHandler {
     private void jobs() {
         List<Packet> outgoing = new LinkedList<>();
         List<byte[]> pathRequestList = new LinkedList<>();
-        jobsRunning.set(true);
 
         try {
-            if (jobsLocked.tryLock()) {
+            if (jobsLock.tryLock()) {
 
                 //Process active and pending link lists
                 if (Instant.now().isAfter(linksLastChecked.get().plusMillis(LINKS_CHECK_INTERVAL))) {
@@ -2625,16 +2684,14 @@ public final class Transport implements ExitHandler {
 
                     tablesLastCulled.set(Instant.now());
                 }
-
-                jobsLocked.unlock();
             } else {
                 //Transport jobs were locked, do nothing
             }
         } catch (Exception e) {
             log.error("An exception occurred while running Transport jobs.", e);
+        } finally {
+            jobsLock.unlock();
         }
-
-        jobsRunning.set(false);
 
         outgoing.forEach(Packet::send);
         pathRequestList.forEach(destinationHash -> requestPath(destinationHash, null, null, false));

@@ -32,26 +32,6 @@ public class LocalClientInterface extends AbstractConnectionInterface {
     private static final byte ESC_MASK = 0x20;
     private static final int HW_MTU = 1064;
 
-    @Override
-    public boolean OUT() {
-        return false;
-    }
-
-    @Override
-    public boolean IN() {
-        return true;
-    }
-
-    @Override
-    public boolean FWD() {
-        return false;
-    }
-
-    @Override
-    public boolean RPT() {
-        return false;
-    }
-
     private static byte[] escape(byte[] data) {
         var result = new byte[0];
         if (nonNull(data) && data.length > 0) {
@@ -100,10 +80,9 @@ public class LocalClientInterface extends AbstractConnectionInterface {
         forceBitrate = false;
     }
 
-    public LocalClientInterface(Transport owner, String name, Socket socket) {
+    public LocalClientInterface(String name, Socket socket) {
         this();
         this.receives = true;
-        this.transport = owner;
         this.interfaceName = name;
         this.socket = socket;
         this.targetAddress = socket.getRemoteSocketAddress();
@@ -112,9 +91,8 @@ public class LocalClientInterface extends AbstractConnectionInterface {
         this.neverConnected = false;
     }
 
-    public LocalClientInterface(Transport owner, String name, int port) throws IOException {
+    public LocalClientInterface(String name, int port) throws IOException {
         this();
-        this.transport = owner;
         this.interfaceName = name;
         this.socket = new Socket();
         this.targetAddress = new InetSocketAddress(port);
@@ -160,7 +138,7 @@ public class LocalClientInterface extends AbstractConnectionInterface {
                 online.set(false);
                 if (isConnectedToSharedInstance && !detached) {
                     log.warn("Socket for {} was closed, attempting to reconnect...", getInterfaceName());
-                    transport.sharedConnectionDisappeared();
+                    Transport.getInstance().sharedConnectionDisappeared();
                     reconnect();
                 } else {
                     teardown(true);
@@ -178,17 +156,17 @@ public class LocalClientInterface extends AbstractConnectionInterface {
         OUT = false;
         IN = false;
 
-        transport.getInterfaces().remove(this);
-        if (transport.getLocalClientInterfaces().remove(this)) {
+        Transport.getInstance().getInterfaces().remove(this);
+        if (Transport.getInstance().getLocalClientInterfaces().remove(this)) {
             if (nonNull(parentInterface)) {
                 parentInterface.getClients().getAndDecrement();
-                transport.getOwner().persistData();
+                Transport.getInstance().getOwner().persistData();
             }
         }
 
         if (isFalse(noWarning)) {
             log.error("The interface {} experienced an unrecoverable error and is being torn down. Restart Reticulum to attempt to open this interface again.", this.getInterfaceName());
-            if (transport.getOwner().isPanicOnIntefaceError()) {
+            if (Transport.getInstance().getOwner().isPanicOnIntefaceError()) {
                 panic();
             }
         }
@@ -223,7 +201,7 @@ public class LocalClientInterface extends AbstractConnectionInterface {
                 }
 
                 reconnecting = false;
-                transport.sharedConnectionDisappeared();
+                Transport.getInstance().sharedConnectionDisappeared();
             }
         } else {
             log.error("Attempt to reconnect on a non-initiator shared local interface. This should not happen.");
@@ -254,7 +232,7 @@ public class LocalClientInterface extends AbstractConnectionInterface {
             parentInterface.getRxb().updateAndGet(previous -> previous.add(BigInteger.valueOf(data.length)));
         }
 
-        transport.inbound(data);
+        Transport.getInstance().inbound(data, this);
     }
 
     public void processOutgoing(final byte[] data) {

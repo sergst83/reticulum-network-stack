@@ -115,11 +115,11 @@ public class Reticulum implements ExitHandler {
      */
     public Reticulum(final String configDir) throws IOException {
         initConfig(configDir);
+        transport = Transport.start(this);
 
         startLocalInterface();
         var ifList = initInterfaces();
         loadKnownDestinations();
-        transport = Transport.start(this);
         transport.getInterfaces().addAll(ifList);
 
 //        rpcAddr = new InetSocketAddress(localIntefacePort);
@@ -250,11 +250,16 @@ public class Reticulum implements ExitHandler {
             }
         }
 
-        this.configPath = Path.of(configDir1, "config");
+        this.configPath = Path.of(configDir1, CONFIG_FILE_NAME);
         this.storagePath = Path.of(configDir1, "storage");
         this.cachePath = Path.of(configDir1, "storage", "cache");
         this.resourcePath = Path.of(configDir1, "storage", "resources");
         Path identityPath = Path.of(configDir1, "storage", "identities");
+
+        if (Files.notExists(configPath)) {
+            var defaultConfig = this.getClass().getClassLoader().getResourceAsStream("reticulum.default.yml");
+            Files.copy(defaultConfig, configPath);
+        }
 
         if (Files.notExists(storagePath)) {
             Files.createDirectories(storagePath);
@@ -300,7 +305,7 @@ public class Reticulum implements ExitHandler {
     private void startLocalInterface() {
         if (shareInstance) {
             try {
-                var serverInterface = new LocalServerInterface(transport, localIntefacePort);
+                var serverInterface = new LocalServerInterface(localIntefacePort);
                 serverInterface.setOUT(true);
                 serverInterface.start();
                 transport.getInterfaces().add(serverInterface);
@@ -310,7 +315,7 @@ public class Reticulum implements ExitHandler {
                 startJobs();
             } catch (Exception e) {
                 try {
-                    var localClientInterface = new LocalClientInterface(transport,"Local shared instance", localIntefacePort);
+                    var localClientInterface = new LocalClientInterface("Local shared instance", localIntefacePort);
                     localClientInterface.setOUT(true);
                     localClientInterface.start();
                     transport.getInterfaces().add(localClientInterface);

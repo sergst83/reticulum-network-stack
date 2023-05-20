@@ -17,7 +17,7 @@ import static org.apache.commons.lang3.SystemUtils.OS_NAME;
 @Slf4j
 public final class AutoInterfaceConstant {
     static final int HW_MTU = 1064;
-    static final double PEERING_TIMEOUT = 7.5;
+    static final long PEERING_TIMEOUT = 7_500;
     static final int DEFAULT_DISCOVERY_PORT = 29716;
     static final int DEFAULT_DATA_PORT = 42671;
     static final int DEFAULT_IFAC_SIZE = 16;
@@ -25,6 +25,7 @@ public final class AutoInterfaceConstant {
     static final List<String> DARWIN_IGNORE_IFS = List.of("awdl0", "llw0", "lo0", "en5");
     static final List<String> ANDROID_IGNORE_IFS = List.of("dummy0", "lo", "tun0");
     static final int BITRATE_GUESS = 10 * 1000 * 1000;
+    static final  int MULTI_IF_DEQUE_LEN = 64;
 
     static final BiPredicate<NetworkInterface, AutoInterface> DARWIN_PREDICATE = (netIface, autoInterface) -> {
         var result = OS_NAME.toLowerCase().contains("darwin")
