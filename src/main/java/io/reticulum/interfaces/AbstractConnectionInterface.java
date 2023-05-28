@@ -41,7 +41,7 @@ import static java.util.stream.Collectors.toList;
 public abstract class AbstractConnectionInterface extends Thread implements ConnectionInterface {
 
     @JsonProperty("outgoing")
-    protected boolean OUT = false;
+    protected boolean OUT = true;
     protected boolean IN = false;
     protected boolean FWD = false;
     protected boolean RPT = false;

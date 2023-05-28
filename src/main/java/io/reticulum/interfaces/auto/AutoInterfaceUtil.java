@@ -1,10 +1,10 @@
 package io.reticulum.interfaces.auto;
 
 import java.net.Inet6Address;
-import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.util.List;
+import java.util.NoSuchElementException;
 
 import static io.reticulum.interfaces.auto.AutoInterfaceConstant.ANDROID_PREDICATE;
 import static io.reticulum.interfaces.auto.AutoInterfaceConstant.DARWIN_LOOPBACK_PREDICATE;
@@ -25,7 +25,7 @@ public interface AutoInterfaceUtil {
                 .filter(DARWIN_LOOPBACK_PREDICATE.negate())
                 .filter(netIface -> ANDROID_PREDICATE.negate().test(netIface, instace))
                 .filter(netIface -> IGNORED_PREDICATE.negate().test(netIface, instace))
-                .filter(netIface -> NOT_IN_ALLOWED_PREDICATE.test(netIface, instace))
+                .filter(netIface -> NOT_IN_ALLOWED_PREDICATE.negate().test(netIface, instace))
                 .filter(netIface -> IN_ALL_IGNORE_IFS.negate().test(netIface, instace))
                 .filter(HAS_IPV6_ADDRESS)
                 .collect(toUnmodifiableList());
@@ -40,9 +40,8 @@ public interface AutoInterfaceUtil {
     default Inet6Address getInet6Address(final NetworkInterface networkInterface) {
         return (Inet6Address) networkInterface.inetAddresses()
                 .filter(inetAddress -> inetAddress instanceof Inet6Address)
-                .filter(InetAddress::isLinkLocalAddress)
                 .findFirst()
-                .orElseThrow();
+                .orElseThrow(() -> new NoSuchElementException(networkInterface.toString()));
     }
 
     default long secToMillisec(double sec) {

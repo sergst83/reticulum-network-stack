@@ -19,6 +19,7 @@ import sun.misc.Signal;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -129,6 +130,9 @@ public class Reticulum implements ExitHandler {
 //        if (isSharedInstance) {
 //            rpcListener = new ServerSocket(localIntefacePort);
 //        }
+        //Запустить все интерфейсы
+        ifList.forEach(ConnectionInterface::launch);
+
         Runtime.getRuntime().addShutdownHook(new Thread(this::exitHandler));
         Signal.handle(new Signal("INT"), sig -> sigintHandler());
         Signal.handle(new Signal("TERM"), sig -> sigtermHandler());
@@ -250,15 +254,19 @@ public class Reticulum implements ExitHandler {
             }
         }
 
-        this.configPath = Path.of(configDir1, CONFIG_FILE_NAME);
+        this.configPath = Path.of(configDir1);
+        if (Files.notExists(configPath)) {
+            Files.createDirectories(cachePath);
+        }
+        Path configFile = configPath.resolve(CONFIG_FILE_NAME);
         this.storagePath = Path.of(configDir1, "storage");
         this.cachePath = Path.of(configDir1, "storage", "cache");
         this.resourcePath = Path.of(configDir1, "storage", "resources");
         Path identityPath = Path.of(configDir1, "storage", "identities");
 
-        if (Files.notExists(configPath)) {
+        if (Files.notExists(configFile)) {
             var defaultConfig = this.getClass().getClassLoader().getResourceAsStream("reticulum.default.yml");
-            Files.copy(defaultConfig, configPath);
+            Files.copy(defaultConfig, configFile, StandardCopyOption.REPLACE_EXISTING);
         }
 
         if (Files.notExists(storagePath)) {
@@ -277,21 +285,21 @@ public class Reticulum implements ExitHandler {
             Files.createDirectories(identityPath);
         }
 
-        if (Files.isRegularFile(configPath)) {
+        if (Files.isRegularFile(configFile)) {
             try {
-                this.config = ConfigObj.initConfig(configPath);
+                this.config = ConfigObj.initConfig(configFile);
             } catch (Exception e) {
-                log.error("Could not parse the configuration at {}. \nCheck your configuration file for errors!", configPath);
+                log.error("Could not parse the configuration at {}. \nCheck your configuration file for errors!", configFile);
                 throw e;
             }
         } else {
             log.info("Could not load config file, creating default configuration file...");
             createDefaultConfig();
-            this.config = ConfigObj.initConfig(configPath);
+            this.config = ConfigObj.initConfig(configFile);
             log.info("Default config file created. Make any necessary changes in {}/config and restart Reticulum if needed.", configDir1);
         }
 
-        log.info("Config loaded from {}", configPath);
+        log.info("Config loaded from {}", configFile);
 
         var reticulumConfig = config.getReticulum();
         shareInstance = Optional.ofNullable(reticulumConfig.getShareInstance()).orElse(shareInstance);

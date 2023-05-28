@@ -130,4 +130,9 @@ public interface ConnectionInterface {
     }
 
     default void setWantsTunnel(boolean wantsTunnel) {}
+
+    /**
+     * Start interface
+     */
+    void launch();
 }

@@ -241,6 +241,11 @@ public class LocalClientInterface extends AbstractConnectionInterface implements
     }
 
     @Override
+    public void launch() {
+        start();
+    }
+
+    @Override
     public synchronized void detach() {
         if (nonNull(socket)) {
             try {

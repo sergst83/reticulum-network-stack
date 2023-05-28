@@ -22,11 +22,11 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BiConsumer;
@@ -53,6 +53,7 @@ import static java.lang.System.currentTimeMillis;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
+import static java.util.Objects.requireNonNullElse;
 import static org.apache.commons.lang3.ArrayUtils.subarray;
 
 /**
@@ -78,7 +79,7 @@ public class Destination extends AbstractDestination {
     private Direction direction;
     private ProofStrategy proofStrategy = PROVE_NONE;
     private int mtu = 0;
-    private Map<String, Pair<Long, byte[]>> pathResponses = new ConcurrentHashMap<>();
+    private Map<String, Pair<Instant, byte[]>> pathResponses = new ConcurrentHashMap<>();
     private List<Link> links = new CopyOnWriteArrayList<>();
     private String name;
     private byte[] nameHash;
@@ -342,6 +343,10 @@ public class Destination extends AbstractDestination {
         return null;
     }
 
+    public Packet announce() {
+        return announce(null);
+    }
+
     public Packet announce(byte[] appData) {
         return announce(appData, false, null, null, true);
     }
@@ -375,9 +380,9 @@ public class Destination extends AbstractDestination {
         }
 
         var staleResponses = new ArrayList<String>();
-        var now = currentTimeMillis();
+        var now = Instant.now();
         pathResponses.forEach((entryTag, entry) -> {
-            if (now > entry.getLeft() + PR_TAG_WINDOW) {
+            if (now.isAfter(entry.getLeft().plusSeconds(PR_TAG_WINDOW))) {
                 staleResponses.add(entryTag);
             }
         });
@@ -421,8 +426,8 @@ public class Destination extends AbstractDestination {
             }
 
             pathResponses.put(
-                    Hex.encodeHexString(Objects.requireNonNullElse(tag, new byte[0])),
-                    Pair.of(currentTimeMillis(), announceData)
+                    Hex.encodeHexString(requireNonNullElse(tag, new byte[0])),
+                    Pair.of(Instant.now(), announceData)
             );
         }
 

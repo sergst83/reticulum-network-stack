@@ -63,4 +63,9 @@ public class LocalServerInterface extends AbstractConnectionInterface {
     public void processOutgoing(byte[] data) {
         //pass
     }
+
+    @Override
+    public void launch() {
+        start();
+    }
 }

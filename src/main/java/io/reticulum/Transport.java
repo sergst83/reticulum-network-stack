@@ -2081,9 +2081,9 @@ public final class Transport implements ExitHandler {
                 }
 
                 //Send it
-                iface.processIncoming(maskedRaw);
+                iface.processOutgoing(maskedRaw);
             } else {
-                iface.processIncoming(raw);
+                iface.processOutgoing(raw);
             }
         } catch (Exception e) {
             log.error("Error while transmitting on {}.", iface.getInterfaceName(), e);

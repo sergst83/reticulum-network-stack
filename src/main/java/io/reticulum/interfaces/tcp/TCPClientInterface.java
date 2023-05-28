@@ -70,7 +70,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
         this.txb.set(BigInteger.ZERO);
 
         this.IN = true;
-        this.OUT = false;
+        this.OUT = true;
 
         this.interfaceMode = InterfaceMode.MODE_FULL;
         this.bitrate = BITRATE_GUESS;
@@ -112,6 +112,11 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    @Override
+    public void launch() {
+        start();
     }
 
     @Override

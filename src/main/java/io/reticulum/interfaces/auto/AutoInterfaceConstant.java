@@ -10,6 +10,8 @@ import java.util.function.BiPredicate;
 import java.util.function.Predicate;
 
 import static lombok.AccessLevel.PRIVATE;
+import static org.apache.commons.collections4.CollectionUtils.containsAny;
+import static org.apache.commons.collections4.CollectionUtils.isNotEmpty;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 import static org.apache.commons.lang3.SystemUtils.OS_NAME;
 
@@ -22,7 +24,7 @@ public final class AutoInterfaceConstant {
     static final int DEFAULT_DATA_PORT = 42671;
     static final int DEFAULT_IFAC_SIZE = 16;
     static final List<String> ALL_IGNORE_IFS     = List.of("lo0");
-    static final List<String> DARWIN_IGNORE_IFS = List.of("awdl0", "llw0", "lo0", "en5");
+    static final List<String> DARWIN_IGNORE_IFS  = List.of("awdl0", "llw0", "lo0", "en5");
     static final List<String> ANDROID_IGNORE_IFS = List.of("dummy0", "lo", "tun0");
     static final int BITRATE_GUESS = 10 * 1000 * 1000;
     static final  int MULTI_IF_DEQUE_LEN = 64;
@@ -68,13 +70,12 @@ public final class AutoInterfaceConstant {
     };
 
     static final BiPredicate<NetworkInterface, AutoInterface> NOT_IN_ALLOWED_PREDICATE = (netIface, autoInterface) -> {
-        var result = autoInterface.getAllowedInterfaces().size() > 0
-                && isFalse(autoInterface.getAllowedInterfaces().contains(netIface.getName().toLowerCase()));
-        if (result) {
+        var disallowed = isNotEmpty(autoInterface.getAllowedInterfaces()) && containsAny(autoInterface.getAllowedInterfaces(), netIface);
+        if (disallowed) {
             log.trace("{} ignoring interface {} since it was not allowed", autoInterface.getInterfaceName(), netIface.getName());
         }
 
-        return result;
+        return disallowed;
     };
 
     static final BiPredicate<NetworkInterface, AutoInterface> IN_ALL_IGNORE_IFS = (netIface, autoInterface) -> {

@@ -2,6 +2,7 @@ package io.reticulum.interfaces.auto;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import inet.ipaddr.ipv6.IPv6Address;
 import io.reticulum.Transport;
 import io.reticulum.interfaces.AbstractConnectionInterface;
 import io.reticulum.utils.IdentityUtils;
@@ -42,6 +43,7 @@ import static io.reticulum.interfaces.auto.AutoInterfaceConstant.DEFAULT_IFAC_SI
 import static io.reticulum.interfaces.auto.AutoInterfaceConstant.MULTI_IF_DEQUE_LEN;
 import static io.reticulum.interfaces.auto.AutoInterfaceConstant.PEERING_TIMEOUT;
 import static io.reticulum.interfaces.auto.DiscoveryScope.SCOPE_LINK;
+import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static java.lang.Byte.toUnsignedInt;
 import static java.lang.String.format;
@@ -70,6 +72,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
         ifacSize = DEFAULT_IFAC_SIZE;
         bitrate = BITRATE_GUESS;
         IN = true;
+        OUT = true;
     }
 
     @JsonProperty("group_id")
@@ -91,7 +94,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     private List<String> ignoredInterfaces = List.of();
 
     @JsonIgnore
-    private Map<Peer, MutablePair<NetworkInterface, Long>> peers = new ConcurrentHashMap<>();
+    private Map<InetAddress, MutablePair<NetworkInterface, Long>> peers = new ConcurrentHashMap<>();
     @JsonIgnore
     private Map<NetworkInterface, Thread> interfaceServers = new ConcurrentHashMap<>();
     @JsonIgnore
@@ -129,6 +132,11 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     private ExecutorService cachedTreadPoolExecutor = newCachedThreadPool();
 
     @Override
+    public void launch() {
+        init();
+    }
+
+    @Override
     public void setEnabled(boolean enabled) {
         if (IS_OS_WINDOWS) {
             log.error(
@@ -147,7 +155,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
         interfaceList.addAll(networkInterfaceList(this));
 
         //создаем поток, в котором будут слушаться multicast discovery сообщения и добавляться в список пиров
-        if (initMulticastDiscoveryListeners(interfaceList) && initPeerAnnounces(interfaceList)) {
+        if (isFalse(initMulticastDiscoveryListeners(interfaceList) && initPeerAnnounces(interfaceList))) {
             log.trace("{} could not autoconfigure. This interface currently provides no connectivity.", getInterfaceName());
         } else {
             receives = true;
@@ -215,7 +223,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
                     () -> {
                         try (
                                 var socket = new DatagramSocket(
-                                        new InetSocketAddress(getInet6Address(networkInterface), getDataPort())
+                                        new InetSocketAddress(getInet6Address(networkInterface), dataPort)
                                 )
                         ) {
                             while (true) {
@@ -283,15 +291,16 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
             var packet = new DatagramPacket(buf, buf.length);
             try {
                 multicastSocket.receive(packet);
+                var packetData = Arrays.copyOf(packet.getData(), packet.getLength());
                 var peerAddress = packet.getAddress();
-                var ipV6Address = peerAddress.getHostAddress().split("&")[0];
-                var expectedHash = fullHash((getGroupId() + ipV6Address).getBytes(UTF_8));
-                if (Arrays.equals(packet.getData(), expectedHash)) {
-                    addPeer(new Peer(peerAddress, packet.getPort()), multicastSocket.getNetworkInterface());
+                var ipV6Address = new IPv6Address(packet.getAddress().getAddress()).toCompressedString();
+                var expectedHash = fullHash(concatArrays(getGroupId().getBytes(UTF_8), ipV6Address.getBytes(UTF_8)));
+                if (Arrays.equals(packetData, expectedHash)) {
+                    addPeer(peerAddress, multicastSocket.getNetworkInterface());
                 } else {
                     log.debug(
                             "{} received peering packet on {}  from {}, but authentication hash was incorrect.",
-                            this.getInterfaceName(), multicastSocket.getNetworkInterface().getName(), ipV6Address
+                            this, multicastSocket.getNetworkInterface().getName(), ipV6Address
                     );
                 }
             } catch (IOException e) {
@@ -300,22 +309,22 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
         }
     }
 
-    private void addPeer(Peer peer, NetworkInterface networkInterface) {
+    private void addPeer(InetAddress peerAddress, NetworkInterface networkInterface) {
         var currentTime = currentTimeMillis();
-        if (getLinkLocalAddresses().contains(peer.getAddress())) {
+        if (getLinkLocalAddresses().contains(peerAddress)) {
             getInterfaceList().stream()
-                    .filter(iface -> iface.inetAddresses().anyMatch(address -> address.equals(peer.getAddress())))
+                    .filter(iface -> iface.inetAddresses().anyMatch(address -> address.equals(peerAddress)))
                     .findFirst()
                     .ifPresentOrElse(
                             iface -> multicastEchoes.put(iface, currentTime),
                             () -> log.warn("{} received multicast echo on unexpected interface {}", this.getInterfaceName(), networkInterface.getName())
                     );
         } else {
-            if (isFalse(peers.containsKey(peer))) {
-                peers.put(peer, MutablePair.of(networkInterface, currentTime));
-                log.debug("{} added peer {} on {}", this.getInterfaceName(), peer, networkInterface);
+            if (isFalse(peers.containsKey(peerAddress))) {
+                peers.put(peerAddress, MutablePair.of(networkInterface, currentTime));
+                log.debug("{} added peer {} on {}", this.getInterfaceName(), peerAddress, networkInterface);
             } else {
-                peers.get(peer).setRight(currentTime);
+                peers.get(peerAddress).setRight(currentTime);
             }
         }
     }
@@ -335,9 +344,11 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
 
     @Override
     public void processOutgoing(byte[] data) {
-        for (Peer peer : peers.keySet()) {
-            try(var socket = new DatagramSocket(getDataPort())) {
-                var packet = new DatagramPacket(data, data.length, peer.getAddress(), peer.getPort());
+        for (InetAddress peerAddress : peers.keySet()) {
+            try(var socket = new DatagramSocket()) {
+                var packet = new DatagramPacket(data, data.length);
+                packet.setAddress(peerAddress);
+
                 socket.send(packet);
             } catch (IOException e) {
                 log.error("Could not transmit on {}.", this.getInterfaceName(), e);
@@ -350,6 +361,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     private List<InetAddress> getLinkLocalAddresses() {
         return getInterfaceList().stream()
                 .map(this::getInet6Address)
+                .filter(InetAddress::isLinkLocalAddress)
                 .collect(toList());
     }
 
