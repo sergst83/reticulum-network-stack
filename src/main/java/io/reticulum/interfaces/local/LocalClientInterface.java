@@ -2,66 +2,44 @@ package io.reticulum.interfaces.local;
 
 import io.reticulum.Transport;
 import io.reticulum.interfaces.AbstractConnectionInterface;
+import io.reticulum.interfaces.HDLC;
 import io.reticulum.interfaces.InterfaceMode;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.ArrayUtils;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketAddress;
-import java.nio.ByteBuffer;
 import java.util.concurrent.TimeUnit;
 
 import static io.reticulum.utils.CommonUtils.exit;
 import static io.reticulum.utils.CommonUtils.panic;
+import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static java.util.Objects.nonNull;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
 @Setter
 @Slf4j
-public class LocalClientInterface extends AbstractConnectionInterface {
+public class LocalClientInterface extends AbstractConnectionInterface implements HDLC {
 
     private static final long RECONNECT_WAIT = TimeUnit.SECONDS.toMillis(3);
-    private static final byte FLAG = 0x7E;
-    private static final byte ESC = 0x7D;
-    private static final byte ESC_MASK = 0x20;
+
     private static final int HW_MTU = 1064;
-
-    private static byte[] escape(byte[] data) {
-        var result = new byte[0];
-        if (nonNull(data) && data.length > 0) {
-            var buffer = ByteBuffer.wrap(data);
-            for (int i = 0; i < data.length; i++) {
-                if (data[i] == ESC) {
-                    buffer.position(i);
-                    buffer.put(new byte[]{ESC, (byte) (ESC ^ ESC_MASK)});
-                }
-                if (data[i] == FLAG) {
-                    buffer.position(i);
-                    buffer.put(new byte[]{ESC, (byte) (FLAG ^ ESC_MASK)});
-                }
-            }
-            result = buffer.array();
-        }
-
-        return result;
-    }
 
     private Socket socket;
     private SocketAddress targetAddress;
     private LocalServerInterface parentInterface;
-    private boolean isConnectedToSharedInstance;
-    private boolean neverConnected;
-    private boolean detached;
-    private boolean reconnecting;
-    private boolean writing;
-    private boolean receives;
-    private boolean forceBitrate;
+    private volatile boolean isConnectedToSharedInstance;
+    private volatile boolean neverConnected;
+    private volatile boolean detached;
+    private volatile boolean reconnecting;
+    private volatile boolean writing;
+    private volatile boolean receives;
+    private volatile boolean forceBitrate;
 
     private LocalClientInterface() {
         enabled = true;
@@ -101,23 +79,20 @@ public class LocalClientInterface extends AbstractConnectionInterface {
 
     public void readLoop() {
         try {
-            var inputStream = new BufferedInputStream(socket.getInputStream());
+            var inputStream = socket.getInputStream();
             var inFrame = false;
             var escape = false;
-            var dataBuffer = new byte[0];
-            byte[] dataIn = inputStream.readAllBytes();
-            if (dataIn.length > 0) {
-                var pointer = 0;
-                while (pointer < dataIn.length) {
-                    var singlByte = dataIn[pointer];
-                    pointer++;
+            var dataBuffer = new ByteArrayOutputStream();
+            if (inputStream.available() > 0) {
+                while (inputStream.available() > 0) {
+                    var singlByte = inputStream.read();
                     if (inFrame && singlByte == FLAG) {
                         inFrame = false;
-                        processIncoming(dataBuffer);
+                        processIncoming(dataBuffer.toByteArray());
                     } else if (singlByte == FLAG) {
                         inFrame = true;
-                        dataBuffer = new byte[0];
-                    } else if (inFrame && dataBuffer.length < HW_MTU) {
+                        dataBuffer.reset();
+                    } else if (inFrame && dataBuffer.size() < HW_MTU) {
                         if (singlByte == ESC) {
                             escape = true;
                         } else {
@@ -130,14 +105,14 @@ public class LocalClientInterface extends AbstractConnectionInterface {
                                 }
                                 escape = false;
                             }
-                            dataBuffer = ArrayUtils.add(dataBuffer, singlByte);
+                            dataBuffer.write(singlByte);;
                         }
                     }
                 }
             } else {
                 online.set(false);
                 if (isConnectedToSharedInstance && !detached) {
-                    log.warn("Socket for {} was closed, attempting to reconnect...", getInterfaceName());
+                    log.warn("Socket for {} was closed, attempting to reconnect...", this);
                     Transport.getInstance().sharedConnectionDisappeared();
                     reconnect();
                 } else {
@@ -146,12 +121,12 @@ public class LocalClientInterface extends AbstractConnectionInterface {
             }
         } catch (IOException | InterruptedException e) {
             online.set(false);
-            log.error("An interface error occurred. Tearing down {}", this.getInterfaceName(), e);
+            log.error("An interface error occurred. Tearing down {}", this, e);
             teardown(false);
         }
     }
 
-    private void teardown(boolean noWarning) {
+    private synchronized void teardown(boolean noWarning) {
         online.set(false);
         OUT = false;
         IN = false;
@@ -165,7 +140,7 @@ public class LocalClientInterface extends AbstractConnectionInterface {
         }
 
         if (isFalse(noWarning)) {
-            log.error("The interface {} experienced an unrecoverable error and is being torn down. Restart Reticulum to attempt to open this interface again.", this.getInterfaceName());
+            log.error("The interface {} experienced an unrecoverable error and is being torn down. Restart Reticulum to attempt to open this interface again.", this);
             if (Transport.getInstance().getOwner().isPanicOnIntefaceError()) {
                 panic();
             }
@@ -181,7 +156,7 @@ public class LocalClientInterface extends AbstractConnectionInterface {
         interrupt();
     }
 
-    private void reconnect() throws IOException, InterruptedException {
+    private synchronized void reconnect() throws IOException, InterruptedException {
         if (isConnectedToSharedInstance) {
             if (isFalse(reconnecting)) {
                 reconnecting = true;
@@ -192,12 +167,12 @@ public class LocalClientInterface extends AbstractConnectionInterface {
                     try {
                         connect();
                     } catch (Exception e) {
-                        log.debug("Connection attempt {} for {} failed.", attempts, this.getInterfaceName(), e);
+                        log.debug("Connection attempt {} for {} failed.", attempts, this, e);
                     }
                 }
 
                 if (isFalse(neverConnected)) {
-                    log.info("Reconnected socket for {}.", this.getInterfaceName());
+                    log.info("Reconnected socket for {}.", this);
                 }
 
                 reconnecting = false;
@@ -209,7 +184,7 @@ public class LocalClientInterface extends AbstractConnectionInterface {
         }
     }
 
-    private boolean connect() throws IOException {
+    private synchronized boolean connect() throws IOException {
         socket.connect(targetAddress);
         isConnectedToSharedInstance = true;
         neverConnected = false;
@@ -219,7 +194,7 @@ public class LocalClientInterface extends AbstractConnectionInterface {
     }
 
     @Override
-    public void processIncoming(byte[] data) {
+    public synchronized void processIncoming(byte[] data) {
         if (forceBitrate) {
             try {
                 Thread.sleep(TimeUnit.SECONDS.toMillis(data.length / bitrate * 8L));
@@ -235,15 +210,15 @@ public class LocalClientInterface extends AbstractConnectionInterface {
         Transport.getInstance().inbound(data, this);
     }
 
-    public void processOutgoing(final byte[] data) {
+    public synchronized void processOutgoing(final byte[] data) {
         if (online.get()) {
             try {
-                var outputStream = new BufferedOutputStream(socket.getOutputStream());
+                var outputStream = new DataOutputStream(socket.getOutputStream());
                 if (!socket.isConnected()) {
                     reconnect();
                 }
                 writing = true;
-                var toWrite = ArrayUtils.add(ArrayUtils.addAll(new byte[] {FLAG}, escape(data)), FLAG);
+                var toWrite = concatArrays(new byte[]{FLAG}, escapeHdlc(data), new byte[]{FLAG});
                 outputStream.write(toWrite);
                 outputStream.flush();
                 writing = false;
@@ -252,7 +227,7 @@ public class LocalClientInterface extends AbstractConnectionInterface {
                     parentInterface.getTxb().updateAndGet(previous -> previous.add(BigInteger.valueOf(toWrite.length)));
                 }
             } catch (IOException | InterruptedException e) {
-                log.error("Exception occurred while transmitting via {}, tearing down interface", this.getInterfaceName(), e);
+                log.error("Exception occurred while transmitting via {}, tearing down interface", this, e);
                 teardown(false);
             }
         }
@@ -271,8 +246,8 @@ public class LocalClientInterface extends AbstractConnectionInterface {
             try {
                 log.debug("Detaching {}", this);
                 socket.close();
-                detached = true;
                 socket = null;
+                detached = true;
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }

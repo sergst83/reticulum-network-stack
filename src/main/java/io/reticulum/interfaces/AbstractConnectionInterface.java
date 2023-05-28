@@ -20,6 +20,7 @@ import java.util.Queue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static io.reticulum.constant.ReticulumConstant.ANNOUNCE_CAP;
@@ -45,6 +46,7 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
     protected boolean FWD = false;
     protected boolean RPT = false;
     protected AtomicBoolean online = new AtomicBoolean(false);
+    protected AtomicInteger clients = new AtomicInteger(0);
     protected String interfaceName;
     protected AtomicReference<BigInteger> rxb = new AtomicReference<>(ZERO);
     protected AtomicReference<BigInteger> txb = new AtomicReference<>(ZERO);

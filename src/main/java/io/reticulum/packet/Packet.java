@@ -292,8 +292,8 @@ public class Packet implements TPacket {
         this(destination, data, packetType, null, null, null, null, attachedInterface, null);
     }
 
-    public Packet(Destination destination, byte[] requestData, PacketType linkRequest) {
-        this(destination, requestData, linkRequest, null, null, null, null, null, null);
+    public Packet(Destination destination, byte[] requestData, PacketType packetType) {
+        this(destination, requestData, packetType, null, null, null, null, null, null);
     }
 
     public Packet(byte[] raw) {

@@ -2709,7 +2709,7 @@ public final class Transport implements ExitHandler {
         return false;
     }
 
-    private void synthesizeTunnel(ConnectionInterface iface) {
+    public synchronized void synthesizeTunnel(@NonNull final ConnectionInterface iface) {
         var interfaceHash = iface.getHash();
         var publicKey = identity.getPublicKey();
         var randomHash = getRandomHash();

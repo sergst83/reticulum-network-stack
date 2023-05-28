@@ -100,7 +100,7 @@ public class Reticulum implements ExitHandler {
 //    private SocketAddress rpcAddr;
 //    private byte[] rpcKey;
 
-    private byte[] ifacSalt = IFAC_SALT;
+    private final byte[] ifacSalt = IFAC_SALT;
     private final AtomicLong lastDataPersist = new AtomicLong(System.currentTimeMillis());
     private final AtomicLong lastCacheClean = new AtomicLong(0);
 

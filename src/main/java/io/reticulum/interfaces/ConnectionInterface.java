@@ -18,7 +18,8 @@ import static java.nio.charset.StandardCharsets.UTF_8;
         property = "type"
 )
 @JsonSubTypes({
-        @Type(value = AutoInterface.class, name = "AutoInterface")
+        @Type(value = AutoInterface.class, name = "AutoInterface"),
+        @Type(value = AutoInterface.class, name = "TCPClientInterface")
 })
 public interface ConnectionInterface {
 
