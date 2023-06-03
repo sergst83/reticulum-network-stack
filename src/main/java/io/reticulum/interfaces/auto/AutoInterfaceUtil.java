@@ -1,5 +1,7 @@
 package io.reticulum.interfaces.auto;
 
+import inet.ipaddr.ipv6.IPv6Address;
+
 import java.net.Inet6Address;
 import java.net.NetworkInterface;
 import java.net.SocketException;
@@ -14,7 +16,6 @@ import static io.reticulum.interfaces.auto.AutoInterfaceConstant.IGNORED_PREDICA
 import static io.reticulum.interfaces.auto.AutoInterfaceConstant.IN_ALL_IGNORE_IFS;
 import static io.reticulum.interfaces.auto.AutoInterfaceConstant.NOT_IN_ALLOWED_PREDICATE;
 import static java.net.NetworkInterface.networkInterfaces;
-import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.stream.Collectors.toUnmodifiableList;
 
 public interface AutoInterfaceUtil {
@@ -32,9 +33,7 @@ public interface AutoInterfaceUtil {
     }
 
     default String getLocalIpv6Address(final NetworkInterface networkInterface) {
-        return getInet6Address(networkInterface)
-                .getHostAddress()
-                .split("%")[0];
+        return new IPv6Address(getInet6Address(networkInterface).getAddress()).toCompressedString();
     }
 
     default Inet6Address getInet6Address(final NetworkInterface networkInterface) {
@@ -42,9 +41,5 @@ public interface AutoInterfaceUtil {
                 .filter(inetAddress -> inetAddress instanceof Inet6Address)
                 .findFirst()
                 .orElseThrow(() -> new NoSuchElementException(networkInterface.toString()));
-    }
-
-    default long secToMillisec(double sec) {
-        return (long) (sec * SECONDS.toMillis(1));
     }
 }

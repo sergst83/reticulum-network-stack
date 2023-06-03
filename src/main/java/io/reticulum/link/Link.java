@@ -233,19 +233,23 @@ public class Link extends AbstractDestination {
     }
 
     public synchronized void handshake() {
-        this.status = LinkStatus.HANDSHAKE;
+        if (status == PENDING && nonNull(prv)) {
+            this.status = LinkStatus.HANDSHAKE;
 
-        var agreement = new X25519Agreement();
-        agreement.init(prv);
-        var sharedKey = new byte[agreement.getAgreementSize()];
-        agreement.calculateAgreement(peerPub, sharedKey, 0);
-        this.sharedKey = sharedKey;
+            var agreement = new X25519Agreement();
+            agreement.init(prv);
+            var sharedKey = new byte[agreement.getAgreementSize()];
+            agreement.calculateAgreement(peerPub, sharedKey, 0);
+            this.sharedKey = sharedKey;
 
-        var hkdf = new HKDFBytesGenerator(new SHA256Digest());
-        hkdf.init(new HKDFParameters(sharedKey, getSalt(), getContext()));
-        var derivedKey = new byte[32];
-        hkdf.generateBytes(derivedKey, 0, derivedKey.length);
-        this.derivedKey = derivedKey;
+            var hkdf = new HKDFBytesGenerator(new SHA256Digest());
+            hkdf.init(new HKDFParameters(sharedKey, getSalt(), getContext()));
+            var derivedKey = new byte[32];
+            hkdf.generateBytes(derivedKey, 0, derivedKey.length);
+            this.derivedKey = derivedKey;
+        } else {
+            log.error("Handshake attempt on {} with invalid state {}", this, status);
+        }
     }
 
     @SneakyThrows

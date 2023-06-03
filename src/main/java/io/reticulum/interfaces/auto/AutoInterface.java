@@ -160,8 +160,8 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
         } else {
             receives = true;
 
-            var peeringWait = secToMillisec(getAnnounceInterval() * 1.2);
-            log.info("{}  discovering peers for {} seconds...", this.getInterfaceName(), MILLISECONDS.toSeconds(peeringWait));
+            var peeringWait = getAnnounceInterval() * 1.2;
+            log.info("{}  discovering peers for {} seconds...", this.getInterfaceName(), MILLISECONDS.toSeconds((long) peeringWait));
 
             //Запускаем udp сервера на всех интерфейсам в своих потоках для слушания соединений
             initNetworkInterfaceServers(interfaceList);
@@ -196,10 +196,10 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
         peerAnnounceScheduledExecutor = newScheduledThreadPool(networkInterfaceList.size());
         return networkInterfaceList.stream()
                 .map(
-                        iface -> peerAnnounceScheduledExecutor.scheduleAtFixedRate(
+                        iface -> peerAnnounceScheduledExecutor.scheduleWithFixedDelay(
                                 () -> peerAnnounce(iface),
-                                secToMillisec(getAnnounceInterval() * 1.2),
-                                secToMillisec(getAnnounceInterval()),
+                                (long) (getAnnounceInterval() * 1.2),
+                                getAnnounceInterval(),
                                 MILLISECONDS
                         )
                 )
@@ -249,7 +249,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     private void schedulePeerJob() {
         peerJobScheduledExecutor.schedule(
                 this::peerJob,
-                secToMillisec(getPeerJobInterval()),
+                getPeerJobInterval(),
                 MILLISECONDS
         );
     }
@@ -265,13 +265,16 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
 
     private void peerAnnounce(final NetworkInterface networkInterface) {
         var discoveryToken = fullHash(
-                (getGroupId() + getLocalIpv6Address(networkInterface)).getBytes(UTF_8)
+                concatArrays(
+                        getGroupId().getBytes(UTF_8),
+                        getLocalIpv6Address(networkInterface).getBytes(UTF_8)
+                )
         );
         try (var multicastSocket = new MulticastSocket(getDiscoveryPort())) {
             multicastSocket.setNetworkInterface(networkInterface);
             var group = InetAddress.getByName(getMcastDiscoveryAddress());
             multicastSocket.joinGroup(group);
-            multicastSocket.send(new DatagramPacket(discoveryToken, discoveryToken.length, group, getDiscoveryPort()));
+            multicastSocket.send(new DatagramPacket(discoveryToken, discoveryToken.length));
             multicastSocket.leaveGroup(group);
         } catch (IOException e) {
             if (
@@ -368,7 +371,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     private void peerJob() {
         //Check for timed out peers and remove any timed out peers
         peers.entrySet().stream()
-                .filter(entry -> currentTimeMillis() > (entry.getValue().getRight() + secToMillisec(getPeeringTimeout())))
+                .filter(entry -> currentTimeMillis() > (entry.getValue().getRight() + getPeeringTimeout()))
                 .map(Map.Entry::getKey)
                 .collect(toList())
                 .forEach(
@@ -400,7 +403,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
             //Check multicast echo timeouts
             for (NetworkInterface iface : interfaceList) {
                 var lastMulticastEcho = multicastEchoes.getOrDefault(iface, 0L);
-                if ((System.currentTimeMillis() - lastMulticastEcho) > secToMillisec(getMulticastEchoTimeout())) {
+                if ((System.currentTimeMillis() - lastMulticastEcho) > getMulticastEchoTimeout()) {
                     if (timedOutInterfaces.containsKey(iface) && isFalse(timedOutInterfaces.get(iface))) {
                         carrierChanged.set(true);
                         log.warn("Multicast echo timeout for {}. Carrier lost.", iface.getName());
