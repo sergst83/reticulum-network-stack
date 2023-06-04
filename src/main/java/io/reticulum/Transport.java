@@ -175,7 +175,7 @@ public final class Transport implements ExitHandler {
     private final List<Destination> destinations = new CopyOnWriteArrayList<>();
 
     /**
-     *     Interfaces for communicating with local clients connected to a shared Reticulum instance
+     * Interfaces for communicating with local clients connected to a shared Reticulum instance
      */
     @Getter
     private final List<ConnectionInterface> localClientInterfaces = new CopyOnWriteArrayList<>();
@@ -1298,94 +1298,100 @@ public final class Transport implements ExitHandler {
                                         }
                                     }
                                 }
+                            }
 
-                                //If we have any waiting discovery path requests for this destination, we retransmit to that
-                                // interface immediately
-                                if (discoveryPathRequests.containsKey(Hex.encodeHexString(packet.getDestinationHash()))) {
-                                    var prEntry = discoveryPathRequests.get(Hex.encodeHexString(packet.getDestinationHash()));
-                                    attachedInterface = prEntry.getRequestingInterface();
+                            //If we have any waiting discovery path requests for this destination, we retransmit to that
+                            // interface immediately
+                            if (discoveryPathRequests.containsKey(Hex.encodeHexString(packet.getDestinationHash()))) {
+                                var prEntry = discoveryPathRequests.get(Hex.encodeHexString(packet.getDestinationHash()));
+                                attachedInterface = prEntry.getRequestingInterface();
 
-                                    log.debug("Got matching announce, answering waiting discovery path request for {} on {}",
-                                            Hex.encodeHexString(packet.getDestinationHash()), attachedInterface.getInterfaceName()
-                                    );
-                                    var newAnnounce = new Packet(
-                                            announceDestination,
-                                            announceData,
-                                            ANNOUNCE,
-                                            PATH_RESPONSE,
-                                            HEADER_2,
-                                            TRANSPORT,
-                                            identity.getHash(),
-                                            attachedInterface
-                                    );
-                                    newAnnounce.setHops(packet.getHops());
-                                    newAnnounce.send();
-                                }
-
-                                var destinationTableEntry = Hops.builder()
-                                        .timestamp(now)
-                                        .via(receivedFrom)
-                                        .hops(announceHops)
-                                        .expires(expires)
-                                        .randomBlobs(randomBlobs)
-                                        .anInterface(packet.getReceivingInterface())
-                                        .packet(packet)
-                                        .build();
-                                destinationTable.put(
-                                        Hex.encodeHexString(packet.getDestinationHash()),
-                                        destinationTableEntry
+                                log.debug("Got matching announce, answering waiting discovery path request for {} on {}",
+                                        Hex.encodeHexString(packet.getDestinationHash()), attachedInterface.getInterfaceName()
                                 );
+                                var announceIdentity = recall(packet.getDestinationHash());
+                                var announceDestination = new Destination(announceIdentity, OUT, SINGLE, "unknown", "unknown");
+                                announceDestination.setHash(packet.getDestinationHash());
+                                announceDestination.setHexHash(Hex.encodeHexString(announceDestination.getHash()));
+                                var announceData = packet.getData();
+                                var newAnnounce = new Packet(
+                                        announceDestination,
+                                        announceData,
+                                        ANNOUNCE,
+                                        PATH_RESPONSE,
+                                        HEADER_2,
+                                        TRANSPORT,
+                                        identity.getHash(),
+                                        attachedInterface
+                                );
+                                newAnnounce.setHops(packet.getHops());
+                                newAnnounce.send();
+                            }
+
+                            var destinationTableEntry = Hops.builder()
+                                    .timestamp(now)
+                                    .via(receivedFrom)
+                                    .hops(announceHops)
+                                    .expires(expires)
+                                    .randomBlobs(randomBlobs)
+                                    .anInterface(packet.getReceivingInterface())
+                                    .packet(packet)
+                                    .build();
+                            destinationTable.put(
+                                    Hex.encodeHexString(packet.getDestinationHash()),
+                                    destinationTableEntry
+                            );
+                            log.debug(
+                                    "Destination {} is now {} hops away via {} on {}",
+                                    Hex.encodeHexString(packet.getDestinationHash()),
+                                    announceHops,
+                                    Hex.encodeHexString(receivedFrom),
+                                    packet.getReceivingInterface().getInterfaceName()
+                            );
+
+                            //If the receiving interface is a tunnel, we add the announce to the tunnels table
+                            if (
+                                    nonNull(packet.getReceivingInterface().getTunnelId())
+                                            && tunnels.containsKey(Hex.encodeHexString(packet.getReceivingInterface().getTunnelId()))
+                            ) {
+                                var tunnelEntry = tunnels.get(Hex.encodeHexString(packet.getReceivingInterface().getTunnelId()));
+                                var paths = tunnelEntry.getTunnelPaths();
+                                paths.put(Hex.encodeHexString(packet.getDestinationHash()), destinationTableEntry);
+                                expires = Instant.now().plusSeconds(DESTINATION_TIMEOUT);
+                                tunnelEntry.setExpires(expires);
                                 log.debug(
-                                        "Destination {} is now {} hops away via {} on {}",
+                                        "Path to {} associated with tunnel {}.",
                                         Hex.encodeHexString(packet.getDestinationHash()),
-                                        announceHops,
-                                        Hex.encodeHexString(receivedFrom),
-                                        packet.getReceivingInterface().getInterfaceName()
+                                        Hex.encodeHexString(packet.getReceivingInterface().getTunnelId())
                                 );
+                            }
 
-                                //If the receiving interface is a tunnel, we add the announce to the tunnels table
-                                if (
-                                        nonNull(packet.getReceivingInterface().getTunnelId())
-                                                && tunnels.containsKey(Hex.encodeHexString(packet.getReceivingInterface().getTunnelId()))
-                                ) {
-                                    var tunnelEntry = tunnels.get(Hex.encodeHexString(packet.getReceivingInterface().getTunnelId()));
-                                    var paths = tunnelEntry.getTunnelPaths();
-                                    paths.put(Hex.encodeHexString(packet.getDestinationHash()), destinationTableEntry);
-                                    expires = Instant.now().plusSeconds(DESTINATION_TIMEOUT);
-                                    tunnelEntry.setExpires(expires);
-                                    log.debug(
-                                            "Path to {} associated with tunnel {}.",
-                                            Hex.encodeHexString(packet.getDestinationHash()),
-                                            Hex.encodeHexString(packet.getReceivingInterface().getTunnelId())
-                                    );
-                                }
-
-                                //Call externally registered callbacks from apps wanting to know when an announce arrives
-                                if (packet.getContext() != PATH_RESPONSE) {
-                                    for (AnnounceHandler handler : announceHandlers) {
-                                        try {
-                                            //Check that the announced destination matches the handlers aspect filter
-                                            var executeCallback = false;
-                                            if (isNull(handler.getAspectFilter())) {
-                                                //If the handlers aspect filter is set to None, we execute the callback in all cases
+                            //Call externally registered callbacks from apps wanting to know when an announce arrives
+                            if (packet.getContext() != PATH_RESPONSE) {
+                                for (AnnounceHandler handler : announceHandlers) {
+                                    try {
+                                        //Check that the announced destination matches the handlers aspect filter
+                                        var executeCallback = false;
+                                        var announceIdentity = recall(packet.getDestinationHash());
+                                        if (isNull(handler.getAspectFilter())) {
+                                            //If the handlers aspect filter is set to None, we execute the callback in all cases
+                                            executeCallback = true;
+                                        } else {
+                                            var handlerExpectedHash = hashFromNameAndIdentity(handler.getAspectFilter(), announceIdentity);
+                                            if (Arrays.equals(packet.getDestinationHash(), handlerExpectedHash)) {
                                                 executeCallback = true;
-                                            } else {
-                                                var handlerExpectedHash = hashFromNameAndIdentity(handler.getAspectFilter(), announceIdentity);
-                                                if (Arrays.equals(packet.getDestinationHash(), handlerExpectedHash)) {
-                                                    executeCallback = true;
-                                                }
                                             }
-
-                                            if (executeCallback) {
-                                                handler.receivedAnnounce(
-                                                        packet.getDestinationHash(),
-                                                        announceIdentity,
-                                                        recallAppData(packet.getDestinationHash())
-                                                );
-                                            }
-                                        } catch (Exception e) {
-                                            log.error("Error while processing external announce callback.", e);
                                         }
+
+                                        if (executeCallback) {
+                                            handler.receivedAnnounce(
+                                                    packet.getDestinationHash(),
+                                                    announceIdentity,
+                                                    recallAppData(packet.getDestinationHash())
+                                            );
+                                        }
+                                    } catch (Exception e) {
+                                        log.error("Error while processing external announce callback.", e);
                                     }
                                 }
                             }
