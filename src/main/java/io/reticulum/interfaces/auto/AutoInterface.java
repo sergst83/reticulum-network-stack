@@ -17,6 +17,7 @@ import java.io.IOException;
 import java.math.BigInteger;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.MulticastSocket;
 import java.net.NetworkInterface;
@@ -95,9 +96,9 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     private Deque<String> mifDeque = new ConcurrentLinkedDeque<>();
 
     private String mcastDiscoveryAddress;
-    private long announceInterval = PEERING_TIMEOUT / 6;
-    private long peerJobInterval = (long) (PEERING_TIMEOUT * 1.1);
-    private long peeringTimeout = PEERING_TIMEOUT;
+    private long announceInterval = PEERING_TIMEOUT / 4;
+    private long peerJobInterval = (long) (PEERING_TIMEOUT * 1.2);
+    private long peeringTimeout = PEERING_TIMEOUT * 5;
     private long multicastEchoTimeout = PEERING_TIMEOUT / 2;
 
     private List<NetworkInterface> interfaceList = new CopyOnWriteArrayList<>();
@@ -180,7 +181,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     private void initNetworkInterfaceServer() {
         try (var socket = new DatagramSocket(dataPort)) {
             while (true) {
-                byte[] buf = new byte[2048];
+                byte[] buf = new byte[1024];
                 var packet = new DatagramPacket(buf, buf.length);
                 socket.receive(packet);
                 processIncoming(Arrays.copyOf(packet.getData(), packet.getLength()));
@@ -194,27 +195,34 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     }
 
     private void peerAnnounce() {
-        interfaceList.forEach(
-                networkInterface -> {
-                    var discoveryToken = fullHash(
-                            concatArrays(
-                                    getGroupId().getBytes(UTF_8),
-                                    getLocalIpv6Address(networkInterface).getBytes(UTF_8)
-                            )
+        try (var socket = new DatagramSocket()) {
+            getLinkLocalAddresses()
+                    .forEach(
+                            inetAddress -> {
+                                var localAddress = getLocalIpv6Address((Inet6Address) inetAddress);
+                                var token = fullHash(
+                                        concatArrays(
+                                                getGroupId().getBytes(UTF_8),
+                                                localAddress.getBytes(UTF_8)
+                                        )
+                                );
+                                DatagramPacket packet = null;
+                                try {
+                                    packet = new DatagramPacket(
+                                            token,
+                                            token.length,
+                                            InetAddress.getByName(getMcastDiscoveryAddress()),
+                                            discoveryPort
+                                    );
+                                    socket.send(packet);
+                                } catch (IOException e) {
+                                    log.error("Error while send announce packet {} from address {}", packet, inetAddress, e);
+                                }
+                            }
                     );
-                    try (var socket = new DatagramSocket()) {
-                        var packet = new DatagramPacket(
-                                discoveryToken,
-                                discoveryToken.length,
-                                InetAddress.getByName(getMcastDiscoveryAddress()),
-                                discoveryPort
-                        );
-                        socket.send(packet);
-                    } catch (IOException e) {
-                        log.error("Error while send announce on interface {}", networkInterface, e);
-                    }
-                }
-        );
+        } catch (SocketException e) {
+            log.error("Can not establish DatagramSocket to send announce", e);
+        }
     }
 
     @SneakyThrows
@@ -253,8 +261,10 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     }
 
     private void addPeer(InetAddress peerAddress) {
+        if (isFalse(peers.containsKey(peerAddress))) {
+            log.debug("{} added peer {}", this, peerAddress);
+        }
         peers.put(peerAddress, Instant.now());
-        log.debug("{} added peer {}", this, peerAddress);
     }
 
     @Override
@@ -274,12 +284,9 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     public synchronized void processOutgoing(byte[] data) {
         for (InetAddress peerAddress : peers.keySet()) {
             try (var socket = new DatagramSocket()) {
-                var packet = new DatagramPacket(data, data.length);
-                packet.setAddress(peerAddress);
-
-                socket.send(packet);
+                socket.send(new DatagramPacket(data, data.length, peerAddress, dataPort));
             } catch (IOException e) {
-                log.error("Could not transmit on {}.", this.getInterfaceName(), e);
+                log.error("Could not transmit on {}.", this, e);
             }
         }
 
@@ -287,7 +294,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     }
 
     private List<InetAddress> getLinkLocalAddresses() {
-        return getInterfaceList().stream()
+        return interfaceList.stream()
                 .map(this::getInet6Address)
                 .filter(InetAddress::isLinkLocalAddress)
                 .collect(toList());
@@ -296,12 +303,12 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     private synchronized void peerJob() {
         //Check for timed out peers and remove any timed out peers
         peers.entrySet().stream()
-                .filter(entry -> Duration.between(entry.getValue(), Instant.now()).toMillis() > getPeeringTimeout())
+                .filter(entry -> Duration.between(entry.getValue(), Instant.now()).toMillis() > peeringTimeout)
                 .map(Map.Entry::getKey)
                 .collect(toList())
                 .forEach(
                         peerAddress -> {
-                            var removed = peers.remove(peerAddress);
+                            peers.remove(peerAddress);
                             log.debug("{} removed peer {}", this, peerAddress);
                         }
                 );
@@ -318,7 +325,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
 
             var toAdd = CollectionUtils.subtract(newIfaceList, interfaceList);
             for (NetworkInterface iface : toAdd) {
-                log.debug("Starting new UDP listener for {} {}", this, iface.getName());
+                log.debug("Starting new UDP listener for {} {}", this, getInet6Address(iface));
                 interfaceList.add(iface);
             }
         } catch (SocketException e) {

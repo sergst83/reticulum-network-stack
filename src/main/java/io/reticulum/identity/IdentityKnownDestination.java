@@ -4,7 +4,6 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.reticulum.Transport;
-import io.reticulum.constant.IdentityConstant;
 import io.reticulum.destination.Destination;
 import io.reticulum.packet.Packet;
 import lombok.AllArgsConstructor;
@@ -107,18 +106,16 @@ public class IdentityKnownDestination {
             var destinationHash = packet.getDestinationHash();
             var destinationHashString = Hex.encodeHexString(destinationHash);
             var publicKey = subarray(packet.getData(), 0, KEYSIZE / 8);
-            var nameHash = subarray(packet.getData(), KEYSIZE / 8, KEYSIZE / 8 + IdentityConstant.NAME_HASH_LENGTH / 8);
+            var nameHash = subarray(packet.getData(), KEYSIZE / 8, KEYSIZE / 8 + NAME_HASH_LENGTH / 8);
             var randomHash = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8, KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10);
             var signature = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10, KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8);
 
-            var appData = new byte[0];
+            byte[] appData = null;
             if (packet.getData().length > KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8) {
                 appData = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8, packet.getData().length);
-            } else {
-                appData = null;
             }
 
-            byte[] signedData = concatArrays(destinationHash, publicKey, nameHash, requireNonNullElse(appData, new byte[0]));
+            byte[] signedData = concatArrays(destinationHash, publicKey, nameHash, randomHash, requireNonNullElse(appData, new byte[0]));
 
             var announcedIdentity = new Identity(false);
             announcedIdentity.loadPublicKey(publicKey);

@@ -36,6 +36,10 @@ public interface AutoInterfaceUtil {
         return new IPv6Address(getInet6Address(networkInterface).getAddress()).toCompressedString();
     }
 
+    default String getLocalIpv6Address(final Inet6Address inet6Address) {
+        return new IPv6Address(inet6Address.getAddress()).toCompressedString();
+    }
+
     default Inet6Address getInet6Address(final NetworkInterface networkInterface) {
         return (Inet6Address) networkInterface.inetAddresses()
                 .filter(inetAddress -> inetAddress instanceof Inet6Address)
