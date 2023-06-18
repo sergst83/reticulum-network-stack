@@ -26,6 +26,7 @@ import org.apache.commons.lang3.BooleanUtils;
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
 import java.time.Duration;
+import java.util.concurrent.Executors;
 
 import static java.util.Objects.nonNull;
 import static java.util.Objects.requireNonNullElse;
@@ -41,7 +42,6 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
     private static final long INITIAL_CONNECT_TIMEOUT = 5_000; //milliseconds
     private static final long RECONNECT_WAIT = 5; //seconds
 
-    private final Transport owner = Transport.getInstance();
     private ChannelFuture channelFuture;
 
     private Integer maxReconnectTries;
@@ -128,7 +128,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
                     .accumulateAndGet(BigInteger.valueOf(processingData.length), BigInteger::add);
         }
 
-        owner.inbound(processingData, this);
+        Transport.getInstance().inbound(processingData, this);
     }
 
     @Override
@@ -195,7 +195,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
                 reconnecting = false;
 
                 if (isFalse(kissFraming)) {
-                    owner.synthesizeTunnel(this);
+                    Transport.getInstance().synthesizeTunnel(this);
                 }
             }
         } else {
@@ -235,8 +235,17 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
             ChannelFuture channelFuture = bootstrap.connect(targetHost, targetPort).sync();
             this.channelFuture = channelFuture;
 
-            // Wait until the connection is closed.
-            channelFuture.channel().closeFuture().sync();
+            Executors.defaultThreadFactory().newThread(() -> {
+                // Wait until the connection is closed.
+                try {
+                    channelFuture.channel().closeFuture().sync();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                } finally {
+                    workerGroup.shutdownGracefully();
+                    online.set(false);
+                }
+            });
 
             log.debug("TCP connection for {} established", this);
         } catch (Exception e) {
@@ -247,9 +256,6 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
             } else {
                 throw e;
             }
-        } finally {
-            workerGroup.shutdownGracefully();
-            online.set(false);
         }
 
         online.set(true);
@@ -283,7 +289,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
     private void teardown() {
         if (initiator && isFalse(detached)) {
             log.error("The interface {} experienced an unrecoverable error and is being torn down. Restart Reticulum to attempt to open this interface again.", this);
-            if (owner.getOwner().isPanicOnIntefaceError()) {
+            if (Transport.getInstance().getOwner().isPanicOnIntefaceError()) {
                 System.exit(255);
             }
         } else {
@@ -298,9 +304,9 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
             ((AbstractConnectionInterface) parentInterface).getClients().decrementAndGet();
         }
 
-        if (owner.getInterfaces().contains(this)) {
+        if (Transport.getInstance().getInterfaces().contains(this)) {
             if (isFalse(initiator)) {
-                owner.getInterfaces().remove(this);
+                Transport.getInstance().getInterfaces().remove(this);
             }
         }
     }

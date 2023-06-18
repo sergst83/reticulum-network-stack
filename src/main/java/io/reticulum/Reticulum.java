@@ -131,7 +131,9 @@ public class Reticulum implements ExitHandler {
 //            rpcListener = new ServerSocket(localIntefacePort);
 //        }
         //Запустить все интерфейсы
-        ifList.forEach(ConnectionInterface::launch);
+        ifList.stream()
+                .filter(ConnectionInterface::isEnabled)
+                .forEach(ConnectionInterface::launch);
 
         Runtime.getRuntime().addShutdownHook(new Thread(this::exitHandler));
         Signal.handle(new Signal("INT"), sig -> sigintHandler());
@@ -193,6 +195,7 @@ public class Reticulum implements ExitHandler {
 
                 if (isFalse(iface.isEnabled())) {
                     log.debug("Skipping disabled interface {}", iface.getInterfaceName());
+                    continue;
                 }
 
                 if (interfaceList.stream().anyMatch(i -> i.getInterfaceName().equals(iface.getInterfaceName()))) {

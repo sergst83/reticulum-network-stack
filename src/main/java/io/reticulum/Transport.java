@@ -1893,7 +1893,7 @@ public final class Transport implements ExitHandler {
         if (packet.getDestinationType() == GROUP) {
             if (packet.getPacketType() != ANNOUNCE) {
                 if (packet.getHops() > 1) {
-                    log.debug("Dropped PLAIN packet {} with {} hops", Hex.encodeHexString(packet.getHash()), packet.getHops());
+                    log.debug("Dropped GROUP packet {} with {} hops", Hex.encodeHexString(packet.getHash()), packet.getHops());
                     return false;
                 } else {
                     return true;
@@ -2026,6 +2026,9 @@ public final class Transport implements ExitHandler {
     public void activateLink(@NonNull Link link) {
         log.trace("Activating link {}", link);
         if (pendingLinks.contains(link)) {
+            if (link.getStatus() != ACTIVE) {
+                throw new IllegalStateException("Invalid link state for link activation: " + link.getStatus());
+            }
             pendingLinks.remove(link);
             activeLinks.add(link);
             link.setStatus(ACTIVE);

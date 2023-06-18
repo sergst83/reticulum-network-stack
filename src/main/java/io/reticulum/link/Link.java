@@ -76,6 +76,7 @@ import static io.reticulum.destination.RequestPolicy.ALLOW_LIST;
 import static io.reticulum.destination.RequestPolicy.ALLOW_NONE;
 import static io.reticulum.link.LinkStatus.ACTIVE;
 import static io.reticulum.link.LinkStatus.CLOSED;
+import static io.reticulum.link.LinkStatus.HANDSHAKE;
 import static io.reticulum.link.LinkStatus.PENDING;
 import static io.reticulum.link.LinkStatus.STALE;
 import static io.reticulum.link.TeardownSession.DESTINATION_CLOSED;
@@ -279,50 +280,57 @@ public class Link extends AbstractDestination {
         hadOutbound();
     }
 
-    @SneakyThrows
     public synchronized void validateProof(Packet packet) {
-        if (status == PENDING) {
-            if (initiator && packet.getData().length == (SIGLENGTH / 8 + ECPUBSIZE / 2)) {
-                var peerPubBytes = subarray(packet.getData(), SIGLENGTH / 8, SIGLENGTH / 8 + ECPUBSIZE / 2);
-                var peerSigPubBytes = subarray(destination.getIdentity().getPublicKey(), ECPUBSIZE / 2, ECPUBSIZE);
-                loadPeer(peerPubBytes, peerSigPubBytes);
-                handshake();
+        try {
+            if (status == PENDING) {
+                if (initiator && packet.getData().length == (SIGLENGTH / 8 + ECPUBSIZE / 2)) {
+                    var peerPubBytes = subarray(packet.getData(), SIGLENGTH / 8, SIGLENGTH / 8 + ECPUBSIZE / 2);
+                    var peerSigPubBytes = subarray(destination.getIdentity().getPublicKey(), ECPUBSIZE / 2, ECPUBSIZE);
+                    loadPeer(peerPubBytes, peerSigPubBytes);
+                    handshake();
 
-                establishmentCost.getAndAdd(packet.getRaw().length);
-                var signedData = concatArrays(linkId, this.peerPubBytes, this.peerSigPubBytes);
-                var signature = subarray(packet.getData(), 0, SIGLENGTH / 8);
+                    establishmentCost.getAndAdd(packet.getRaw().length);
+                    var signedData = concatArrays(linkId, this.peerPubBytes, this.peerSigPubBytes);
+                    var signature = subarray(packet.getData(), 0, SIGLENGTH / 8);
 
-                if (destination.getIdentity().validate(signature, signedData)) {
-                    this.rtt = Duration.between(requestTime, Instant.now()).toMillis();
-                    this.attachedInterface = packet.getReceivingInterface();
-                    this.remoteIdentity = this.destination.getIdentity();
-                    this.status = ACTIVE;
-                    this.activatedAt = Instant.now();
-                    Transport.getInstance().activateLink(this);
+                    if (destination.getIdentity().validate(signature, signedData)) {
+                        if (status != HANDSHAKE) {
+                            throw new IllegalStateException("Invalid link state for proof validation");
+                        }
+                        this.rtt = Duration.between(requestTime, Instant.now()).toMillis();
+                        this.attachedInterface = packet.getReceivingInterface();
+                        this.remoteIdentity = this.destination.getIdentity();
+                        this.status = ACTIVE;
+                        this.activatedAt = Instant.now();
+                        Transport.getInstance().activateLink(this);
 
-                    log.info("Link {} established with {}, RTT is {} ms", this, destination, rtt);
+                        log.info("Link {} established with {}, RTT is {} ms", this, destination, rtt);
 
-                    if (rtt > 0 && establishmentCost.get() > 0) {
-                        this.establishmentRate = this.establishmentCost.get() / rtt;
+                        if (rtt > 0 && establishmentCost.get() > 0) {
+                            this.establishmentRate = this.establishmentCost.get() / rtt;
+                        }
+
+                        try (var packer = MessagePack.newDefaultBufferPacker()) {
+                            packer.packLong(this.rtt);
+
+                            var rttData = packer.toByteArray();
+                            var rttPacket = new Packet(this, rttData, LRRTT);
+                            rttPacket.send();
+
+                            hadOutbound();
+                        }
+
+                        if (nonNull(callbacks.getLinkEstablished())) {
+                            defaultThreadFactory().newThread(callbacks.getLinkEstablished()).start();
+                        }
+                    } else {
+                        log.debug("Invalid link proof signature received by {}. Ignoring.", this);
                     }
-
-                    try (var packer = MessagePack.newDefaultBufferPacker()) {
-                        packer.packLong(this.rtt);
-
-                        var rttData = packer.toByteArray();
-                        var rttPacket = new Packet(this, rttData, LRRTT);
-                        rttPacket.send();
-
-                        hadOutbound();
-                    }
-
-                    if (nonNull(callbacks.getLinkEstablished())) {
-                        defaultThreadFactory().newThread(callbacks.getLinkEstablished()).start();
-                    }
-                } else {
-                    log.debug("Invalid link proof signature received by {}. Ignoring.", this);
                 }
             }
+        } catch (Exception e) {
+            status = CLOSED;
+            log.error("An error ocurred while validating link request proof on {}", this, e);
         }
     }
 
