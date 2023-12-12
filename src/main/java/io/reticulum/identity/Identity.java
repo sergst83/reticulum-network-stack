@@ -23,6 +23,7 @@ import org.bouncycastle.crypto.params.X25519PrivateKeyParameters;
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -95,12 +96,12 @@ public class Identity {
     private boolean loadPrivateKey(final byte[] privateKey) {
         try {
             this.prvBytes = subarray(privateKey, 0, KEYSIZE / 8 / 2);
-            this.prv = new X25519PrivateKeyParameters(prvBytes);
+            this.prv = new X25519PrivateKeyParameters(new ByteArrayInputStream(getPrvBytes()));
             this.pub = prv.generatePublicKey();
             this.pubBytes = pub.getEncoded();
 
             this.sigPrvBytes = subarray(privateKey, KEYSIZE / 8 / 2, privateKey.length);
-            this.sigPrv = new Ed25519PrivateKeyParameters(sigPrvBytes);
+            this.sigPrv = new Ed25519PrivateKeyParameters(new ByteArrayInputStream(getSigPrvBytes()));
             this.sigPub = sigPrv.generatePublicKey();
             this.sigPubBytes = sigPub.getEncoded();
 
