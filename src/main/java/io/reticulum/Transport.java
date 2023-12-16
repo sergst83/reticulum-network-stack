@@ -6,6 +6,7 @@ import io.reticulum.interfaces.ConnectionInterface;
 import io.reticulum.link.Link;
 import io.reticulum.packet.Packet;
 import io.reticulum.packet.PacketReceipt;
+import io.reticulum.packet.PacketReceiptStatus;
 import io.reticulum.packet.data.DataPacket;
 import io.reticulum.packet.data.DataPacketConverter;
 import io.reticulum.transport.AnnounceEntry;
@@ -16,6 +17,7 @@ import io.reticulum.transport.LinkEntry;
 import io.reticulum.transport.PathRequestEntry;
 import io.reticulum.transport.RateEntry;
 import io.reticulum.transport.ReversEntry;
+import io.reticulum.transport.TransportState;
 import io.reticulum.transport.Tunnel;
 import io.reticulum.utils.IdentityUtils;
 import lombok.Getter;
@@ -43,6 +45,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -57,6 +60,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
 
 import static io.reticulum.constant.IdentityConstant.HASHLENGTH;
 import static io.reticulum.constant.IdentityConstant.KEYSIZE;
@@ -66,6 +70,7 @@ import static io.reticulum.constant.LinkConstant.ECPUBSIZE;
 import static io.reticulum.constant.LinkConstant.ESTABLISHMENT_TIMEOUT_PER_HOP;
 import static io.reticulum.constant.PacketConstant.EXPL_LENGTH;
 import static io.reticulum.constant.ReticulumConstant.ANNOUNCE_CAP;
+import static io.reticulum.constant.ReticulumConstant.DEFAULT_PER_HOP_TIMEOUT;
 import static io.reticulum.constant.ReticulumConstant.HEADER_MINSIZE;
 import static io.reticulum.constant.ReticulumConstant.MAX_QUEUED_ANNOUNCES;
 import static io.reticulum.constant.ReticulumConstant.MTU;
@@ -75,6 +80,7 @@ import static io.reticulum.constant.TransportConstant.APP_NAME;
 import static io.reticulum.constant.TransportConstant.AP_PATH_TIME;
 import static io.reticulum.constant.TransportConstant.DESTINATION_TIMEOUT;
 import static io.reticulum.constant.TransportConstant.DISCOVER_PATHS_FOR;
+import static io.reticulum.constant.TransportConstant.HASHLIST_MAXSIZE;
 import static io.reticulum.constant.TransportConstant.JOB_INTERVAL;
 import static io.reticulum.constant.TransportConstant.LINKS_CHECK_INTERVAL;
 import static io.reticulum.constant.TransportConstant.LINK_TIMEOUT;
@@ -82,6 +88,7 @@ import static io.reticulum.constant.TransportConstant.LOCAL_CLIENT_CACHE_MAXSIZE
 import static io.reticulum.constant.TransportConstant.LOCAL_REBROADCASTS_MAX;
 import static io.reticulum.constant.TransportConstant.MAX_PR_TAGS;
 import static io.reticulum.constant.TransportConstant.MAX_RATE_TIMESTAMPS;
+import static io.reticulum.constant.TransportConstant.MAX_RECEIPTS;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_E;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_G;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_M;
@@ -90,6 +97,7 @@ import static io.reticulum.constant.TransportConstant.PATHFINDER_RW;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_GRACE;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_MI;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_TIMEOUT;
+import static io.reticulum.constant.TransportConstant.RECEIPTS_CHECK_INTERVAL;
 import static io.reticulum.constant.TransportConstant.REVERSE_TIMEOUT;
 import static io.reticulum.constant.TransportConstant.ROAMING_PATH_TIME;
 import static io.reticulum.constant.TransportConstant.TABLES_CULL_INTERVAL;
@@ -125,6 +133,9 @@ import static io.reticulum.packet.PacketType.ANNOUNCE;
 import static io.reticulum.packet.PacketType.DATA;
 import static io.reticulum.packet.PacketType.LINKREQUEST;
 import static io.reticulum.packet.PacketType.PROOF;
+import static io.reticulum.transport.TransportState.STATE_RESPONSIVE;
+import static io.reticulum.transport.TransportState.STATE_UNKNOWN;
+import static io.reticulum.transport.TransportState.STATE_UNRESPONSIVE;
 import static io.reticulum.transport.TransportType.BROADCAST;
 import static io.reticulum.transport.TransportType.TRANSPORT;
 import static io.reticulum.utils.DestinationUtils.hashFromNameAndIdentity;
@@ -139,7 +150,6 @@ import static java.util.stream.Collectors.toList;
 import static org.apache.commons.lang3.ArrayUtils.getLength;
 import static org.apache.commons.lang3.ArrayUtils.subarray;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
-import static org.apache.commons.lang3.BooleanUtils.isTrue;
 import static org.msgpack.value.ValueFactory.newArray;
 import static org.msgpack.value.ValueFactory.newBinary;
 import static org.msgpack.value.ValueFactory.newInteger;
@@ -155,7 +165,10 @@ public final class Transport implements ExitHandler {
 
     private final AtomicReference<Instant> linksLastChecked = new AtomicReference<>(Instant.EPOCH);
     private final AtomicReference<Instant> announcesLastChecked = new AtomicReference<>(Instant.EPOCH);
+    private final AtomicReference<Instant> receiptsLastChecked = new AtomicReference<>(Instant.EPOCH);
     private final AtomicReference<Instant> tablesLastCulled = new AtomicReference<>(Instant.EPOCH);
+    private final AtomicReference<Instant> interfaceLastJobs = new AtomicReference<>(Instant.EPOCH);
+    private final AtomicReference<Duration> interfaceJobsInterval = new AtomicReference<>(Duration.ofSeconds(5));
 
     private static volatile Transport INSTANCE;
     @Getter
@@ -201,6 +214,7 @@ public final class Transport implements ExitHandler {
      * A table for storing path request timestamps
      */
     private final Map<String, Instant> pathRequests = new ConcurrentHashMap<>();
+    private final Map<String, TransportState> pathStates = new ConcurrentHashMap<>();
     /**
      * A lookup table containing the next hop to a given destination
      */
@@ -249,6 +263,7 @@ public final class Transport implements ExitHandler {
 
     private final Deque<Pair<byte[], Integer>> localClientRssiCache = new ConcurrentLinkedDeque<>();
     private final Deque<Pair<byte[], Integer>> localClientSnrCache = new ConcurrentLinkedDeque<>();
+    private final Deque<Pair<byte[], Integer>> localClientQCache = new ConcurrentLinkedDeque<>();
 
     private void init() {
         var transportIdentityPath = owner.getStoragePath().resolve("jtransport_identity");
@@ -491,7 +506,13 @@ public final class Transport implements ExitHandler {
             }
         }
 
-        detachableInterfaces.forEach(ConnectionInterface::detach);
+        detachableInterfaces.forEach(anInterface -> {
+            try {
+                anInterface.detach();
+            } catch (Exception e) {
+                log.error("An error occurred while detaching {}.", anInterface, e);
+            }
+        });
     }
 
     public void persistData() {
@@ -662,7 +683,12 @@ public final class Transport implements ExitHandler {
     }
 
     private boolean shouldCache(Packet packet) {
-        return packet.getContext() == RESOURCE_PRF;
+        // TODO: Rework the caching system. It's currently
+        // not very useful to even cache Resource proofs,
+        // disabling it for now, until redesigned.
+        // return packet.getContext() == RESOURCE_PRF;
+
+        return false;
     }
 
     private ConnectionInterface findInterfaceFromHash(byte[] interfaceHash) {
@@ -823,6 +849,7 @@ public final class Transport implements ExitHandler {
 
         var packet = new Packet(localRaw);
         if (isFalse(packet.unpack())) {
+            jobsLock.unlock();
             return;
         }
 
@@ -848,6 +875,17 @@ public final class Transport implements ExitHandler {
 
                     while (localClientSnrCache.size() > LOCAL_CLIENT_CACHE_MAXSIZE) {
                         localClientSnrCache.pop();
+                    }
+                }
+            }
+
+            if (nonNull(iface.getRStatQ())) {
+                packet.setQ(iface.getRStatQ());
+                if (CollectionUtils.isNotEmpty(localClientInterfaces)) {
+                    localClientQCache.push(Pair.of(packet.getPacketHash(), packet.getQ()));
+
+                    while (localClientQCache.size() > LOCAL_CLIENT_CACHE_MAXSIZE) {
+                        localClientQCache.pop();
                     }
                 }
             }
@@ -914,6 +952,7 @@ public final class Transport implements ExitHandler {
                 // If this is a cache request, and we can fullfill it, do so and stop processing. Otherwise resume normal processing.
                 if (packet.getContext() == CACHE_REQUEST) {
                     if (cacheRequestPacket(packet)) {
+                        jobsLock.unlock();
                         return;
                     }
                 }
@@ -947,7 +986,9 @@ public final class Transport implements ExitHandler {
 
                             if (packet.getPacketType() == LINKREQUEST) {
                                 var now = Instant.now();
-                                var proofTimeout = now.plusMillis((long) ESTABLISHMENT_TIMEOUT_PER_HOP * Math.max(1, remainingHops));
+                                var proofTimeout =  now
+                                        .plusMillis((long) ESTABLISHMENT_TIMEOUT_PER_HOP * Math.max(1, remainingHops))
+                                        .plusSeconds(extraLinkProofTimeout(packet.getReceivingInterface()));
 
                                 //Entry format is
                                 var linkEntry = LinkEntry.builder()
@@ -1023,10 +1064,25 @@ public final class Transport implements ExitHandler {
                 }
             }
 
-            //Announce handling.
-            // Handles logic related to incoming announces, queueing rebroadcasts of these, and removal
+            // Announce handling. Handles logic related to incoming
+            // announces, queueing rebroadcasts of these, and removal
             // of queued announce rebroadcasts once handed to the next node.
             if (packet.getPacketType() == ANNOUNCE) {
+                if (nonNull(iface) && validateAnnounce(packet)) {
+                    iface.receivedAnnounce();
+                }
+                if (isFalse(destinationTable.containsKey(Hex.encodeHexString(packet.getDestinationHash())))) {
+                    // This is an unknown destination, and we'll apply
+                    // potential ingress limiting. Already known
+                    // destinations will have re-announces controlled
+                    // by normal announce rate limiting.
+                    if (iface.shouldIngressLimit()) {
+                        iface.holdAnnounce(packet);
+                        jobsLock.unlock();
+                        return;
+                    }
+                }
+
                 var localDestination = destinations.stream()
                         .filter(destination -> Arrays.equals(destination.getHash(), packet.getDestinationHash()))
                         .findFirst()
@@ -1089,6 +1145,7 @@ public final class Transport implements ExitHandler {
                                 //Make sure we haven't heard the random blob before, so announces can't be replayed to forge paths.
                                 // TODO: 11.05.2023 Check whether this approach works under all circumstances
                                 if (randomBlobs.stream().noneMatch(bytes -> Arrays.equals(bytes, randomBlob))) {
+                                    markPathUnknownState(packet.getDestinationHash());
                                     shouldAdd = true;
                                 } else {
                                     shouldAdd = false;
@@ -1110,20 +1167,42 @@ public final class Transport implements ExitHandler {
                                     }
                                 }
 
+                                //If the path has expired, consider this
+                                //announce for adding to the path table.
                                 if (now.isAfter(pathExpires)) {
-                                    //We also check that the announce is different from ones we've already heard, to avoid loops in the network
+                                    // We also check that the announce is
+                                    // different from ones we've already heard,
+                                    // to avoid loops in the network
                                     if (randomBlobs.stream().noneMatch(bytes -> Arrays.equals(bytes, randomBlob))) {
                                         // TODO: 11.05.2023 Check that this ^ approach actually works under all circumstances
                                         log.debug("Replacing destination table entry for {} with new announce due to expired path",
                                                 Hex.encodeHexString(packet.getDestinationHash()));
+                                        markPathUnknownState(packet.getDestinationHash());
                                         shouldAdd = true;
                                     } else {
                                         shouldAdd = false;
                                     }
                                 } else {
+                                    // If the path is not expired, but the emission
+                                    // is more recent, and we haven't already heard
+                                    // this announce before, update the path table.
                                     if (announceEmitted > pathAnnounceEmitted) {
                                         if (randomBlobs.stream().noneMatch(bytes -> Arrays.equals(bytes, randomBlob))) {
                                             log.debug("Replacing destination table entry for {}  with new announce, since it was more recently emitted",
+                                                    Hex.encodeHexString(packet.getDestinationHash()));
+                                            markPathUnknownState(packet.getDestinationHash());
+                                            shouldAdd = true;
+                                        } else {
+                                            shouldAdd = false;
+                                        }
+                                    }
+                                    // If we have already heard this announce before,
+                                    // but the path has been marked as unresponsive
+                                    // by a failed communications attempt or similar,
+                                    // allow updating the path table to this one.
+                                    else if (announceEmitted == pathAnnounceEmitted) {
+                                        if (pathIsUnresponsive(packet.getDestinationHash())) {
+                                            log.debug("Replacing destination table entry for {} with new announce, since previously tried path was unresponsive",
                                                     Hex.encodeHexString(packet.getDestinationHash()));
                                             shouldAdd = true;
                                         } else {
@@ -1400,7 +1479,7 @@ public final class Transport implements ExitHandler {
                 }
             }
 
-            //Handling for linkrequests to local destinations
+            //Handling for link requests to local destinations
             else if (packet.getPacketType() == LINKREQUEST) {
                 if (isNull(packet.getTransportId()) || Arrays.equals(packet.getTransportId(), identity.getHash())) {
                     for (Destination destination : destinations) {
@@ -1460,36 +1539,38 @@ public final class Transport implements ExitHandler {
                                     && linkTable.containsKey(Hex.encodeHexString(packet.getDestinationHash()))
                     ) {
                         var linkEntry = linkTable.get(Hex.encodeHexString(packet.getDestinationHash()));
-                        if (Objects.equals(packet.getReceivingInterface(), linkEntry.getNextHopInterface())) {
-                            try {
-                                if (getLength(packet.getData()) == (SIGLENGTH / 8 + ECPUBSIZE / 2)) {
-                                    var peerPubBytes = subarray(
-                                            packet.getData(),
-                                            SIGLENGTH / 8,
-                                            SIGLENGTH / 8 + ECPUBSIZE / 2
-                                    );
-                                    var peerIdentity = recall(linkEntry.getDestinationHash());
-                                    var peerSigPubBytes = subarray(peerIdentity.getPublicKey(), ECPUBSIZE / 2, ECPUBSIZE);
+                        if (packet.getHops() == linkEntry.getRemainingHops()) {
+                            if (Objects.equals(packet.getReceivingInterface(), linkEntry.getNextHopInterface())) {
+                                try {
+                                    if (getLength(packet.getData()) == (SIGLENGTH / 8 + ECPUBSIZE / 2)) {
+                                        var peerPubBytes = subarray(
+                                                packet.getData(),
+                                                SIGLENGTH / 8,
+                                                SIGLENGTH / 8 + ECPUBSIZE / 2
+                                        );
+                                        var peerIdentity = recall(linkEntry.getDestinationHash());
+                                        var peerSigPubBytes = subarray(peerIdentity.getPublicKey(), ECPUBSIZE / 2, ECPUBSIZE);
 
-                                    var signedData = concatArrays(packet.getDestinationHash(), peerPubBytes, peerSigPubBytes);
-                                    var signature = subarray(packet.getData(), 0, SIGLENGTH / 8);
+                                        var signedData = concatArrays(packet.getDestinationHash(), peerPubBytes, peerSigPubBytes);
+                                        var signature = subarray(packet.getData(), 0, SIGLENGTH / 8);
 
-                                    if (peerIdentity.validate(signature, signedData)) {
-                                        log.debug("Link request proof validated for transport via {}", linkEntry.getReceivingInterface().getInterfaceName());
-                                        var dataPacket = DataPacketConverter.fromBytes(packet.getRaw());
-                                        dataPacket.getHeader().setHops((byte) packet.getHops());
-                                        linkEntry.setValidated(true);
-                                        transmit(linkEntry.getReceivingInterface(), DataPacketConverter.toBytes(dataPacket));
-                                    } else {
-                                        log.debug("Invalid link request proof in transport for link {}, dropping proof.",
-                                                Hex.encodeHexString(packet.getDestinationHash()));
+                                        if (peerIdentity.validate(signature, signedData)) {
+                                            log.debug("Link request proof validated for transport via {}", linkEntry.getReceivingInterface().getInterfaceName());
+                                            var dataPacket = DataPacketConverter.fromBytes(packet.getRaw());
+                                            dataPacket.getHeader().setHops((byte) packet.getHops());
+                                            linkEntry.setValidated(true);
+                                            transmit(linkEntry.getReceivingInterface(), DataPacketConverter.toBytes(dataPacket));
+                                        } else {
+                                            log.debug("Invalid link request proof in transport for link {}, dropping proof.",
+                                                    Hex.encodeHexString(packet.getDestinationHash()));
+                                        }
                                     }
+                                } catch (Exception e) {
+                                    log.error("Error while transporting link request proof.", e);
                                 }
-                            } catch (Exception e) {
-                                log.error("Error while transporting link request proof.", e);
+                            } else {
+                                log.debug("Received link request proof with hop mismatch, not transporting it");
                             }
-                        } else {
-                            log.debug("Link request proof received on wrong interface, not transporting it.");
                         }
                     } else {
                         //Check if we can deliver it to a local pending link
@@ -1543,9 +1624,8 @@ public final class Transport implements ExitHandler {
                                 receiptValidated = receipt.validateProofPacket(packet);
                             }
                         } else {
-                            // TODO: 12.05.2023 This looks like it should actually be rewritten when implicit proofs are added.
-
-                            //In case of an implicit proof, we have to check every single outstanding receipt
+                            // In case of an implicit proof, we have
+                            // to check every single outstanding receipt
                             receiptValidated = receipt.validateProofPacket(packet);
                         }
 
@@ -1568,6 +1648,28 @@ public final class Transport implements ExitHandler {
 
         var sent = false;
         var outboundTime = Instant.now();
+
+        var generateReceipt = packet.isCreateReceipt()
+                // Only generate receipts for DATA packets
+                && packet.getPacketType() == DATA
+                // Don't generate receipts for PLAIN destinations
+                && packet.getDestination().getType() != PLAIN
+                //Don't generate receipts for link-related packets
+                && isFalse(packet.getContext().getValue() >= KEEPALIVE.getValue() && packet.getContext().getValue() <= LRPROOF.getValue())
+                // Don't generate receipts for resource packets
+                && isFalse(packet.getContext().getValue() >= RESOURCE.getValue() && packet.getContext().getValue() <= RESOURCE_RCL.getValue());
+
+        var packetSent = (Consumer<Packet>) p -> {
+            p.setSent(true);
+            p.setSentAt(Instant.now());
+
+            if (generateReceipt) {
+                p.setReceipt(new PacketReceipt(p));
+                receipts.add(p.getReceipt());
+            }
+
+            cache(packet, false);
+        };
 
         //Check if we have a known path for the destination in the path table
         if (
@@ -1592,7 +1694,7 @@ public final class Transport implements ExitHandler {
                     dataPacket.getHeader().getFlags().setPropagationType(TRANSPORT);
                     dataPacket.getAddresses().setHash1(dataPacket.getAddresses().getHash1());
                     dataPacket.getAddresses().setHash2(hopsEntry.getVia());
-
+                    packetSent.accept(packet);
                     transmit(outboundInterface, DataPacketConverter.toBytes(dataPacket));
                     hopsEntry.setTimestamp(outboundTime);
                     sent = true;
@@ -1614,7 +1716,7 @@ public final class Transport implements ExitHandler {
                     dataPacket.getHeader().getFlags().setPropagationType(TRANSPORT);
                     dataPacket.getAddresses().setHash1(dataPacket.getAddresses().getHash1());
                     dataPacket.getAddresses().setHash2(hopsEntry.getVia());
-
+                    packetSent.accept(packet);
                     transmit(outboundInterface, DataPacketConverter.toBytes(dataPacket));
                     hopsEntry.setTimestamp(outboundTime);
                     sent = true;
@@ -1625,6 +1727,7 @@ public final class Transport implements ExitHandler {
             // directly reachable, and also on which interface, so we
             // simply transmit the packet directly on that one.
             else {
+                packetSent.accept(packet);
                 transmit(outboundInterface, packet.getRaw());
                 sent = true;
             }
@@ -1804,29 +1907,14 @@ public final class Transport implements ExitHandler {
                         // thread.start()
 
                         transmit(anInterface, packet.getRaw());
+                        if (packet.getPacketType() == ANNOUNCE) {
+                            anInterface.sentAnnounce();
+                        }
+                        packetSent.accept(packet);
                         sent = true;
                     }
                 }
             }
-        }
-
-        if (sent) {
-            packet.setSent(true);
-            packet.setSentAt(Instant.now());
-
-            //Don't generate receipt if it has been explicitly disabled
-            if (
-                    isTrue(packet.isCreateReceipt())
-                            && packet.getPacketType() == DATA //Only generate receipts for DATA packets
-                            && packet.getDestination().getType() == PLAIN //Don't generate receipts for PLAIN destinations
-                            && isFalse(packet.getContext().getValue() >= KEEPALIVE.getValue() && packet.getContext().getValue() <= LRPROOF.getValue()) //Don't generate receipts for link-related packets
-                            && isFalse(packet.getContext().getValue() >= RESOURCE.getValue() && packet.getContext().getValue() <= RESOURCE_RCL.getValue()) //Don't generate receipts for resource packets
-            ) {
-                packet.setReceipt(new PacketReceipt(packet));
-                receipts.add(packet.getReceipt());
-            }
-
-            cache(packet, false);
         }
 
         jobsLock.unlock();
@@ -1842,6 +1930,34 @@ public final class Transport implements ExitHandler {
         return Optional.ofNullable(destinationTable.get(Hex.encodeHexString(destinationHash)))
                 .map(Hops::getInterface)
                 .orElse(null);
+    }
+
+    private Integer nextHopInterfaceBitrate(byte[] destinationHash) {
+        var nextHopInterface = nextHopInterface(destinationHash);
+
+        return nonNull(nextHopInterface) ? nextHopInterface.getBitrate() : null;
+    }
+
+    private Integer nextHopPerBitLatency(byte[] destinationHash) {
+        var nextHopInterfaceBitrate = nextHopInterfaceBitrate(destinationHash);
+
+        return nonNull(nextHopInterfaceBitrate) ? 1 / nextHopInterfaceBitrate : null;
+    }
+
+    private Integer nextHopPerByteLatency(byte[] destinationHash) {
+        var perBitLatency = nextHopPerBitLatency(destinationHash);
+
+        return nonNull(perBitLatency) ? perBitLatency * 8 : null;
+    }
+
+    /**
+     * @param destinationHash
+     * @return milliseconds
+     */
+    public int firstHopTimeout(byte[] destinationHash) {
+        var latency = nextHopPerByteLatency(destinationHash);
+
+        return nonNull(latency) ? MTU * latency * 1_000 + DEFAULT_PER_HOP_TIMEOUT : DEFAULT_PER_HOP_TIMEOUT;
     }
 
     private boolean fromLocalClient(Packet packet) {
@@ -2201,49 +2317,53 @@ public final class Transport implements ExitHandler {
             var nextHop = hopEntry.getVia();
             var receivedFrom = hopEntry.getPacket().getTransportId(); //todo в питоне тут ошибка
 
-            if (nonNull(requestorTransportId) && Arrays.equals(requestorTransportId, nextHop)) {
-                // TODO: Find a bandwidth efficient way to invalidate our
-                // known path on this signal. The obvious way of signing
-                // path requests with transport instance keys is quite
-                // inefficient. There is probably a better way. Doing
-                // path invalidation here would decrease the network
-                // convergence time. Maybe just drop it?
-                log.debug("Not answering path request for {}, since next hop is the requestor", Hex.encodeHexString(destinationHash));
+            if (attachedInterface.getMode() == MODE_ROAMING && Objects.equals(attachedInterface, receivedFrom)) {
+                log.debug("Not answering path request on roaming-mode interface, since next hop is on same roaming-mode interface");
             } else {
-                log.debug("Answering path request for {} on {}", Hex.encodeHexString(destinationHash), attachedInterface);
+                if (nonNull(requestorTransportId) && Arrays.equals(requestorTransportId, nextHop)) {
+                    // TODO: Find a bandwidth efficient way to invalidate our
+                    // known path on this signal. The obvious way of signing
+                    // path requests with transport instance keys is quite
+                    // inefficient. There is probably a better way. Doing
+                    // path invalidation here would decrease the network
+                    // convergence time. Maybe just drop it?
+                    log.debug("Not answering path request for {}, since next hop is the requestor", Hex.encodeHexString(destinationHash));
+                } else {
+                    log.debug("Answering path request for {} on {}", Hex.encodeHexString(destinationHash), attachedInterface);
 
-                var now = Instant.now();
-                var retries = PATHFINDER_R;
-                var localRebroadcasts = 0;
-                var blockRebroadcasts = true;
-                var announceHops = packet.getHops();
-                var retransmitTimeout = isFromLocalClient ? now : now.plusMillis(PATH_REQUEST_GRACE);
+                    var now = Instant.now();
+                    var retries = PATHFINDER_R;
+                    var localRebroadcasts = 0;
+                    var blockRebroadcasts = true;
+                    var announceHops = packet.getHops();
+                    var retransmitTimeout = isFromLocalClient ? now : now.plusMillis(PATH_REQUEST_GRACE);
 
-                // This handles an edge case where a peer sends a past
-                // request for a destination just after an announce for
-                // said destination has arrived, but before it has been
-                // rebroadcast locally. In such a case the actual announce
-                // is temporarily held, and then reinserted when the path
-                // request has been served to the peer.
-                if (announceTable.containsKey(Hex.encodeHexString(destinationHash))) {
-                    var heldEntry = announceTable.get(Hex.encodeHexString(destinationHash));
-                    heldAnnounces.put(Hex.encodeHexString(destinationHash), heldEntry);
+                    // This handles an edge case where a peer sends a past
+                    // request for a destination just after an announce for
+                    // said destination has arrived, but before it has been
+                    // rebroadcast locally. In such a case the actual announce
+                    // is temporarily held, and then reinserted when the path
+                    // request has been served to the peer.
+                    if (announceTable.containsKey(Hex.encodeHexString(destinationHash))) {
+                        var heldEntry = announceTable.get(Hex.encodeHexString(destinationHash));
+                        heldAnnounces.put(Hex.encodeHexString(destinationHash), heldEntry);
+                    }
+
+                    announceTable.put(
+                            Hex.encodeHexString(destinationHash),
+                            AnnounceEntry.builder()
+                                    .timestamp(now)
+                                    .retransmitTimeout(retransmitTimeout)
+                                    .retries(retries)
+                                    .transportId(receivedFrom)
+                                    .hops(announceHops)
+                                    .localRebroadcasts(localRebroadcasts)
+                                    .blockRebroadcasts(blockRebroadcasts)
+                                    .packet(packet)
+                                    .attachedInterface(attachedInterface)
+                                    .build()
+                    );
                 }
-
-                announceTable.put(
-                        Hex.encodeHexString(destinationHash),
-                        AnnounceEntry.builder()
-                                .timestamp(now)
-                                .retransmitTimeout(retransmitTimeout)
-                                .retries(retries)
-                                .transportId(receivedFrom)
-                                .hops(announceHops)
-                                .localRebroadcasts(localRebroadcasts)
-                                .blockRebroadcasts(blockRebroadcasts)
-                                .packet(packet)
-                                .attachedInterface(attachedInterface)
-                                .build()
-                );
             }
         } else if (isFromLocalClient) {
             //Forward path request on all interfaces except the local client
@@ -2441,9 +2561,11 @@ public final class Transport implements ExitHandler {
         }
     }
 
+    @SneakyThrows
     private void jobs() {
         List<Packet> outgoing = new LinkedList<>();
-        List<byte[]> pathRequestList = new LinkedList<>();
+        Map<String, ConnectionInterface> pathRequestList = new HashMap<>();
+        ConnectionInterface blockedIf = null;
 
         try {
             if (jobsLock.tryLock()) {
@@ -2470,8 +2592,9 @@ public final class Transport implements ExitHandler {
                                     if (Duration.between(lastPathRequest, Instant.now()).toSeconds() > PATH_REQUEST_MI) {
                                         log.debug("Trying to rediscover path for {} since an attempted link was never established",
                                                 Hex.encodeHexString(link.getDestination().getHash()));
-                                        if (pathRequestList.stream().noneMatch(bytes -> Arrays.equals(bytes, link.getDestination().getHash()))) {
-                                            pathRequestList.add(link.getDestination().getHash());
+                                        if (pathRequestList.keySet().stream().noneMatch(bytes -> StringUtils.equals(bytes, Hex.encodeHexString(link.getDestination().getHash())))) {
+                                            blockedIf = null;
+                                            pathRequestList.put(Hex.encodeHexString(link.getDestination().getHash()), blockedIf);
                                         }
                                     }
                                 }
@@ -2486,13 +2609,31 @@ public final class Transport implements ExitHandler {
                 }
 
                 //Process receipts list for timed-out packets
+                if (Instant.now().isAfter(receiptsLastChecked.get().plusMillis(RECEIPTS_CHECK_INTERVAL))) {
+                    while (receipts.size() > MAX_RECEIPTS) {
+                        var culledReceipt = receipts.remove(0);
+                        culledReceipt.setTimeout(-1);
+                        culledReceipt.checkTimeout();
+                    }
+
+                    for (PacketReceipt receipt : receipts) {
+                        receipt.checkTimeout();
+                        if (receipt.getStatus() != PacketReceiptStatus.SENT) {
+                            receipts.remove(receipt);
+                        }
+                    }
+
+                    receiptsLastChecked.set(Instant.now());
+                }
+
+                // Process announces needing retransmission
                 if (Instant.now().isAfter(announcesLastChecked.get().plusMillis(ANNOUNCES_CHECK_INTERVAL))) {
+                    var completedAnnounces = new HashSet<String>();
                     for (String destinationHashString : announceTable.keySet()) {
                         var announceEntry = announceTable.get(destinationHashString);
                         if (announceEntry.getRetries() > PATHFINDER_R) {
                             log.debug("Completed announce processing for {}, retry limit reached", destinationHashString);
-                            announceTable.remove(destinationHashString);
-                            break;
+                            completedAnnounces.add(destinationHashString);
                         } else {
                             if (Instant.now().isAfter(announceEntry.getRetransmitTimeout())) {
                                 announceEntry.setRetransmitTimeout(Instant.now().plusSeconds(PATHFINDER_G).plusMillis(PATHFINDER_RW));
@@ -2542,10 +2683,22 @@ public final class Transport implements ExitHandler {
                             }
                         }
                     }
+
+                    for (String destinationHash : completedAnnounces) {
+                        announceTable.remove(destinationHash);
+                    }
+
                     announcesLastChecked.set(Instant.now());
                 }
 
                 //Cull the packet hashlist if it has reached its max size
+                if (packetHashList.size() > HASHLIST_MAXSIZE) {
+                    var list = packetHashList.subList(packetHashList.size() - HASHLIST_MAXSIZE, packetHashList.size() - 1);
+                    packetHashList.clear();
+                    packetHashList.addAll(list);
+                }
+
+                //Cull the path request tags list if it has reached its max size
                 if (discoveryPrTags.size() > MAX_PR_TAGS) {
                     var list = discoveryPrTags.subList(discoveryPrTags.size() - MAX_PR_TAGS, discoveryPrTags.size() - 1);
                     discoveryPrTags.clear();
@@ -2553,6 +2706,13 @@ public final class Transport implements ExitHandler {
                 }
 
                 if (Instant.now().isAfter(tablesLastCulled.get().plusMillis(TABLES_CULL_INTERVAL))) {
+                    //Remove unneeded path state entries
+                    var stalePathStates = new LinkedList<String>();
+                    for (String hashString : pathStates.keySet()) {
+                        if (isFalse(destinationTable.containsKey(hashString))) {
+                            stalePathStates.add(hashString);
+                        }
+                    }
                     //Cull the reverse table according to timeout
                     List<String> staleReverseEntries = new LinkedList<>();
                     for (String truncatedPacketHashHex : reverseTable.keySet()) {
@@ -2580,18 +2740,60 @@ public final class Transport implements ExitHandler {
                                         Instant.EPOCH
                                 );
 
+                                var lrTokenHops = linkEntry.getHops();
+
+                                var pathRequestThrottle = Duration.between(lastPathRequest, Instant.now()).toSeconds() < PATH_REQUEST_MI;
+                                var pathRequestConditions = false;
+
+                                // If the path has been invalidated between the time of
+                                // making the link request and now, try to rediscover it
+                                if (isFalse(destinationTable.containsKey(Hex.encodeHexString(linkEntry.getDestinationHash())))) {
+                                    log.debug("Trying to rediscover path for {} since an attempted link was never established, and path is now missing",
+                                            Hex.encodeHexString(linkEntry.getDestinationHash()));
+                                    pathRequestConditions = true;
+                                }
+
                                 // If this link request was originated from a local client
                                 // attempt to rediscover a path to the destination, if this
                                 // has not already happened recently.
-                                var lrTokenHops = linkEntry.getHops();
-                                if (lrTokenHops == 0 && Duration.between(lastPathRequest, Instant.now()).toSeconds() > PATH_REQUEST_MI) {
+                                else if (isFalse(pathRequestThrottle && lrTokenHops == 0)) {
                                     log.debug("Trying to rediscover path for {} since an attempted local client link was never established",
                                             Hex.encodeHexString(linkEntry.getDestinationHash()));
-                                    if (pathRequestList.stream().noneMatch(bytes -> Arrays.equals(bytes, linkEntry.getDestinationHash()))) {
-                                        pathRequestList.add(linkEntry.getDestinationHash());
-                                    }
+                                    pathRequestConditions = true;
+                                }
 
-                                    if (isFalse(owner.isTransportEnabled())) {
+                                // If the link destination was previously only 1 hop
+                                // away, this likely means that it was local to one
+                                // of our interfaces, and that it roamed somewhere else.
+                                // In that case, try to discover a new path.
+                                else if (isFalse(pathRequestThrottle && hopsTo(linkEntry.getDestinationHash()) == 1)) {
+                                    log.debug("Trying to rediscover path for {}  since an attempted link was never established, and destination was previously local to an interface on this instance",
+                                            Hex.encodeHexString(linkEntry.getDestinationHash()));
+                                    pathRequestConditions = true;
+                                    blockedIf = linkEntry.getReceivingInterface();
+                                }
+
+                                // If the link initiator is only 1 hop away,
+                                // this likely means that network topology has
+                                // changed. In that case, we try to discover a new path,
+                                // and mark the old one as potentially unresponsive.
+                                else if (isFalse(pathRequestThrottle && lrTokenHops == 1)) {
+                                    log.debug("Trying to rediscover path for {} since an attempted link was never established, and link initiator is local to an interface on this instance",
+                                            Hex.encodeHexString(linkEntry.getDestinationHash()));
+                                    pathRequestConditions = true;
+                                    blockedIf = linkEntry.getReceivingInterface();
+
+                                    if (getOwner().isTransportEnabled()) {
+                                        if (linkEntry.getReceivingInterface().getMode() != MODE_BOUNDARY) {
+                                            markPathUnresponsive(linkEntry.getDestinationHash());
+                                        }
+                                    }
+                                }
+
+                                if (pathRequestConditions) {
+                                    pathRequestList.putIfAbsent(Hex.encodeHexString(linkEntry.getDestinationHash()), blockedIf);
+
+                                    if (owner.isTransportEnabled()) {
                                         // Drop current path if we are not a transport instance, to
                                         // allow using higher-hop count paths or reused announces
                                         // from newly adjacent transport instances.
@@ -2695,8 +2897,30 @@ public final class Transport implements ExitHandler {
                         log.debug("Removed {} tunnels", staleTunnels.size());
                     }
 
+                    var i = 0;
+                    for (String destinationHash : stalePathStates) {
+                        pathStates.remove(destinationHash);
+                        i++;
+                    }
+
+                    if (i > 0) {
+                        if (i == 1) {
+                            log.debug("Removed {} path state entry", i);
+                        } else {
+                            log.debug("Removed {} path state entries", i);
+                        }
+                    }
+
                     tablesLastCulled.set(Instant.now());
                 }
+
+                if (Instant.now().isAfter(interfaceLastJobs.get().plusSeconds(interfaceJobsInterval.get().toSeconds()))) {
+                    for (ConnectionInterface anInterface : interfaces) {
+                        anInterface.processHeldAnnounces();
+                    }
+                    interfaceLastJobs.set(Instant.now());
+                }
+
             } else {
                 //Transport jobs were locked, do nothing
             }
@@ -2707,7 +2931,68 @@ public final class Transport implements ExitHandler {
         }
 
         outgoing.forEach(Packet::send);
-        pathRequestList.forEach(destinationHash -> requestPath(destinationHash, null, null, false));
+        for (String destinationHashString : pathRequestList.keySet()) {
+            blockedIf = pathRequestList.get(destinationHashString);
+            if (isNull(blockedIf)) {
+                requestPath(Hex.decodeHex(destinationHashString), null, null, false);
+            } else {
+                for (ConnectionInterface anInterface : interfaces) {
+                    if (isFalse(Objects.equals(anInterface, blockedIf))) {
+//                        log.debug("Transmitting path request on {}", anInterface);
+                        requestPath(Hex.decodeHex(destinationHashString), anInterface, null, false);
+                    } else {
+//                        log.debug("Blocking path request on {}", anInterface);
+                    }
+                }
+            }
+        }
+    }
+
+    private boolean markPathResponsive(byte[] destinationHash) {
+        if (destinationTable.containsKey(Hex.encodeHexString(destinationHash))) {
+            pathStates.put(Hex.encodeHexString(destinationHash), STATE_RESPONSIVE);
+            return true;
+        }
+
+        return false;
+    }
+
+    private boolean markPathUnknownState(byte[] destinationHash) {
+        if (destinationTable.containsKey(Hex.encodeHexString(destinationHash))) {
+            pathStates.put(Hex.encodeHexString(destinationHash), STATE_UNKNOWN);
+            return true;
+        }
+
+        return false;
+    }
+
+    private boolean markPathUnresponsive(byte[] destinationHash) {
+        if (destinationTable.containsKey(Hex.encodeHexString(destinationHash))) {
+            pathStates.put(Hex.encodeHexString(destinationHash), STATE_UNRESPONSIVE);
+            return true;
+        }
+
+        return false;
+    }
+
+    private boolean pathIsUnresponsive(byte[] destinationHash) {
+        if (pathStates.containsKey(Hex.encodeHexString(destinationHash))) {
+            return pathStates.get(Hex.encodeHexString(destinationHash)) == STATE_UNRESPONSIVE;
+        }
+
+        return false;
+    }
+
+    /**
+     * @param anInterface
+     * @return proof timeout in seconds
+     */
+    private long extraLinkProofTimeout(ConnectionInterface anInterface) {
+        if (nonNull(anInterface)) {
+            return (1 / anInterface.getBitrate() * 8) * MTU;
+        }
+
+        return 0;
     }
 
     private boolean expirePath(byte[] destinationHash) {

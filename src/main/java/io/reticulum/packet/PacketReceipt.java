@@ -56,7 +56,8 @@ public class PacketReceipt {
         if (packet.getDestination().getType() == DestinationType.LINK) {
             this.timeout = ((Link) packet.getDestination()).getRtt() * ((Link) packet.getDestination()).getTrafficTimeoutFactor();
         } else {
-            this.timeout = Duration.ofSeconds(PacketConstant.TIMEOUT_PER_HOP).toMillis() * Transport.getInstance().hopsTo(destination.getHash());
+            this.timeout = Transport.getInstance().firstHopTimeout(destination.getHash());
+            this.timeout += Duration.ofSeconds(PacketConstant.TIMEOUT_PER_HOP).toMillis() * Transport.getInstance().hopsTo(destination.getHash());
         }
     }
 

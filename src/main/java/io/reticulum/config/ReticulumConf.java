@@ -29,4 +29,10 @@ public class ReticulumConf {
 
     @JsonProperty("use_implicit_proof")
     private Boolean useImplicitProof;
+
+    @JsonProperty("respond_to_probes")
+    private Boolean respondToProbes;
+
+    @JsonProperty("force_shared_instance_bitrate")
+    private Integer forceSharedInstanceBitrate;
 }

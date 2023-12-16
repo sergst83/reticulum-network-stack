@@ -95,6 +95,8 @@ public class Reticulum implements ExitHandler {
     @Getter
     private boolean useImplicitProof = true;
     @Getter
+    private boolean allowProbes = false;
+    @Getter
     private boolean panicOnIntefaceError = false;
     private int localIntefacePort = 37428;
     private boolean shareInstance = true;

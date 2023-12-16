@@ -133,6 +133,9 @@ public class Link extends AbstractDestination {
     private BigInteger rx = BigInteger.valueOf(0);
     private BigInteger txBytes = BigInteger.valueOf(0);
     private BigInteger rxBytes = BigInteger.valueOf(0);
+    private Integer rssi;
+    private Integer snr;
+    private Integer q;
     private int trafficTimeoutFactor = TRAFFIC_TIMEOUT_FACTOR;
     private int keepaliveTimeoutFactor = KEEPALIVE_TIMEOUT_FACTOR;
     private int keepalive = KEEPALIVE;
@@ -144,6 +147,7 @@ public class Link extends AbstractDestination {
     private Destination owner;
     private Destination destination;
     private Identity remoteIdentity;
+    private boolean trackPhyStats = false;
     private Channel channel;
     private boolean initiator;
     private X25519PrivateKeyParameters prv;
@@ -180,7 +184,8 @@ public class Link extends AbstractDestination {
             sigPrv = owner.getIdentity().getSigPrv();
         } else {
             initiator = true;
-            establishmentTimeout = ESTABLISHMENT_TIMEOUT_PER_HOP * Math.max(1, Transport.getInstance().hopsTo(destination.getHash()));
+            establishmentTimeout = Transport.getInstance().firstHopTimeout(destination.getHash())
+                    + ESTABLISHMENT_TIMEOUT_PER_HOP * Math.max(1, Transport.getInstance().hopsTo(destination.getHash()));
             prv = new X25519PrivateKeyParameters(new SecureRandom());
             sigPrv = new Ed25519PrivateKeyParameters(new SecureRandom());
         }
@@ -204,6 +209,7 @@ public class Link extends AbstractDestination {
             hadOutbound();
 
             log.debug("Link request {}  sent to {}", linkId, destination);
+            log.trace("Establishment timeout is {} ms  for link request {}", establishmentTimeout, linkId);
         }
     }
     public Link(Destination destination) {
@@ -344,7 +350,7 @@ public class Link extends AbstractDestination {
      */
     @SneakyThrows
     public void identify(@NonNull Identity identity) {
-        if (this.initiator) {
+        if (this.initiator && this.status == ACTIVE) {
             var signedData = concatArrays(linkId, identity.getPublicKey());
             var signature = identity.sign(signedData);
             var proofData = concatArrays(identity.getPublicKey(), signature);
@@ -429,26 +435,40 @@ public class Link extends AbstractDestination {
         try {
             var measuredRtt = Duration.between(requestTime, Instant.now()).toMillis();
             var plainText = decrypt(packet.getData());
-            try (var unpacker = MessagePack.newDefaultUnpacker(plainText)) {
-                rtt = Math.max(measuredRtt, unpacker.unpackLong());
-            }
-
-            activatedAt = Instant.now();
-
-            if (rtt > 0 && establishmentCost.get() > 0) {
-                establishmentRate = establishmentCost.get() / rtt;
-            }
-
-            try {
-                if (nonNull(owner.getCallbacks().getLinkEstablished())) {
-                    owner.getCallbacks().getLinkEstablished().accept(this);
+            if (nonNull(plainText)) {
+                try (var unpacker = MessagePack.newDefaultUnpacker(plainText)) {
+                    rtt = Math.max(measuredRtt, unpacker.unpackLong());
                 }
-            } catch (Exception e) {
-                log.error("Error occurred in external link establishment callback", e);
+
+                activatedAt = Instant.now();
+
+                if (rtt > 0 && establishmentCost.get() > 0) {
+                    establishmentRate = establishmentCost.get() / rtt;
+                }
+
+                try {
+                    if (nonNull(owner.getCallbacks().getLinkEstablished())) {
+                        owner.getCallbacks().getLinkEstablished().accept(this);
+                    }
+                } catch (Exception e) {
+                    log.error("Error occurred in external link establishment callback", e);
+                }
             }
         } catch (Exception e) {
             log.error("Error occurred while processing RTT packet, tearing down link.", e);
         }
+    }
+
+    /**
+     * You can enable physical layer statistics on a per-link basis. If this is enabled,
+     * and the link is running over an interface that supports reporting physical layer
+     * statistics, you will be able to retrieve stats such as *RSSI*, *SNR* and physical
+     * Link Quality for the link.
+     *
+     * @param track Whether or not to keep track of physical layer statistics. Value must be true or false
+     */
+    public synchronized void trackPhyStats(boolean track) {
+        trackPhyStats = track;
     }
 
     /**
@@ -527,10 +547,23 @@ public class Link extends AbstractDestination {
                 } else {
                     teardownReason = INITIATOR_CLOSED;
                 }
+                updatePhyStats(packet);
                 linkClosed();
             }
-        } catch (Exception ignore) {
+        } catch (Exception ignore) { }
+    }
 
+    private void updatePhyStats(Packet packet) {
+        if (trackPhyStats) {
+            if (nonNull(packet.getRssi())) {
+                rssi = packet.getRssi();
+            }
+            if (nonNull(packet.getSnr())) {
+                snr = packet.getSnr();
+            }
+            if (nonNull(packet.getQ())) {
+                q = packet.getQ();
+            }
         }
     }
 
@@ -796,42 +829,52 @@ public class Link extends AbstractDestination {
                 }
 
                 if (packet.getPacketType() == DATA) {
+                    var shouldQuery = false;
                     if (packet.getContext() == PacketContextType.NONE) {
                         var plainText = decrypt(packet.getData());
-                        if (nonNull(callbacks.getPacket())) {
-                            defaultThreadFactory()
-                                    .newThread(() -> callbacks.getPacket().accept(plainText, packet))
-                                    .start();
-                        }
-                        if (destination.getProofStrategy() == PROVE_ALL) {
-                            packet.prove(null);
-                        } else if (destination.getProofStrategy() == PROVE_APP) {
-                            if (nonNull(destination.getCallbacks().getProofRequested())) {
-                                try {
-                                    destination.getCallbacks().getProofRequested().apply(packet);
-                                } catch (Exception e) {
-                                    log.error("Error while executing proof request callback from {}.", this, e);
+                        if (nonNull(plainText)) {
+                            if (nonNull(callbacks.getPacket())) {
+                                defaultThreadFactory()
+                                        .newThread(() -> callbacks.getPacket().accept(plainText, packet))
+                                        .start();
+                            }
+                            if (destination.getProofStrategy() == PROVE_ALL) {
+                                packet.prove(null);
+                                shouldQuery = true;
+                            } else if (destination.getProofStrategy() == PROVE_APP) {
+                                if (nonNull(destination.getCallbacks().getProofRequested())) {
+                                    try {
+                                        if (destination.getCallbacks().getProofRequested().apply(packet)) {
+                                            packet.prove(null);
+                                            shouldQuery = true;
+                                        }
+                                    } catch (Exception e) {
+                                        log.error("Error while executing proof request callback from {}.", this, e);
+                                    }
                                 }
                             }
+                            updatePhyStats(packet);
                         }
                     } else if (packet.getContext() == LINKIDENTIFY) {
                         var plaintext = decrypt(packet.getData());
+                        if (nonNull(plaintext)) {
+                            if (isFalse(initiator) && getLength(plaintext) == KEYSIZE / 8 + SIGLENGTH) {
+                                var publicKey = subarray(plaintext, 0, KEYSIZE / 8);
+                                var signedData = concatArrays(linkId, publicKey);
+                                var signature = subarray(plaintext, KEYSIZE / 8, KEYSIZE / 8 + SIGLENGTH / 8);
+                                var identity = new Identity(false);
+                                identity.loadPublicKey(publicKey);
 
-                        if (isFalse(initiator) && getLength(plaintext) == KEYSIZE / 8 + SIGLENGTH) {
-                            var publicKey = subarray(plaintext, 0, KEYSIZE / 8);
-                            var signedData = concatArrays(linkId, publicKey);
-                            var signature = subarray(plaintext, KEYSIZE / 8, KEYSIZE / 8 + SIGLENGTH / 8);
-                            var identity = new Identity(false);
-                            identity.loadPublicKey(publicKey);
-
-                            if (identity.validate(signature, signedData)) {
-                                remoteIdentity = identity;
-                                if (nonNull(callbacks.remoteIdentified)) {
-                                    try {
-                                        callbacks.getRemoteIdentified().accept(this, remoteIdentity);
-                                    } catch (Exception e) {
-                                        log.error("Error while executing remote identified callback from {}.", this, e);
+                                if (identity.validate(signature, signedData)) {
+                                    remoteIdentity = identity;
+                                    if (nonNull(callbacks.remoteIdentified)) {
+                                        try {
+                                            callbacks.getRemoteIdentified().accept(this, remoteIdentity);
+                                        } catch (Exception e) {
+                                            log.error("Error while executing remote identified callback from {}.", this, e);
+                                        }
                                     }
+                                    updatePhyStats(packet);
                                 }
                             }
                         }
@@ -839,9 +882,12 @@ public class Link extends AbstractDestination {
                         try {
                             var requestId = packet.getTruncatedHash();
                             var packetRequest = decrypt(packet.getData());
-                            try (var unpacker = MessagePack.newDefaultUnpacker(packetRequest)) {
-                                var unpackedRequestValue = unpacker.unpackValue().asArrayValue();
-                                handleRequest(requestId, UnpackedRequest.fromValue(unpackedRequestValue));
+                            if (nonNull(packetRequest)) {
+                                try (var unpacker = MessagePack.newDefaultUnpacker(packetRequest)) {
+                                    var unpackedRequestValue = unpacker.unpackValue().asArrayValue();
+                                    handleRequest(requestId, UnpackedRequest.fromValue(unpackedRequestValue));
+                                }
+                                updatePhyStats(packet);
                             }
                         } catch (Exception e) {
                             log.error("Error occurred while handling request", e);
@@ -849,20 +895,23 @@ public class Link extends AbstractDestination {
                     } else if (packet.getContext() == RESPONSE) {
                         try {
                             var packedResponse = decrypt(packet.getData());
-                            try (
-                                    var unpacker = MessagePack.newDefaultUnpacker(packedResponse);
-                                    var packer = MessagePack.newDefaultBufferPacker();
-                            ) {
-                                var unpackedResponseValue = unpacker.unpackValue().asArrayValue();
-                                var unpackedResponse = UnpackedResponse.fromValue(unpackedResponseValue);
-                                packer.packValue(ValueFactory.newBinary(unpackedResponse.getResponseData()));
-                                var transferSize = getLength(packer.toByteArray()) - 2;
-                                handleResponse(
-                                        unpackedResponse.getRequestId(),
-                                        unpackedResponse.getResponseData(),
-                                        transferSize,
-                                        transferSize
-                                );
+                            if (nonNull(packedResponse)) {
+                                try (
+                                        var unpacker = MessagePack.newDefaultUnpacker(packedResponse);
+                                        var packer = MessagePack.newDefaultBufferPacker();
+                                ) {
+                                    var unpackedResponseValue = unpacker.unpackValue().asArrayValue();
+                                    var unpackedResponse = UnpackedResponse.fromValue(unpackedResponseValue);
+                                    packer.packValue(ValueFactory.newBinary(unpackedResponse.getResponseData()));
+                                    var transferSize = getLength(packer.toByteArray()) - 2;
+                                    handleResponse(
+                                            unpackedResponse.getRequestId(),
+                                            unpackedResponse.getResponseData(),
+                                            transferSize,
+                                            transferSize
+                                    );
+                                }
+                                updatePhyStats(packet);
                             }
                         } catch (Exception e) {
                             log.error("Error occurred while handling response.", e);
@@ -870,74 +919,91 @@ public class Link extends AbstractDestination {
                     } else if (packet.getContext() == LRRTT) {
                         if (isFalse(initiator)) {
                             rttPacket(packet);
+                            updatePhyStats(packet);
                         }
                     } else if (packet.getContext() == LINKCLOSE) {
                         teardownPacket(packet);
+                        updatePhyStats(packet);
                     } else if (packet.getContext() == RESOURCE_ADV) {
                         packet.setPlaintext(decrypt(packet.getData()));
+                        if (nonNull(packet.getPlaintext())) {
+                            updatePhyStats(packet);
 
-                        if (ResourceAdvertisement.isRequest(packet)) {
-                            Resource.accept(packet, this::requestResourceConcluded);
-                        } else if (ResourceAdvertisement.isResponse(packet)) {
-                            var requestId = ResourceAdvertisement.readRequestId(packet);
-                            for (RequestReceipt pendingRequest : pendingRequests) {
-                                if (Arrays.equals(pendingRequest.getRequestId(), requestId)) {
-                                    Resource.accept(packet, this::responseResourceConcluded, pendingRequest::responseResourceProgress, requestId);
-                                    pendingRequest.setResponseSize(ResourceAdvertisement.readSize(packet));
-                                    pendingRequest.setResponseTransferSize(ResourceAdvertisement.readTransferSize(packet));
-                                    pendingRequest.setStartedAt(Instant.now());
-                                }
-                            }
-                        } else if (resourceStrategy == ACCEPT_NONE) {
-                            // pass
-                        } else if (resourceStrategy == ACCEPT_APP) {
-                            if (nonNull(callbacks.getResource())) {
-                                try {
-                                    var resourceAdvertisement = ResourceAdvertisement.unpack(packet.getPlaintext());
-                                    resourceAdvertisement.setLink(this);
-                                    if (callbacks.getResource().apply(resourceAdvertisement)) {
-                                        Resource.accept(packet, callbacks.getResourceConcluded());
+                            if (ResourceAdvertisement.isRequest(packet)) {
+                                Resource.accept(packet, this::requestResourceConcluded);
+                            } else if (ResourceAdvertisement.isResponse(packet)) {
+                                var requestId = ResourceAdvertisement.readRequestId(packet);
+                                for (RequestReceipt pendingRequest : pendingRequests) {
+                                    if (Arrays.equals(pendingRequest.getRequestId(), requestId)) {
+                                        var responseResource = Resource.accept(packet, this::responseResourceConcluded, pendingRequest::responseResourceProgress, requestId);
+                                        pendingRequest.setResponseSize(ResourceAdvertisement.readSize(packet));
+                                        pendingRequest.setResponseTransferSize(ResourceAdvertisement.readTransferSize(packet));
+                                        pendingRequest.setStartedAt(Instant.now());
+                                        if (responseResource != null) {
+                                            pendingRequest.responseResourceProgress(responseResource);
+                                        }
                                     }
-                                } catch (Exception e) {
-                                    log.error("Error while executing resource accept callback from {}.", this, e);
                                 }
+                            } else if (resourceStrategy == ACCEPT_NONE) {
+                                // pass
+                            } else if (resourceStrategy == ACCEPT_APP) {
+                                if (nonNull(callbacks.getResource())) {
+                                    try {
+                                        var resourceAdvertisement = ResourceAdvertisement.unpack(packet.getPlaintext());
+                                        resourceAdvertisement.setLink(this);
+                                        if (callbacks.getResource().apply(resourceAdvertisement)) {
+                                            Resource.accept(packet, callbacks.getResourceConcluded());
+                                        }
+                                    } catch (Exception e) {
+                                        log.error("Error while executing resource accept callback from {}.", this, e);
+                                    }
+                                }
+                            } else if (resourceStrategy == ACCEPT_ALL) {
+                                Resource.accept(packet, callbacks.getResourceConcluded());
                             }
-                        } else if (resourceStrategy == ACCEPT_ALL) {
-                            Resource.accept(packet, callbacks.getResourceConcluded());
                         }
                     } else if (packet.getContext() == RESOURCE_REQ) {
                         var plaintext = decrypt(packet.getData());
-                        byte[] resourceHash;
-                        if (nonNull(plaintext) && new String(plaintext).codePointAt(0) == HASHMAP_IS_EXHAUSTED) {
-                            resourceHash = subarray(plaintext, 1 + MAPHASH_LEN, HASHLENGTH / 8 + 1 + MAPHASH_LEN);
-                        } else {
-                            resourceHash = subarray(plaintext, 1, HASHLENGTH / 8 + 1);
-                        }
+                        if (nonNull(plaintext)) {
+                            updatePhyStats(packet);
+                            byte[] resourceHash;
+                            if (nonNull(plaintext) && new String(plaintext).codePointAt(0) == HASHMAP_IS_EXHAUSTED) {
+                                resourceHash = subarray(plaintext, 1 + MAPHASH_LEN, HASHLENGTH / 8 + 1 + MAPHASH_LEN);
+                            } else {
+                                resourceHash = subarray(plaintext, 1, HASHLENGTH / 8 + 1);
+                            }
 
-                        for (Resource resource : outgoingResources) {
-                            if (Arrays.equals(resource.getHash(), resourceHash)) {
-                                // We need to check that this request has not been
-                                // received before in order to avoid sequencing errors.
-                                if (resource.getReqHashlist().stream().noneMatch(reqHash -> Arrays.equals(reqHash, packet.getPacketHash()))) {
-                                    resource.getReqHashlist().add(packet.getPacketHash());
-                                    resource.request(plaintext);
+                            for (Resource resource : outgoingResources) {
+                                if (Arrays.equals(resource.getHash(), resourceHash)) {
+                                    // We need to check that this request has not been
+                                    // received before in order to avoid sequencing errors.
+                                    if (resource.getReqHashlist().stream().noneMatch(reqHash -> Arrays.equals(reqHash, packet.getPacketHash()))) {
+                                        resource.getReqHashlist().add(packet.getPacketHash());
+                                        resource.request(plaintext);
+                                    }
                                 }
                             }
                         }
                     } else if (packet.getContext() == RESOURCE_HMU) {
                         var plaintext = decrypt(packet.getData());
-                        var resourceHash = subarray(plaintext, 0, HASHLENGTH / 8);
-                        for (Resource resource : incomingResources) {
-                            if (Arrays.equals(resourceHash, resource.getHash())) {
-                                resource.hashmapUpdatePacket(plaintext);
+                        if (nonNull(plaintext)) {
+                            updatePhyStats(packet);
+                            var resourceHash = subarray(plaintext, 0, HASHLENGTH / 8);
+                            for (Resource resource : incomingResources) {
+                                if (Arrays.equals(resourceHash, resource.getHash())) {
+                                    resource.hashmapUpdatePacket(plaintext);
+                                }
                             }
                         }
                     } else if (packet.getContext() == RESOURCE_ICL) {
                         var plaintext = decrypt(packet.getData());
-                        var resourceHash = subarray(plaintext, 0, HASHLENGTH / 8);
-                        for (Resource resource : incomingResources) {
-                            if (Arrays.equals(resourceHash, resource.getHash())) {
-                                resource.cancel();
+                        if (nonNull(plaintext)) {
+                            updatePhyStats(packet);
+                            var resourceHash = subarray(plaintext, 0, HASHLENGTH / 8);
+                            for (Resource resource : incomingResources) {
+                                if (Arrays.equals(resourceHash, resource.getHash())) {
+                                    resource.cancel();
+                                }
                             }
                         }
                     } else if (packet.getContext() == PacketContextType.KEEPALIVE) {
@@ -954,6 +1020,7 @@ public class Link extends AbstractDestination {
                     else if (packet.getContext() == RESOURCE) {
                         for (Resource resource : incomingResources) {
                             resource.receivePart(packet);
+                            updatePhyStats(packet);
                         }
                     } else if (packet.getContext() == CHANNEL) {
                         if (isNull(channel)) {
@@ -961,7 +1028,10 @@ public class Link extends AbstractDestination {
                         } else {
                             packet.prove(null);
                             var plaintext = decrypt(packet.getData());
-                            channel.receive(plaintext);
+                            if (nonNull(plaintext)) {
+                                updatePhyStats(packet);
+                                channel.receive(plaintext);
+                            }
                         }
                     }
                 } else if (packet.getPacketType() == PROOF) {
@@ -970,6 +1040,7 @@ public class Link extends AbstractDestination {
                         for (Resource resource : outgoingResources) {
                             if (Arrays.equals(resource.getHash(), resourceHash)) {
                                 resource.validateProof(packet.getData());
+                                updatePhyStats(packet);
                             }
                         }
                     }

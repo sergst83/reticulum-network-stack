@@ -6,6 +6,7 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.auto.AutoInterface;
 import io.reticulum.interfaces.tcp.TCPClientInterface;
+import io.reticulum.packet.Packet;
 import io.reticulum.transport.AnnounceQueueEntry;
 import io.reticulum.utils.IdentityUtils;
 
@@ -47,6 +48,8 @@ public interface ConnectionInterface {
     default Integer getRStatSnr() {
         return null;
     }
+
+    default Integer getRStatQ() {return null; }
 
     void processIncoming(final byte[] data);
     void processOutgoing(final byte[] data);
@@ -136,4 +139,14 @@ public interface ConnectionInterface {
      * Start interface
      */
     void launch();
+
+    void sentAnnounce();
+
+    void processHeldAnnounces();
+
+    void receivedAnnounce();
+
+    boolean shouldIngressLimit();
+
+    void holdAnnounce(Packet packet);
 }

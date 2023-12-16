@@ -106,6 +106,7 @@ public class Resource {
 
     private final Lock assambleLock = new ReentrantLock();
     private final Lock watchdogLock = new ReentrantLock();
+    private final Lock receiveLock = new ReentrantLock();
     private File inputFile;
     private Link link;
     private Path storagePath;
@@ -157,7 +158,7 @@ public class Resource {
     private int size;
     private int totalSize;
     private int grandTotalParts;
-    private int consecutiveCompletedHeight;
+    private int consecutiveCompletedHeight = -1;
     private int maxRetries;
     private int maxAdvRetries;
     private volatile int retriesLeft;
@@ -527,7 +528,7 @@ public class Resource {
 
                         if (sleepTime < 0) {
                             if (retriesLeft > 0) {
-                                log.debug("Timed out waiting for parts, requesting retry");
+                                log.debug("Timed out waiting for {} part{}, requesting retry", outstandingParts.get(), outstandingParts.get() == 1 ? "" : "s");
                                 if (this.window > this.windowMin) {
                                     this.window--;
                                     if (this.windowMax > this.windowMin) {
@@ -720,102 +721,32 @@ public class Resource {
     }
 
     public synchronized void receivePart(@NonNull final Packet packet) {
-        while (this.receivingPart) {
-            //sleep
-        }
+        if (receiveLock.tryLock()) {
+            try {
+                this.receivingPart = true;
+                this.lastActivity = Instant.now();
+                this.retriesLeft = this.maxRetries;
 
-        this.receivingPart = true;
-        this.lastActivity = Instant.now();
-        this.retriesLeft = this.maxRetries;
+                var rtt = 0L;
+                if (isNull(this.reqResp)) {
+                    this.reqResp = this.lastActivity;
+                    rtt = Duration.between(this.reqSent, this.reqResp).toMillis();
 
-        var rtt = 0L;
-        if (isNull(this.reqResp)) {
-            this.reqResp = this.lastActivity;
-            rtt = Duration.between(this.reqSent, this.reqResp).toMillis();
-
-            this.partTimeoutFactor = PART_TIMEOUT_FACTOR_AFTER_RTT;
-            if (isNull(this.rtt)) {
-                this.rtt = this.link.getRtt();
-                watchdogJobStart();
-            } else if (rtt < this.rtt) {
-                this.rtt = (long) Math.max(this.rtt - this.rtt * 0.05, rtt);
-            } else if (rtt > this.rtt) {
-                this.rtt = (long) Math.min(this.rtt - this.rtt * 0.05, rtt);
-            }
-
-            if (rtt > 0) {
-                var reqRespCost = ArrayUtils.getLength(packet.getRaw()) + this.reqSentBytes;
-                this.reqRespRttRate = reqRespCost / rtt;
-
-                if (this.reqRespRttRate > RATE_FAST && this.fastRateRounds < FAST_RATE_THRESHOLD) {
-                    this.fastRateRounds++;
-
-                    if (this.fastRateRounds == FAST_RATE_THRESHOLD) {
-                        this.windowMax = WINDOW_MAX_FAST;
+                    this.partTimeoutFactor = PART_TIMEOUT_FACTOR_AFTER_RTT;
+                    if (isNull(this.rtt)) {
+                        this.rtt = this.link.getRtt();
+                        watchdogJobStart();
+                    } else if (rtt < this.rtt) {
+                        this.rtt = (long) Math.max(this.rtt - this.rtt * 0.05, rtt);
+                    } else if (rtt > this.rtt) {
+                        this.rtt = (long) Math.min(this.rtt - this.rtt * 0.05, rtt);
                     }
-                }
-            }
-        } else if (isFalse(this.status == FAILED)) {
-            this.status = TRANSFERRING;
-            var partData = packet.getData();
-            var partHash = getMapHash(partData);
 
-            var i = this.consecutiveCompletedHeight;
-            while (this.hashmap.length < i + this.window) {
-                if (Arrays.equals(partHash, subarray(this.hashmap, i, i + this.window))) {
-                    if (CollectionUtils.size(this.parts) <= i) {
-                        // Insert data into parts list
-                        this.parts.set(i, packet);
-                        this.rttRxdBytes += partData.length;
-                        this.receivedCount++;
-                        this.outstandingParts.getAndDecrement();
+                    if (rtt > 0) {
+                        var reqRespCost = ArrayUtils.getLength(packet.getRaw()) + this.reqSentBytes;
+                        this.reqRespRttRate = reqRespCost / rtt;
 
-                        // Update consecutive completed pointer
-                        if (i == this.consecutiveCompletedHeight + 1) {
-                            this.consecutiveCompletedHeight = i;
-                        }
-
-                        var cp = this.consecutiveCompletedHeight + 1;
-                        while (cp < CollectionUtils.size(this.parts)) {
-                            this.consecutiveCompletedHeight = cp;
-                            cp++;
-                        }
-
-                        if (nonNull(this.progressCallback)) {
-                            try {
-                                this.progressCallback.accept(this);
-                            } catch (Exception e) {
-                                log.error("Error while executing progress callback from {}.", this, e);
-                            }
-                        }
-                    }
-                }
-                i++;
-            }
-
-            this.receivingPart = false;
-
-            if (this.receivedCount == this.totalParts && assambleLock.tryLock()) {
-                assemble();
-            } else if (this.outstandingParts.get() == 0){
-                // TODO: 07.05.2023 Figure out if there is a mathematically
-                // optimal way to adjust windows
-                if (this.window < this.windowMax) {
-                    this.window++;
-                    if ((this.window - this.windowMin) > (this.windowFlexibility - 1)) {
-                        this.windowMin++;
-                    }
-                }
-
-                if (nonNull(this.reqSent)) {
-                    rtt = Duration.between(this.reqSent, Instant.now()).toMillis();
-                    var reqTransferred = this.rttRxdBytes - this.rttRxdBytesAtPartReq;
-
-                    if (rtt != 0) {
-                        this.reqDataRttRate = reqTransferred / rtt;
-                        this.rttRxdBytesAtPartReq = this.rttRxdBytes;
-
-                        if (this.reqDataRttRate > RATE_FAST && this.fastRateRounds < FAST_RATE_THRESHOLD) {
+                        if (this.reqRespRttRate > RATE_FAST && this.fastRateRounds < FAST_RATE_THRESHOLD) {
                             this.fastRateRounds++;
 
                             if (this.fastRateRounds == FAST_RATE_THRESHOLD) {
@@ -823,12 +754,84 @@ public class Resource {
                             }
                         }
                     }
-                }
+                } else if (isFalse(this.status == FAILED)) {
+                    this.status = TRANSFERRING;
+                    var partData = packet.getData();
+                    var partHash = getMapHash(partData);
 
-                requestNext();
+                    var i = Math.max(this.consecutiveCompletedHeight, 0);
+                    while (this.hashmap.length < i + this.window) {
+                        if (Arrays.equals(partHash, subarray(this.hashmap, i, i + this.window))) {
+                            if (CollectionUtils.size(this.parts) <= i) {
+                                // Insert data into parts list
+                                this.parts.set(i, packet);
+                                this.rttRxdBytes += partData.length;
+                                this.receivedCount++;
+                                this.outstandingParts.getAndDecrement();
+
+                                // Update consecutive completed pointer
+                                if (i == this.consecutiveCompletedHeight + 1) {
+                                    this.consecutiveCompletedHeight = i;
+                                }
+
+                                var cp = this.consecutiveCompletedHeight + 1;
+                                while (cp < CollectionUtils.size(this.parts)) {
+                                    this.consecutiveCompletedHeight = cp;
+                                    cp++;
+                                }
+
+                                if (nonNull(this.progressCallback)) {
+                                    try {
+                                        this.progressCallback.accept(this);
+                                    } catch (Exception e) {
+                                        log.error("Error while executing progress callback from {}.", this, e);
+                                    }
+                                }
+                            }
+                        }
+                        i++;
+                    }
+
+                    this.receivingPart = false;
+
+                    if (this.receivedCount == this.totalParts && assambleLock.tryLock()) {
+                        assemble();
+                    } else if (this.outstandingParts.get() == 0) {
+                        // TODO: 07.05.2023 Figure out if there is a mathematically
+                        // optimal way to adjust windows
+                        if (this.window < this.windowMax) {
+                            this.window++;
+                            if ((this.window - this.windowMin) > (this.windowFlexibility - 1)) {
+                                this.windowMin++;
+                            }
+                        }
+
+                        if (nonNull(this.reqSent)) {
+                            rtt = Duration.between(this.reqSent, Instant.now()).toMillis();
+                            var reqTransferred = this.rttRxdBytes - this.rttRxdBytesAtPartReq;
+
+                            if (rtt != 0) {
+                                this.reqDataRttRate = reqTransferred / rtt;
+                                this.rttRxdBytesAtPartReq = this.rttRxdBytes;
+
+                                if (this.reqDataRttRate > RATE_FAST && this.fastRateRounds < FAST_RATE_THRESHOLD) {
+                                    this.fastRateRounds++;
+
+                                    if (this.fastRateRounds == FAST_RATE_THRESHOLD) {
+                                        this.windowMax = WINDOW_MAX_FAST;
+                                    }
+                                }
+                            }
+                        }
+
+                        requestNext();
+                    }
+                } else {
+                    this.receivingPart = false;
+                }
+            } finally {
+                receiveLock.unlock();
             }
-        } else {
-            this.receivingPart = false;
         }
     }
 
@@ -847,12 +850,11 @@ public class Resource {
                 var hashmapExhausted = HASHMAP_IS_NOT_EXHAUSTED;
                 var requestedHashes = new byte[0];
 
-                var offset = consecutiveCompletedHeight > 0 ? 1 : 0;
-                var i = 0;
-                var pn = consecutiveCompletedHeight + offset;
+                var i = 0; var pn = consecutiveCompletedHeight + 1;
                 final var searchStart = pn;
+                final var searchSize = this.window;
 
-                for (Packet part : parts.subList(searchStart, searchStart + this.window)) {
+                for (Packet part : parts.subList(searchStart, searchSize)) {
                     if (isNull(part)) {
                         if (this.hashmap.length - 1 > pn) {
                             var partHash = this.hashmap[pn];
@@ -1052,7 +1054,7 @@ public class Resource {
             }
         }
 
-        return this.processedParts / this.progressTotalParts;
+        return Math.min(1.0, this.processedParts / this.progressTotalParts);
     }
 
     private int transferSize() {

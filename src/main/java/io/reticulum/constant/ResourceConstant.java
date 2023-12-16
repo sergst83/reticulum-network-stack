@@ -17,7 +17,7 @@ public class ResourceConstant {
     /**
      * Absolute minimum window size during transfer
      */
-    public static final int WINDOW_MIN = 1;
+    public static final int WINDOW_MIN = 2;
     /**
      * The maximum window size for transfers on slow links
      */
@@ -70,7 +70,7 @@ public class ResourceConstant {
     public static final int AUTO_COMPRESS_MAX_SIZE = MAX_EFFICIENT_SIZE;
     public static final int PART_TIMEOUT_FACTOR = 4;
     public static final int PART_TIMEOUT_FACTOR_AFTER_RTT = 2;
-    public static final int MAX_RETRIES = 8;
+    public static final int MAX_RETRIES = 16;
     public static final int MAX_ADV_RETRIES = 4;
     public static final long SENDER_GRACE_TIME = 10_000;
     public static final long RETRY_GRACE_TIME = 250;

@@ -51,7 +51,9 @@ public class TransportConstant {
     public static final int MAX_RATE_TIMESTAMPS = 16;  // Maximum number of announce timestamps to keep per destination
     public static final int LOCAL_CLIENT_CACHE_MAXSIZE = 512; //
     public static final long LINKS_CHECK_INTERVAL = 1000; //ms
+    public static final long RECEIPTS_CHECK_INTERVAL = 1000; //ms
     public static final long ANNOUNCES_CHECK_INTERVAL = 1000; //ms
+    public static final int HASHLIST_MAXSIZE = 1000000;
     public static final int MAX_PR_TAGS = 32_000;
     public static final long TABLES_CULL_INTERVAL = 5_000; //ms
 

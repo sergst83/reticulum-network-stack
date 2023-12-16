@@ -152,11 +152,13 @@ public class RequestReceipt {
         if (isFalse(status == FAILED)) {
             status = RECEIVING;
             if (nonNull(packetReceipt)) {
-                packetReceipt.setStatus(PacketReceiptStatus.DELIVERED);
-                packetReceipt.setProved(true);
-                packetReceipt.setConcludedAt(Instant.now());
-                if (nonNull(packetReceipt.getCallbacks().getDelivery())) {
-                    packetReceipt.getCallbacks().getDelivery().accept(packetReceipt);
+                if (packetReceipt.getStatus() != PacketReceiptStatus.DELIVERED) {
+                    packetReceipt.setStatus(PacketReceiptStatus.DELIVERED);
+                    packetReceipt.setProved(true);
+                    packetReceipt.setConcludedAt(Instant.now());
+                    if (nonNull(packetReceipt.getCallbacks().getDelivery())) {
+                        packetReceipt.getCallbacks().getDelivery().accept(packetReceipt);
+                    }
                 }
             }
 

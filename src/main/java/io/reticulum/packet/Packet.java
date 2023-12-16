@@ -191,6 +191,7 @@ public class Packet implements TPacket {
 
     private Integer rssi;
     private Integer snr;
+    private Integer q;
     private int hops;
     private ConnectionInterface receivingInterface;
     private byte[] packetHash;

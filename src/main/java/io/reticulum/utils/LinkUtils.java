@@ -10,6 +10,7 @@ import java.time.Instant;
 
 import static io.reticulum.constant.LinkConstant.ECPUBSIZE;
 import static io.reticulum.constant.LinkConstant.ESTABLISHMENT_TIMEOUT_PER_HOP;
+import static io.reticulum.constant.LinkConstant.KEEPALIVE;
 import static org.apache.commons.lang3.ArrayUtils.subarray;
 
 @Slf4j
@@ -20,9 +21,10 @@ public class LinkUtils {
                 var link = new Link(owner, subarray(data, 0, ECPUBSIZE / 2), subarray(data, ECPUBSIZE / 2, ECPUBSIZE));
                 link.setLinkId(packet);
                 link.setDestination((Destination) packet.getDestination());
-                link.setEstablishmentTimeout(ESTABLISHMENT_TIMEOUT_PER_HOP + Math.max(1, packet.getHops()));
+                link.setEstablishmentTimeout(ESTABLISHMENT_TIMEOUT_PER_HOP + Math.max(1, packet.getHops()) + KEEPALIVE * 1_000);
                 link.addEstablishmentCost(packet.getRaw().length);
                 log.info("Validating link request {}", link.getLinkId());
+                log.debug("Establishment timeout is {} ms for incoming link request {}", link.getEstablishmentTimeout(), link.getLinkId());
                 link.handshake();
                 link.setAttachedInterface(packet.getReceivingInterface());
                 link.prove();

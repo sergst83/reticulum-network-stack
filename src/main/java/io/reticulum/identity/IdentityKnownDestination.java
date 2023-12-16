@@ -104,6 +104,10 @@ public class IdentityKnownDestination {
     }
 
     public static boolean validateAnnounce(final Packet packet) {
+        return validateAnnounce(packet, false);
+    }
+
+    public static boolean validateAnnounce(final Packet packet, final  boolean onlyValidateSignature) {
         if (packet.getPacketType() == ANNOUNCE) {
             var destinationHash = packet.getDestinationHash();
             var destinationHashString = Hex.encodeHexString(destinationHash);
@@ -123,6 +127,10 @@ public class IdentityKnownDestination {
             announcedIdentity.loadPublicKey(publicKey);
 
             if (nonNull(announcedIdentity.getSigPub()) && announcedIdentity.validate(signature, signedData)) {
+                if (onlyValidateSignature) {
+                    return true;
+                }
+
                 var hashHaterial = concatArrays(nameHash, announcedIdentity.getHash());
                 var expectedHash = subarray(fullHash(hashHaterial), 0, TRUNCATED_HASHLENGTH / 8);
                 if (Arrays.equals(destinationHash, expectedHash)) {

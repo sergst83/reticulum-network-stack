@@ -80,6 +80,30 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
     @JsonProperty("announce_rate_penalty")
     protected Integer announceRatePenalty;
 
+    @JsonProperty("ingress_control")
+    protected Boolean ingressControl = true;
+
+    @JsonProperty("ic_max_held_announces")
+    protected Integer icMaxHeldAnnounces;
+
+    @JsonProperty("ic_burst_hold")
+    protected Double icBurstHold;
+
+    @JsonProperty("ic_burst_freq_new")
+    protected Double icBurstFreqNew;
+
+    @JsonProperty("ic_burst_freq")
+    protected Double icBurstFreq;
+
+    @JsonProperty("ic_new_time")
+    protected Double icNewTime;
+
+    @JsonProperty("ic_burst_penalty")
+    protected Double icBurstPenalty;
+
+    @JsonProperty("ic_held_release_interval")
+    protected Double icHeldReleaseInterval;
+
     @JsonProperty("announce_cap")
     protected Double announceCap = ANNOUNCE_CAP / 100;
     protected Instant announceAllowedAt;
