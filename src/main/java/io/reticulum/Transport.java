@@ -251,7 +251,7 @@ public final class Transport implements ExitHandler {
     private final Deque<Pair<byte[], Integer>> localClientSnrCache = new ConcurrentLinkedDeque<>();
 
     private void init() {
-        var transportIdentityPath = owner.getStoragePath().resolve("transport_identity");
+        var transportIdentityPath = owner.getStoragePath().resolve("jtransport_identity");
         if (Files.isReadable(transportIdentityPath)) {
             identity = Identity.fromFile(transportIdentityPath);
         }
@@ -269,7 +269,7 @@ public final class Transport implements ExitHandler {
             log.debug("Loaded Transport Identity from storage");
         }
 
-        var packetHashlistPath = owner.getStoragePath().resolve("packet_hashlist");
+        var packetHashlistPath = owner.getStoragePath().resolve("jpacket_hashlist");
         if (isFalse(owner.isConnectedToSharedInstance())) {
             if (Files.isReadable(packetHashlistPath)) {
                 try (var unpacker = MessagePack.newDefaultUnpacker(Files.readAllBytes(packetHashlistPath))) {
@@ -300,7 +300,7 @@ public final class Transport implements ExitHandler {
         controlHashes.add(tunnelSynthesizeDestination.getHash());
 
         if (owner.isTransportEnabled()) {
-            var destinationTablePath = owner.getStoragePath().resolve("destination_table");
+            var destinationTablePath = owner.getStoragePath().resolve("jdestination_table");
             if (Files.isReadable(destinationTablePath) && isFalse(owner.isConnectedToSharedInstance())) {
                 try (var unpacker = MessagePack.newDefaultUnpacker(Files.readAllBytes(destinationTablePath))) {
                     for (Value value : unpacker.unpackValue().asArrayValue().list()) {
@@ -355,7 +355,7 @@ public final class Transport implements ExitHandler {
                 }
             }
 
-            var tunnelTablePath = owner.getStoragePath().resolve("tunnels");
+            var tunnelTablePath = owner.getStoragePath().resolve("jtunnels");
             if (Files.isReadable(tunnelTablePath) && isFalse(owner.isConnectedToSharedInstance())) {
                 try (var unpacker = MessagePack.newDefaultUnpacker(Files.readAllBytes(tunnelTablePath))) {
                     for (Value value : unpacker.unpackValue().asArrayValue()) {
