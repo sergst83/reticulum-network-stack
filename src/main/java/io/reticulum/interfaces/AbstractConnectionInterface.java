@@ -86,9 +86,7 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
     protected Queue<AnnounceQueueEntry> announceQueue = new LinkedList<>();
 
     public void setIfacSize(int newIfacSize) {
-        if (newIfacSize >= IFAC_MIN_SIZE * 8) {
-            ifacSize = newIfacSize / 8;
-        }
+        ifacSize = newIfacSize;
     }
 
     public void setIfacNetName(String newIfacNetname) {

@@ -157,7 +157,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
                             .accumulateAndGet(BigInteger.valueOf(data.length), BigInteger::add);
                 }
             } catch (Exception e) {
-                log.error("Exception occurred while transmitting via {}, tearing down interfac.", this, e);
+                log.error("Exception occurred while transmitting via {}, tearing down interface.", this, e);
             }
         }
     }

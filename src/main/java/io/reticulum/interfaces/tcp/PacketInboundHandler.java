@@ -14,6 +14,7 @@ public class PacketInboundHandler extends SimpleChannelInboundHandler<byte[]> {
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, byte[] msg) throws Exception {
+        //log.trace("channelRead0. context: {}, interface: {}, message: {}", ctx.name(), connectionInterface.getInterfaceName() , msg);
         connectionInterface.processIncoming(msg);
     }
 
@@ -21,5 +22,11 @@ public class PacketInboundHandler extends SimpleChannelInboundHandler<byte[]> {
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         log.error("Error while handle inbound packet in interface {}", connectionInterface, cause);
         ctx.close();
+    }
+
+    // implement abstract method (netty >= 4.x, channelRead renamed to messageReceived in netty 5)
+    public void messageReceived(ChannelHandlerContext ctx, Object msg) {
+        //log.trace("message received. context: {}, interface: {}, message: {}", ctx.name(), connectionInterface.getInterfaceName() , msg);
+        connectionInterface.processIncoming((byte[]) msg);
     }
 }

@@ -1,5 +1,6 @@
 package io.reticulum.identity;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -16,6 +17,7 @@ import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.lang3.ArrayUtils;
 import org.msgpack.jackson.dataformat.MessagePackMapper;
 
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.Arrays;
@@ -70,7 +72,7 @@ public class IdentityKnownDestination {
                 storage.forEach(KNOWN_DESTINATIONS::putIfAbsent);
                 Files.delete(destinationFilePath);
             }
-            log.debug("Saving {} known destinations to storage...", KNOWN_DESTINATIONS.keySet().size());
+            log.debug("saving known destinations to storage... {}", KNOWN_DESTINATIONS.keySet().size());
             OBJECT_MAPPER.writeValue(destinationFilePath.toFile(), KNOWN_DESTINATIONS);
             log.debug("Saved known destinations to storage in {} ms.", System.currentTimeMillis() - start);
         } catch (IOException e) {
@@ -241,9 +243,36 @@ public class IdentityKnownDestination {
     @NoArgsConstructor
     static final class DestinationData {
         private long timestamp;
-        private byte[] packetHash;
-        private byte[] publicKey;
-        private byte[] appData;
+        @JsonAlias({"packetHash"})
+        private byte[] packet_hash;
+        //private byte[] packetHash;
+        @JsonAlias({"publicKey"})
+        private byte[] public_key;
+        //private byte[] publicKey;
+        @JsonAlias({"appData"})
+        private byte[] app_data;
+        //private byte[] appData;
+
+        // getter
+        public byte[] getPackageHash() {
+            return packet_hash;
+        }
+        public byte[] getPublicKey() {
+            return public_key;
+        }
+        public byte[] getAppData() {
+            return app_data;
+        }
+        // setter
+        public void setPacketHash(byte[] packetHash) {
+            app_data = packetHash;
+        }
+        public void setPublicKey(byte[] publicKey) {
+            public_key = publicKey;
+        }
+        public void setAppData(byte[] appData) {
+            app_data = appData;
+        }
     }
 
     static int length(String key) {

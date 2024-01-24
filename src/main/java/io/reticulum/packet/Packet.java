@@ -28,6 +28,7 @@ import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
 import static io.reticulum.destination.DestinationType.LINK;
 import static io.reticulum.packet.HeaderType.HEADER_1;
 import static io.reticulum.packet.HeaderType.HEADER_2;
+import static io.reticulum.packet.PacketContextType.NONE;
 import static io.reticulum.packet.PacketContextType.CACHE_REQUEST;
 import static io.reticulum.packet.PacketContextType.KEEPALIVE;
 import static io.reticulum.packet.PacketContextType.LRPROOF;
@@ -203,14 +204,14 @@ public class Packet implements TPacket {
 
     private byte[] mapHash;
 
-    //дефолтные значения
+    //дефолтные значения (default values)
     private TransportType transportType = TransportType.BROADCAST;
     private HeaderType headerType = HEADER_1;
     private PacketType packetType = DATA;
-    private boolean createReceipt = true;
-    private PacketContextType context = null;
+    private PacketContextType context = NONE;
     private byte[] transportId = null;
     private ConnectionInterface attachedInterface = null;
+    private boolean createReceipt = true;
 
     private Packet(
             AbstractDestination destination,
