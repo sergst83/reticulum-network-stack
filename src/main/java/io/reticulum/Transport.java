@@ -1560,7 +1560,7 @@ public final class Transport implements ExitHandler {
         jobsLock.unlock();
     }
 
-    // TODO: 12.05.2023 подлежит рефакторингу.
+    // TODO: 12.05.2023 подлежит рефакторингу. (subject to refactoring)
     public boolean outbound(@NonNull final Packet packet) {
         while (isFalse(jobsLock.tryLock())) {
             //sleep
@@ -2050,6 +2050,10 @@ public final class Transport implements ExitHandler {
 
     public void registerAnnounceHandler(AnnounceHandler announceHandler) {
         announceHandlers.add(announceHandler);
+    }
+
+    public List<AnnounceHandler> getAnnounceHandlers() {
+        return announceHandlers;
     }
 
     public void deregisterAnnounceHandler(AnnounceHandler announceHandler) {

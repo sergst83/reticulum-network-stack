@@ -379,6 +379,10 @@ public class Destination extends AbstractDestination {
             throw new IllegalStateException("Only SINGLE destination types can be announced");
         }
 
+        if (this.getDirection() != IN) {
+            throw new IllegalStateException("Only IN destination types can be announced");
+        }
+
         var staleResponses = new ArrayList<String>();
         var now = Instant.now();
         pathResponses.forEach((entryTag, entry) -> {

@@ -22,6 +22,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -40,6 +41,7 @@ import static io.reticulum.utils.CommonUtils.exit;
 import static io.reticulum.utils.CommonUtils.panic;
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
@@ -140,6 +142,10 @@ public class Reticulum implements ExitHandler {
         Signal.handle(new Signal("TERM"), sig -> sigtermHandler());
     }
 
+    public Reticulum getInstance() {
+        return this;
+    }
+
     /**
      * This exit handler is called whenever Reticulum is asked to
      * shut down, and will in turn call exit handlers in other
@@ -214,7 +220,14 @@ public class Reticulum implements ExitHandler {
                         ifacOrigin = ArrayUtils.addAll(ifacOrigin, fullHash(iface.getIfacNetKey().getBytes(UTF_8)));
                     }
 
+                    if (Objects.equals(iface.getType(), new String("TCPClientInterface"))) {
+                        if (isNull(iface.getIfacSize())) {
+                            iface.setIfacSize(16);
+                        }
+                    }
+
                     // TODO: 07.03.2023 проверить чтоб были хеши и ключи одинаковые с питоном
+                    //                  check that the hashes and keys are the same with Python
                     var ifacOriginHash = fullHash(ifacOrigin);
                     var hkdf = new HKDFBytesGenerator(new SHA256Digest());
                     hkdf.init(new HKDFParameters(ifacOriginHash, IFAC_SALT, new byte[0]));
