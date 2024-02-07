@@ -14,6 +14,7 @@ import java.math.BigInteger;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketAddress;
+import java.time.Instant;
 import java.util.concurrent.TimeUnit;
 
 import static io.reticulum.utils.CommonUtils.exit;
@@ -256,6 +257,20 @@ public class LocalClientInterface extends AbstractConnectionInterface implements
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
+        }
+    }
+
+    @Override
+    public void sentAnnounce(boolean fromSpawned) {
+        if (fromSpawned) {
+            oaFreqDeque.add(0, Instant.now());
+        }
+    }
+
+    @Override
+    public void receivedAnnounce(boolean fromSpawned) {
+        if (fromSpawned) {
+            iaFreqDeque.add(0, Instant.now());
         }
     }
 }

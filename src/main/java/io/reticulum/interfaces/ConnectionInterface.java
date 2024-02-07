@@ -49,6 +49,11 @@ public interface ConnectionInterface {
         return null;
     }
 
+    /**
+     * Quality for RNodeInterface
+     *
+     * @return
+     */
     default Integer getRStatQ() {return null; }
 
     void processIncoming(final byte[] data);
@@ -140,13 +145,19 @@ public interface ConnectionInterface {
      */
     void launch();
 
-    void sentAnnounce();
+    void sentAnnounce(boolean fromSpawned);
+    default void sentAnnounce() {
+        sentAnnounce(false);
+    }
 
     void processHeldAnnounces();
 
-    void receivedAnnounce();
+    default void receivedAnnounce() {
+        receivedAnnounce(false);
+    }
+    void receivedAnnounce(boolean fromSpawned);
 
     boolean shouldIngressLimit();
 
-    void holdAnnounce(Packet packet);
+    void holdAnnounce(Packet announcePacket);
 }

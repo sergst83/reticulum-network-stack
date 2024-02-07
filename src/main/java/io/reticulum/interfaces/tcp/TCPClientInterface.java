@@ -26,6 +26,7 @@ import org.apache.commons.lang3.BooleanUtils;
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.concurrent.Executors;
 
 import static java.util.Objects.nonNull;
@@ -278,6 +279,20 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
             }
 
             channelFuture = null;
+        }
+    }
+
+    @Override
+    public void sentAnnounce(boolean fromSpawned) {
+        if (fromSpawned) {
+            oaFreqDeque.add(0, Instant.now());
+        }
+    }
+
+    @Override
+    public void receivedAnnounce(boolean fromSpawned) {
+        if (fromSpawned) {
+            iaFreqDeque.add(0, Instant.now());
         }
     }
 
