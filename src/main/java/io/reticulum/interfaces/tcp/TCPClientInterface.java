@@ -224,6 +224,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
                         protected void initChannel(SocketChannel ch) throws Exception {
                             ch.pipeline()
                                     .addLast(
+//                                            new LoggingHandler(ByteBufFormat.HEX_DUMP),
                                             new DelimiterBasedFrameDecoder(HW_MTU, true, delimiter),
                                             new ByteArrayDecoder(),
                                             new ByteArrayEncoder(),

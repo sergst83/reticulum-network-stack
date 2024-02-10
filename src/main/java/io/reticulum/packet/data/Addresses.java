@@ -8,12 +8,14 @@ import com.igormaznitsa.jbbp.mapper.BinType;
 import io.reticulum.packet.HeaderType;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import lombok.ToString;
 
 import java.io.IOException;
 
 import static io.reticulum.packet.data.DataPacket.assrtExprNotNeg;
 
 @Data
+@ToString(exclude = {"root"})
 @RequiredArgsConstructor
 public class Addresses {
     private final DataPacket root;

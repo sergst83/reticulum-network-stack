@@ -7,6 +7,7 @@ import com.igormaznitsa.jbbp.mapper.Bin;
 import com.igormaznitsa.jbbp.mapper.BinType;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import lombok.ToString;
 
 import java.io.IOException;
 
@@ -16,6 +17,7 @@ import java.io.IOException;
  * Byte 2: Number of hops
  */
 @Data
+@ToString(exclude = {"root"})
 @RequiredArgsConstructor
 public class Header {
     private final DataPacket root;
