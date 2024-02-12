@@ -222,7 +222,7 @@ public class Reticulum implements ExitHandler {
                         ifacOrigin = ArrayUtils.addAll(ifacOrigin, fullHash(iface.getIfacNetKey().getBytes(UTF_8)));
                     }
 
-                    if (Objects.equals(iface.getType(), new String("TCPClientInterface"))) {
+                    if (Objects.equals(iface.getType(), "TCPClientInterface")) {
                         if (isNull(iface.getIfacSize())) {
                             iface.setIfacSize(16);
                         }

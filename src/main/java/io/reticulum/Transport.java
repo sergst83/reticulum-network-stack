@@ -803,7 +803,7 @@ public final class Transport implements ExitHandler {
                         }
 
                         //Unset IFAC flag
-                        var newHeader = new byte[]{(byte) (unmaskedRaw[0] & 0x7f), raw[1]};
+                        var newHeader = new byte[]{(byte) (unmaskedRaw[0] & 0x7f), unmaskedRaw[1]};
 
                         //Re-assemble packet
                         var newRaw = concatArrays(newHeader, subarray(unmaskedRaw, 2 + iface.getIfacSize(), unmaskedRaw.length));
