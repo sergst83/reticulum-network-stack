@@ -54,7 +54,7 @@ class IdentityTest {
 
     @Test
     void encryptAndDecrypt() throws DecoderException {
-        var identity1 = new Identity(false);
+        var identity1 = new Identity(true);
         var identity2 = new Identity(false);
         identity2.loadPublicKey(identity1.getPublicKey());
 

@@ -9,6 +9,7 @@ import io.reticulum.packet.PacketReceipt;
 import io.reticulum.packet.PacketReceiptStatus;
 import io.reticulum.packet.data.DataPacket;
 import io.reticulum.packet.data.DataPacketConverter;
+import io.reticulum.storage.Storage;
 import io.reticulum.transport.AnnounceEntry;
 import io.reticulum.transport.AnnounceHandler;
 import io.reticulum.transport.AnnounceQueueEntry;
@@ -175,6 +176,7 @@ public final class Transport implements ExitHandler {
     private final Reticulum owner;
     @Getter
     private Identity identity;
+    private final Storage storage;
 
     /**
      * All active interfaces
@@ -266,23 +268,19 @@ public final class Transport implements ExitHandler {
     private final Deque<Pair<byte[], Integer>> localClientQCache = new ConcurrentLinkedDeque<>();
 
     private void init() {
-        var transportIdentityPath = owner.getStoragePath().resolve("jtransport_identity");
-        if (Files.isReadable(transportIdentityPath)) {
-            identity = Identity.fromFile(transportIdentityPath);
-        }
+        identity = Optional.ofNullable(storage.getIdentity())
+                .map(i -> {
+                    log.debug("Loaded Transport Identity from storage");
 
-        if (isNull(identity)) {
-            log.debug("No valid Transport Identity in storage, creating...");
-            identity = new Identity();
-            try {
-                Files.deleteIfExists(transportIdentityPath);
-                Files.write(transportIdentityPath, identity.getPrivateKey(), CREATE, WRITE);
-            } catch (IOException e) {
-                log.error("Error while saving identity to {}", transportIdentityPath, e);
-            }
-        } else {
-            log.debug("Loaded Transport Identity from storage");
-        }
+                    return i;
+                })
+                .orElseGet(() -> {
+                    log.debug("No valid Transport Identity in storage, creating...");
+                    var idt = new Identity();
+                    storage.saveIdentity(idt);
+
+                    return idt;
+                });
 
         var packetHashlistPath = owner.getStoragePath().resolve("jpacket_hashlist");
         if (isFalse(owner.isConnectedToSharedInstance())) {
@@ -441,8 +439,9 @@ public final class Transport implements ExitHandler {
         }
     }
 
-    private Transport(@NonNull Reticulum reticulum) {
+    private Transport(@NonNull final Reticulum reticulum) {
         this.owner = reticulum;
+        this.storage = Storage.init(reticulum.getStoragePath());
     }
 
     public static Transport start(@NonNull Reticulum reticulum) {
@@ -754,7 +753,7 @@ public final class Transport implements ExitHandler {
                 try (var packer = MessagePack.newDefaultBufferPacker()) {
                     packer.packValue(newArray(serialisedTunnels));
 
-                    var filePath = owner.getStoragePath().resolve("tunnels");
+                    var filePath = owner.getStoragePath().resolve("jtunnels");
                     Files.deleteIfExists(filePath);
                     Files.write(filePath, packer.toByteArray(), CREATE, WRITE);
                 }

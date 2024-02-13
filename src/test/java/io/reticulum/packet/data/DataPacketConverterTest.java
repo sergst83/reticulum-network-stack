@@ -3,8 +3,10 @@ package io.reticulum.packet.data;
 import com.igormaznitsa.jbbp.utils.JBBPUtils;
 import io.reticulum.destination.DestinationType;
 import io.reticulum.packet.HeaderType;
+import io.reticulum.packet.PacketContextType;
 import io.reticulum.packet.PacketType;
 import io.reticulum.transport.TransportType;
+import io.reticulum.utils.IdentityUtils;
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
 import org.junit.jupiter.api.Test;
@@ -12,8 +14,10 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 
 import static io.reticulum.packet.PacketType.ANNOUNCE;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DataPacketConverterTest {
 
@@ -34,11 +38,16 @@ class DataPacketConverterTest {
         header.setFlags(flags);
 
         var data = new DataPacket();
+        data.setContext(PacketContextType.KEEPALIVE);
         data.setHeader(header);
+        data.setData("data".getBytes(UTF_8));
+        data.setAddresses(new Addresses(data));
+        data.getAddresses().setHash1(IdentityUtils.fullHash("addresss1".getBytes(UTF_8)));
+        data.getAddresses().setHash2(IdentityUtils.fullHash("addresss2".getBytes(UTF_8)));
 
         var bitString = JBBPUtils.bin2str(DataPacketConverter.toBytes(data), true);
 
-        assertEquals("01111111 00000010", bitString);
+        assertTrue(bitString.startsWith("01111111 00000010"));
     }
 
     @Test
