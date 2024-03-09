@@ -126,8 +126,8 @@ public class Identity {
             pubBytes = subarray(publicKey, 0, KEYSIZE / 8 / 2);
             sigPubBytes = subarray(publicKey, KEYSIZE / 8 / 2, publicKey.length);
 
-            pub = new X25519PublicKeyParameters(pubBytes);
-            sigPub = new Ed25519PublicKeyParameters(sigPubBytes);
+            pub = new X25519PublicKeyParameters(pubBytes, 0);
+            sigPub = new Ed25519PublicKeyParameters(sigPubBytes, 0);
 
             updateHashes();
 

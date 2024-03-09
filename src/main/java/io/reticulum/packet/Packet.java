@@ -42,6 +42,7 @@ import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.utils.IdentityUtils.truncatedHash;
 import static java.math.BigInteger.ONE;
+import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static java.util.Objects.requireNonNull;
 import static org.apache.commons.lang3.ArrayUtils.subarray;
@@ -369,6 +370,12 @@ public class Packet implements TPacket {
                     }
                     break;
             }
+        }
+        
+        // In Python the context defaults to NONE in the constructor
+        if (isNull(context)) {
+            context = NONE;
+            this.context = NONE;
         }
 
         packetData.setHeader(header);
