@@ -3,13 +3,16 @@ package io.reticulum.storage;
 import io.reticulum.identity.Identity;
 import io.reticulum.identity.IdentityKnownDestination.DestinationData;
 import io.reticulum.storage.converter.DestinationDataConverter;
+import io.reticulum.storage.converter.PacketHashConverter;
 import io.reticulum.storage.converter.TransportIdentityConverter;
 import io.reticulum.storage.decorator.DestinationDataDecorator;
+import io.reticulum.storage.entity.PacketHash;
 import io.reticulum.storage.entity.TransportIdentity;
 import lombok.AccessLevel;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.collections4.MapUtils;
 import org.dizitart.no2.Nitrite;
 import org.dizitart.no2.common.mapper.SimpleNitriteMapper;
 import org.dizitart.no2.mvstore.MVStoreModule;
@@ -18,9 +21,14 @@ import java.nio.file.Path;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
+import static io.reticulum.constant.TransportConstant.HASHLIST_MAXSIZE;
 import static java.util.function.Function.identity;
 import static java.util.stream.Collectors.toMap;
+import static org.dizitart.no2.collection.FindOptions.orderBy;
+import static org.dizitart.no2.common.SortOrder.Descending;
 import static org.dizitart.no2.common.util.Iterables.setOf;
 
 @RequiredArgsConstructor(access = AccessLevel.PRIVATE)
@@ -63,6 +71,7 @@ public final class Storage {
                     var documentMapper = new SimpleNitriteMapper();
                     documentMapper.registerEntityConverter(new TransportIdentityConverter());
                     documentMapper.registerEntityConverter(new DestinationDataConverter());
+                    documentMapper.registerEntityConverter(new PacketHashConverter());
 
                     var builder = Nitrite.builder()
                             .loadModule(storeModule)
@@ -87,19 +96,21 @@ public final class Storage {
 
     public void saveIdentity(@NonNull final Identity identity) {
         var transportIdentityRepo = db.getRepository(TransportIdentity.class);
-        transportIdentityRepo.update(
-                TransportIdentity.builder()
-                        .identityHash(identity.getHexHash())
-                        .privateKey(identity.getPrivateKey())
-                        .build(),
-                true
+        doInTransactionWithoutResult(__ ->
+                transportIdentityRepo.update(
+                        TransportIdentity.builder()
+                                .identityHash(identity.getHexHash())
+                                .privateKey(identity.getPrivateKey())
+                                .build(),
+                        true
+                )
         );
     }
 
     public void saveKnownDestinations(Collection<DestinationData> knownDestinations) {
         if (CollectionUtils.isNotEmpty(knownDestinations)) {
             var repo = db.getRepository(new DestinationDataDecorator());
-            knownDestinations.forEach(destinationData -> repo.update(destinationData, true));
+            doInTransactionWithoutResult(__ -> knownDestinations.forEach(destinationData -> repo.update(destinationData, true)));
         }
     }
 
@@ -108,5 +119,51 @@ public final class Storage {
                 .toList()
                 .stream()
                 .collect(toMap(DestinationData::getDestinationHash, identity()));
+    }
+
+    public void saveAllPacketHash(Map<String, byte[]> packetHashes) {
+        var repo = db.getRepository(PacketHash.class);
+        if (MapUtils.isNotEmpty(packetHashes)) {
+            doInTransactionWithoutResult(__ -> packetHashes.forEach((hex, bytes) -> repo.update(PacketHash.builder().packetHash(hex).hash(bytes).build(), true)));
+        } else {
+            repo.clear();
+        }
+    }
+
+    public Map<String, byte[]> loadAllPacketHash() {
+        return db.getRepository(PacketHash.class).find()
+                .toList()
+                .stream()
+                .collect(toMap(PacketHash::getPacketHash, PacketHash::getHash));
+    }
+
+    public Map<String, byte[]> trimPacketHashList() {
+        var repo = db.getRepository(PacketHash.class);
+        var toSave = repo.find(orderBy("timestamp", Descending).limit(HASHLIST_MAXSIZE)).toList();
+        repo.clear();
+
+        return doInTransaction(() -> {
+            repo.insert(toSave.toArray(PacketHash[]::new));
+
+            return toSave.stream().collect(toMap(PacketHash::getPacketHash, PacketHash::getHash));
+        });
+    }
+
+    private <Result> Result doInTransaction(Supplier<Result> supplier) {
+        try (var session = db.createSession()) {
+            try(var transaction = session.beginTransaction()) {
+                var result = supplier.get();
+                transaction.commit();
+
+                return result;
+            }
+        }
+    }
+
+    private void doInTransactionWithoutResult(Consumer<Void> consumer) {
+        doInTransaction((Supplier<Void>) () -> {
+            consumer.accept(null);
+            return null;
+        });
     }
 }
