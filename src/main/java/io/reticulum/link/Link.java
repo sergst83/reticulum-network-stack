@@ -234,6 +234,10 @@ public class Link extends AbstractDestination {
 //            self.peer_pub.curve = Link.CURVE
     }
 
+    public boolean isInitiator() {
+        return this.initiator;
+    }
+
     public void setLinkId(Packet packet) {
         this.linkId = packet.getTruncatedHash();
         this.hash = this.linkId;
