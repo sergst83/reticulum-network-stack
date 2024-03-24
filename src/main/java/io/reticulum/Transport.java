@@ -2413,6 +2413,28 @@ public final class Transport implements ExitHandler {
     }
 
     /**
+     * Check if the path to a destination exists.
+     * Note: if not, a call to requestPath(desitinationHash) may be able to retrieve it from the network.
+     * 
+     * @param destinationHash
+     */
+    public Boolean hasPath(@NonNull byte[] destinationPath) {
+        if (isNull(recall(destinationPath))) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Public version of the method requestPath.
+     * 
+     * @param destinationHash
+     */
+    public void requestPath(@NonNull byte[] destinationHash) {
+        requestPath(destinationHash, null, null, false);
+    }
+
+    /**
      * Requests a path to the destination from the network. If
      * another reachable peer on the network knows a path, it
      * will announce it.
