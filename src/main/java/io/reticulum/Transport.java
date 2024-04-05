@@ -2418,8 +2418,8 @@ public final class Transport implements ExitHandler {
      * 
      * @param destinationHash
      */
-    public Boolean hasPath(@NonNull byte[] destinationPath) {
-        if (isNull(recall(destinationPath))) {
+    public Boolean hasPath(@NonNull byte[] destinationHash) {
+        if (isNull(recall(destinationHash))) {
             return false;
         }
         return true;
