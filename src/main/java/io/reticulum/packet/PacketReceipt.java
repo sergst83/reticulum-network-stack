@@ -62,7 +62,7 @@ public class PacketReceipt {
     }
 
     public synchronized boolean validateProofPacket(@NonNull final Packet proofPacket) {
-        if (proofPacket.getDestination().getType() == DestinationType.LINK) {
+        if (proofPacket.getDestinationType() == DestinationType.LINK) {
             return validateLinkProof((Link) proofPacket.getDestination(), proofPacket);
         } else {
             return  validateProof(proofPacket.getData(), proofPacket);
@@ -86,7 +86,7 @@ public class PacketReceipt {
                         try {
                             callbacks.getDelivery().accept(this);
                         } catch (Exception e) {
-                            log.error("Error while executing proof validated callback.");
+                            log.error("Error while executing proof validated callback: {}", e);
                         }
                     }
 
@@ -104,7 +104,7 @@ public class PacketReceipt {
             }
 
             var signature = subarray(proof, 0, SIGLENGTH / 8);
-            if (dest.getIdentity().validate(signature, hash)) {
+            if (dest.getIdentity().validate(signature, this.hash)) {
                 status = PacketReceiptStatus.DELIVERED;
                 proved = true;
                 concludedAt = Instant.now();
@@ -114,7 +114,7 @@ public class PacketReceipt {
                     try {
                         callbacks.getDelivery().accept(this);
                     } catch (Exception e) {
-                        log.error("Error while executing proof validated callback");
+                        log.error("Error while executing proof validated callback: {}", e);
                     }
                 }
 
@@ -122,6 +122,8 @@ public class PacketReceipt {
             } else {
                 return false;
             }
+        } else {
+            log.debug("proof length neither EXPL_LENGTH {} nor IMPL_LENGTH: {}", EXPL_LENGTH, IMPL_LENGTH);
         }
 
         return false;

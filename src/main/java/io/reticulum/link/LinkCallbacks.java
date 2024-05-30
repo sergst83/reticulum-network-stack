@@ -12,7 +12,7 @@ import java.util.function.Function;
 
 @Data
 public class LinkCallbacks {
-    Runnable linkEstablished;
+    Consumer<Link> linkEstablished;
     Consumer<Link> linkClosed;
     BiConsumer<byte[], Packet> packet;
     Function<ResourceAdvertisement, Boolean> resource;

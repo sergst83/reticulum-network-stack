@@ -16,8 +16,8 @@ public class ProofDestination extends Destination {
     private DestinationType type;
 
     public ProofDestination(@NonNull Packet packet) {
-        hash = subarray(packet.getHash(), 0, ReticulumConstant.TRUNCATED_HASHLENGTH / 8);
-        type = DestinationType.SINGLE;
+        this.hash = subarray(packet.getHash(), 0, ReticulumConstant.TRUNCATED_HASHLENGTH / 8);
+        this.type = DestinationType.SINGLE;
     }
 
     public byte[] encrypt(byte[] plaintext) {

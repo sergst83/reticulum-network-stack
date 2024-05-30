@@ -101,16 +101,13 @@ public class Destination extends AbstractDestination {
 
         var aspectsLocal = new ArrayList<>(List.of(aspects));
         if (isNull(identity) && direction == IN && type != PLAIN) {
-            this.identity = new Identity();
+            identity = new Identity();
             aspectsLocal.add(this.identity.getHexHash());
         }
         if (nonNull(identity) && type == PLAIN) {
             throw new IllegalStateException("Selected destination type PLAIN cannot hold an identity");
         }
-
-        if (nonNull(identity)) {
-            this.identity = identity;
-        }
+        this.identity = identity;
 
         var arrayLocalAspects = aspectsLocal.toArray(String[]::new);
         this.name = expandName(this.identity, appName, arrayLocalAspects);
