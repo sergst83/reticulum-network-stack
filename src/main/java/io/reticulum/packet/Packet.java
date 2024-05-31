@@ -38,6 +38,7 @@ import static io.reticulum.packet.PacketType.ANNOUNCE;
 import static io.reticulum.packet.PacketType.DATA;
 import static io.reticulum.packet.PacketType.LINKREQUEST;
 import static io.reticulum.packet.PacketType.PROOF;
+import static io.reticulum.transport.TransportType.BROADCAST;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.utils.IdentityUtils.truncatedHash;
@@ -227,24 +228,25 @@ public class Packet implements TPacket {
             Boolean createReceipt
     ) {
         if (nonNull(destination)) {
+            if (nonNull(packetType)) {
+                this.packetType = packetType;
+            }
+            if (nonNull(context)) {
+                this.context = context;
+            }
             if (nonNull(transportType)) {
                 this.transportType = transportType;
             }
             if (nonNull(headerType)) {
                 this.headerType = headerType;
             }
-            if (nonNull(packetType)) {
-                this.packetType = packetType;
-            }
+            this.transportId = transportId;
             if (nonNull(createReceipt)) {
                 this.createReceipt = createReceipt;
             }
 
-            this.context = context;
-
             this.hops = 0;
             this.destination = destination;
-            this.transportId = transportId;
             this.data = data;
             this.flags = getPackedFlags();
 
@@ -274,6 +276,11 @@ public class Packet implements TPacket {
         this(destination, data, packetType, context, null, null, null, attachedInterface, createReceipt);
     }
 
+    // eg. used in pathRequest
+    public Packet(Destination destination, byte[] data, PacketType packetType, TransportType transportType, HeaderType headerType, ConnectionInterface localConnectionInterface) {
+        this(destination, data, packetType, NONE, headerType, transportType, null, localConnectionInterface);
+    }
+
     public Packet(
             Destination announceDestination,
             byte[] announceData,
@@ -284,46 +291,61 @@ public class Packet implements TPacket {
             byte[] transportId,
             ConnectionInterface localClientInterface
     ) {
-        this(announceDestination, announceData, packetType, announceContext, transportType, headerType, transportId, localClientInterface, null);
+
+        this(announceDestination, announceData, packetType, announceContext, transportType, headerType, transportId, localClientInterface, true);
     }
 
     public Packet(Destination destination, byte[] data, PacketType packetType, PacketContextType context, ConnectionInterface attachedInterface) {
         this(destination, data, packetType, context, null, null, null, attachedInterface, null);
     }
 
+    // eg. used in Identity.prove()
     public Packet(Destination destination, byte[] data, PacketType packetType, ConnectionInterface attachedInterface) {
-        this(destination, data, packetType, null, null, null, null, attachedInterface, null);
+        this(destination, data, packetType, NONE, BROADCAST, HEADER_1, null, attachedInterface, true);
     }
 
     public Packet(Destination destination, byte[] requestData, PacketType packetType) {
-        this(destination, requestData, packetType, null, null, null, null, null, null);
+        this(destination, requestData, packetType, NONE, null, null, null, null, null);
+    }
+
+    public Packet(Destination destination, byte[] requestData) {
+        this(destination, requestData, DATA, NONE, BROADCAST, HEADER_1, null, null, true);
     }
 
     public Packet(byte[] raw) {
-        this(null, raw, null, null, null, null, null, null, null);
+        this(null, raw, null, NONE, null, null, null, null, null);
     }
 
+    // eg. used link prove
     public Packet(Link link, byte[] data, PacketType packetType, PacketContextType context) {
         this(link, data, packetType, context, null, null, null, null, null);
     }
 
+    public Packet(Link link, byte[] data) {
+        this(link, data, null, NONE, null, null, null, null, null);
+    }
+
     public Packet(Link link, byte[] data, PacketType packetType) {
-        this(link, data, packetType, null, null, null, null, null, null);
+        this(link, data, packetType, NONE, null, null, null, null, null);
+    }
+
+    public Packet(Destination destination, byte[] data, PacketContextType context) {
+        this(destination, data, null, context, BROADCAST, null, null, null, null);
     }
 
     public Packet(Link link, byte[] data, PacketContextType context) {
-        this(link, data, null, context, null, null, null, null, null);
+        this(link, data, null, context, BROADCAST, null, null, null, null);
     }
 
     @SneakyThrows
     public synchronized void pack() {
-        destinationHash = destination.getHash();
+        this.destinationHash = this.destination.getHash();
         var packetData = new DataPacket();
         var header = new Header(packetData);
         var address = new Addresses(packetData);
-        header.setFlags(flags);
-        header.setHops((byte) hops);
-        if (context == LRPROOF) {
+        header.setFlags(this.flags);
+        header.setHops((byte) this.hops);
+        if (this.context == LRPROOF) {
             address.setHash1(destination.getHash());
             ciphertext = this.data;
         } else {
@@ -363,7 +385,7 @@ public class Packet implements TPacket {
 
                         if (packetType == ANNOUNCE) {
                             //Announce packets are not encrypted
-                            ciphertext = data;
+                            ciphertext = this.data;
                         }
                     } else {
                         throw new IllegalStateException("Packet with header type 2 must have a transport ID");
@@ -397,27 +419,29 @@ public class Packet implements TPacket {
         try {
             var packetData = DataPacketConverter.fromBytes(raw);
             var header = packetData.getHeader();
-            var flags = header.getFlags();
-            headerType = flags.getHeaderType();
-            transportType = flags.getPropagationType();
-            destinationType = flags.getDestinationType();
-            packetType = flags.getPacketType();
+            this.flags = header.getFlags();
+            this.hops = header.getHops();
+            this.headerType = flags.getHeaderType();
+            this.transportType = flags.getPropagationType();
+            this.destinationType = flags.getDestinationType();
+            this.packetType = flags.getPacketType();
 
             var addresses = packetData.getAddresses();
-            if (headerType == HEADER_2) {
-                transportId = addresses.getHash1();
-                destinationHash = addresses.getHash2();
+            if (this.headerType == HEADER_2) {
+                this.transportId = addresses.getHash1();
+                this.destinationHash = addresses.getHash2();
             } else {
-                transportId = null;
-                destinationHash = addresses.getHash1();
+                this.transportId = null;
+                this.destinationHash = addresses.getHash1();
             }
-            context = packetData.getContext();
-            data = packetData.getData();
+            this.context = packetData.getContext();
+            this.data = packetData.getData();
 
-            packed = false;
-            updateHash();
+            this.packed = false;
+            this.updateHash();
 
             return true;
+
         } catch (Exception e) {
             log.error("Received malformed packet, dropping it.", e);
             return false;
@@ -426,10 +450,6 @@ public class Packet implements TPacket {
 
     public synchronized byte[] getHash() {
         return fullHash(getHashablePart());
-    }
-
-    public ProofDestination generatrProofDestination() {
-        return new ProofDestination(this);
     }
 
     /**
@@ -493,7 +513,7 @@ public class Packet implements TPacket {
 
     public void prove(final AbstractDestination destination) {
         if (fromPacked) {
-            if (requireNonNull(destination.getType()) == LINK) {
+            if (requireNonNull(this.destination.getType()) == LINK) {
                 ((Link) this.destination).provePacket(this);
             } else {
                 var dest = (Destination) this.destination;
@@ -534,7 +554,7 @@ public class Packet implements TPacket {
     @SneakyThrows
     private byte[] getHashablePart() {
         var hashablePart = new byte[]{(byte) (raw[0] & 0b00001111)};
-        if (headerType == HEADER_2) {
+        if (this.headerType == HEADER_2) {
             hashablePart = concatArrays(hashablePart, subarray(raw, TRUNCATED_HASHLENGTH / 8 + 2, raw.length));
         } else {
             hashablePart = concatArrays(hashablePart, subarray(raw, 2, raw.length));
@@ -550,13 +570,13 @@ public class Packet implements TPacket {
      */
     private Flags getPackedFlags() {
         var flags = new Flags();
-        flags.setHeaderType(headerType);
-        flags.setPropagationType(transportType);
-        flags.setPacketType(packetType);
+        flags.setHeaderType(this.headerType);
+        flags.setPropagationType(this.transportType);
+        flags.setPacketType(this.packetType);
         if (context == LRPROOF) {
             flags.setDestinationType(LINK);
         } else {
-            flags.setDestinationType(destination.getType());
+            flags.setDestinationType(this.destination.getType());
         }
 
         return flags;

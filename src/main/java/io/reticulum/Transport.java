@@ -1141,7 +1141,7 @@ public final class Transport implements ExitHandler {
                             randomBlobs = hopsEntry.getRandomBlobs();
 
                             //If we already have a path to the announced destination, but the hop count is equal or less, we'll update our tables.
-                            if (packet.getHops() < hopsEntry.getHops()) {
+                            if (packet.getHops() <= hopsEntry.getHops()) {
                                 //Make sure we haven't heard the random blob before, so announces can't be replayed to forge paths.
                                 // TODO: 11.05.2023 Check whether this approach works under all circumstances
                                 if (randomBlobs.stream().noneMatch(bytes -> Arrays.equals(bytes, randomBlob))) {
@@ -1393,6 +1393,7 @@ public final class Transport implements ExitHandler {
                                 announceDestination.setHash(packet.getDestinationHash());
                                 announceDestination.setHexHash(Hex.encodeHexString(announceDestination.getHash()));
                                 var announceData = packet.getData();
+
                                 var newAnnounce = new Packet(
                                         announceDestination,
                                         announceData,
@@ -1576,7 +1577,13 @@ public final class Transport implements ExitHandler {
                         //Check if we can deliver it to a local pending link
                         for (Link link : pendingLinks) {
                             if (Arrays.equals(link.getLinkId(), packet.getDestinationHash())) {
-                                link.validateProof(packet);
+                                if (packet.getHops() == link.getExpectedHops()) {
+                                    // Add this packet to the filter hashlist if we
+                                    // have determined that it's actually destined
+                                    // for this system, and then validate the proof
+                                    packetHashList.add(packet.getHash());
+                                    link.validateProof(packet);
+                                }
                             }
                         }
                     }
@@ -1599,7 +1606,7 @@ public final class Transport implements ExitHandler {
                             ? subarray(packet.getData(), 0, HASHLENGTH / 8)
                             : null;
 
-                    //Check if this proof neds to be transported
+                    //Check if this proof needs to be transported
                     if (
                             (owner.isTransportEnabled() || fromLocalClient || proofForLocalClient)
                                     && reverseTable.containsKey(Hex.encodeHexString(packet.getDestinationHash()))
@@ -1644,6 +1651,11 @@ public final class Transport implements ExitHandler {
     public boolean outbound(@NonNull final Packet packet) {
         while (isFalse(jobsLock.tryLock())) {
             //sleep
+            try {
+                TimeUnit.MILLISECONDS.sleep(5);
+            } catch (InterruptedException e) {
+                log.debug("sleep interrupted: {}", e);
+            }
         }
 
         var sent = false;
@@ -1668,7 +1680,8 @@ public final class Transport implements ExitHandler {
                 receipts.add(p.getReceipt());
             }
 
-            cache(packet, false);
+            // TODO: Enable when caching has been redesigned
+            //cache(packet, false);
         };
 
         //Check if we have a known path for the destination in the path table
@@ -1692,8 +1705,8 @@ public final class Transport implements ExitHandler {
                     var dataPacket = DataPacketConverter.fromBytes(packet.getRaw());
                     dataPacket.getHeader().getFlags().setHeaderType(HEADER_2);
                     dataPacket.getHeader().getFlags().setPropagationType(TRANSPORT);
-                    dataPacket.getAddresses().setHash1(dataPacket.getAddresses().getHash1());
-                    dataPacket.getAddresses().setHash2(hopsEntry.getVia());
+                    dataPacket.getAddresses().setHash2(dataPacket.getAddresses().getHash1());
+                    dataPacket.getAddresses().setHash1(hopsEntry.getVia());
                     packetSent.accept(packet);
                     transmit(outboundInterface, DataPacketConverter.toBytes(dataPacket));
                     hopsEntry.setTimestamp(outboundTime);
@@ -1714,8 +1727,8 @@ public final class Transport implements ExitHandler {
                     var dataPacket = DataPacketConverter.fromBytes(packet.getRaw());
                     dataPacket.getHeader().getFlags().setHeaderType(HEADER_2);
                     dataPacket.getHeader().getFlags().setPropagationType(TRANSPORT);
-                    dataPacket.getAddresses().setHash1(dataPacket.getAddresses().getHash1());
-                    dataPacket.getAddresses().setHash2(hopsEntry.getVia());
+                    dataPacket.getAddresses().setHash2(dataPacket.getAddresses().getHash1());
+                    dataPacket.getAddresses().setHash1(hopsEntry.getVia());
                     packetSent.accept(packet);
                     transmit(outboundInterface, DataPacketConverter.toBytes(dataPacket));
                     hopsEntry.setTimestamp(outboundTime);
@@ -1907,6 +1920,7 @@ public final class Transport implements ExitHandler {
                         // thread.start()
 
                         transmit(anInterface, packet.getRaw());
+
                         if (packet.getPacketType() == ANNOUNCE) {
                             anInterface.sentAnnounce();
                         }
@@ -1988,6 +2002,14 @@ public final class Transport implements ExitHandler {
     private boolean packetFilter(Packet packet) {
         // TODO: 12.05.2023 Think long and hard about this.
         //Is it even strictly necessary with the current transport rules?
+
+        // Filter packets intended for other transport instances
+        if (nonNull(packet.getTransportId()) && (packet.getPacketType() != ANNOUNCE)) {
+            if (packet.getTransportId() != Transport.getInstance().getIdentity().getHash()) {
+                return false;
+            }
+        }
+
         if (Arrays.asList(KEEPALIVE, RESOURCE_REQ, RESOURCE_PRF, RESOURCE, CACHE_REQUEST, CHANNEL).contains(packet.getContext())) {
             return true;
         }
@@ -2154,6 +2176,17 @@ public final class Transport implements ExitHandler {
     }
 
     public void cacheRequest(byte[] packetHash, Link destination) {
+        var cachedPacket = getCachedPacket(packetHash);
+        if (nonNull(cachedPacket)) {
+            //The packet was found in the local cache, replay it to the Transport instance.
+            inbound(cachedPacket.getRaw(), cachedPacket.getReceivingInterface());
+        } else {
+            //The packet is not in the local cache, query the network.
+            new Packet(destination, packetHash, CACHE_REQUEST).send();
+        }
+    }
+
+    public void cacheRequest(byte[] packetHash, Destination destination) {
         var cachedPacket = getCachedPacket(packetHash);
         if (nonNull(cachedPacket)) {
             //The packet was found in the local cache, replay it to the Transport instance.
@@ -2413,6 +2446,29 @@ public final class Transport implements ExitHandler {
     }
 
     /**
+     * Check if the path to a destination exists.
+     * Note: if not, a call to requestPath(desitinationHash) may be able to retrieve it from the network.
+     * 
+     * @param destinationHash
+     */
+    public Boolean hasPath(@NonNull byte[] destinationHash) {
+        if (destinationTable.containsKey(Hex.encodeHexString(destinationHash))) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    /**
+     * Public version of the method requestPath.
+     * 
+     * @param destinationHash
+     */
+    public void requestPath(@NonNull byte[] destinationHash) {
+        requestPath(destinationHash, null, null, false);
+    }
+
+    /**
      * Requests a path to the destination from the network. If
      * another reachable peer on the network knows a path, it
      * will announce it.
@@ -2435,7 +2491,7 @@ public final class Transport implements ExitHandler {
                 : concatArrays(destinationHash, requestTag);
 
         var pathRequestDst = new Destination(null, OUT, PLAIN, APP_NAME, "path", "request");
-        var packet = new Packet(pathRequestDst, pathRequestData, DATA, onInterface);
+        var packet = new Packet(pathRequestDst, pathRequestData, DATA, BROADCAST, HEADER_1, onInterface);
 
         if (nonNull(onInterface) && recursive) {
             var queuedAnnounces = CollectionUtils.isNotEmpty(onInterface.getAnnounceQueue());
@@ -2677,7 +2733,7 @@ public final class Transport implements ExitHandler {
                                 // is temporarily held, and then reinserted when the path
                                 // request has been served to the peer.
                                 for (String destinationHashHex : heldAnnounces.keySet()) {
-                                    announceTable.put(destinationHashHex, heldAnnounces.get(destinationHashHex));
+                                    announceTable.put(destinationHashHex, heldAnnounces.remove(destinationHashHex));
                                     log.debug("Reinserting held announce into table");
                                 }
                             }
@@ -2931,6 +2987,7 @@ public final class Transport implements ExitHandler {
         }
 
         outgoing.forEach(Packet::send);
+        
         for (String destinationHashString : pathRequestList.keySet()) {
             blockedIf = pathRequestList.get(destinationHashString);
             if (isNull(blockedIf)) {
@@ -3022,7 +3079,7 @@ public final class Transport implements ExitHandler {
 
         var tnlSnthDst = new Destination(null, OUT, PLAIN, APP_NAME, "tunnel", "synthesize");
 
-        var packet = new Packet(tnlSnthDst, data, DATA, iface);
+        var packet = new Packet(tnlSnthDst, data, DATA, BROADCAST, HEADER_1, iface);
         packet.send();
 
         iface.setWantsTunnel(false);

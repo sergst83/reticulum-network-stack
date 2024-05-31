@@ -23,7 +23,6 @@ public class LinkUtils {
                 link.setDestination((Destination) packet.getDestination());
                 link.setEstablishmentTimeout(ESTABLISHMENT_TIMEOUT_PER_HOP + Math.max(1, packet.getHops()) + KEEPALIVE * 1_000);
                 link.addEstablishmentCost(packet.getRaw().length);
-                log.info("Validating link request {}", link.getLinkId());
                 log.debug("Establishment timeout is {} ms for incoming link request {}", link.getEstablishmentTimeout(), link.getLinkId());
                 link.handshake();
                 link.setAttachedInterface(packet.getReceivingInterface());

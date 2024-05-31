@@ -1,5 +1,6 @@
 package io.reticulum.identity;
 
+import io.reticulum.Reticulum;
 import io.reticulum.Transport;
 import io.reticulum.cryptography.Fernet;
 import io.reticulum.destination.AbstractDestination;
@@ -36,6 +37,7 @@ import static io.reticulum.utils.IdentityUtils.truncatedHash;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static org.apache.commons.lang3.ArrayUtils.subarray;
+import static org.apache.commons.lang3.BooleanUtils.isTrue;
 
 /**
  * This class is used to manage identities in Reticulum. It provides methods
@@ -170,13 +172,16 @@ public class Identity {
      * @return <strong>true</strong> if the signature is valid, otherwise <strong>false</strong>
      */
     public boolean validate(byte[] signature, byte[] message) {
-        if (nonNull(sigPub)) {
+        if (nonNull(pub)) {
             try {
                 var verifier = new Ed25519Signer();
                 verifier.init(false, sigPub);
                 verifier.update(message, 0, message.length);
 
-                return verifier.verifySignature(signature);
+                var validationResult = verifier.verifySignature(signature);
+                //log.info("bba - Identity.validate - verifier: {}, sigPub: {}, validationResult: *{}*", verifier, sigPub, validationResult);
+                return validationResult;
+
             } catch (Exception e) {
                 log.error("Error while validate ");
 
@@ -290,14 +295,21 @@ public class Identity {
 
     @SneakyThrows
     public void prove(@NonNull final Packet packet, final AbstractDestination destination) {
+        byte [] proofData;
+        Destination dest = (Destination) destination;
         var signature = sign(packet.getPacketHash());
-        var proofData = concatArrays(packet.getPacketHash(), signature);
-        if (Transport.getInstance().getOwner().isUseImplicitProof()) {
+        var shouldUseImplicitProof = Transport.getInstance().getOwner().isUseImplicitProof();
+        if (shouldUseImplicitProof) {
             proofData = signature;
+        } else {
+            proofData = concatArrays(packet.getPacketHash(), signature);
         }
 
+        if (isNull(dest)) {
+            dest = packet.generateProofDestination();
+        }
         var proof = new Packet(
-                (Destination) (isNull(destination) ? packet.generatrProofDestination() : destination),
+                dest,
                 proofData,
                 PROOF,
                 packet.getReceivingInterface()

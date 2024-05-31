@@ -55,6 +55,7 @@ import java.util.function.Function;
 import static io.reticulum.constant.IdentityConstant.HASHLENGTH;
 import static io.reticulum.constant.IdentityConstant.KEYSIZE;
 import static io.reticulum.constant.IdentityConstant.SIGLENGTH;
+//import static io.reticulum.constant.IdentityConstant.CURVE;
 import static io.reticulum.constant.LinkConstant.ECPUBSIZE;
 import static io.reticulum.constant.LinkConstant.ESTABLISHMENT_TIMEOUT_PER_HOP;
 import static io.reticulum.constant.LinkConstant.KEEPALIVE;
@@ -116,12 +117,12 @@ import static org.apache.commons.lang3.BooleanUtils.isFalse;
 @Setter
 public class Link extends AbstractDestination {
 
-    private AtomicLong establishmentCost = new AtomicLong(0);
     private byte[] linkId;
     private ConnectionInterface attachedInterface;
     private Instant requestTime;
 
     private long rtt;
+    private AtomicLong establishmentCost = new AtomicLong(0);
     private LinkCallbacks callbacks = new LinkCallbacks();
     private ResourceStrategy resourceStrategy = ACCEPT_NONE;
     private List<Resource> outgoingResources = new CopyOnWriteArrayList<>();
@@ -129,6 +130,8 @@ public class Link extends AbstractDestination {
     private List<RequestReceipt> pendingRequests = new CopyOnWriteArrayList<>();
     private Instant lastInbound;
     private Instant lastOutbound;
+    private Instant lastProof;
+    private Instant lastData;
     private BigInteger tx = BigInteger.valueOf(0);
     private BigInteger rx = BigInteger.valueOf(0);
     private BigInteger txBytes = BigInteger.valueOf(0);
@@ -146,6 +149,7 @@ public class Link extends AbstractDestination {
     private DestinationType type = LINK;
     private Destination owner;
     private Destination destination;
+    private Integer expectedHops;
     private Identity remoteIdentity;
     private boolean trackPhyStats = false;
     private Channel channel;
@@ -172,6 +176,8 @@ public class Link extends AbstractDestination {
     private byte[] derivedKey;
     private long establishmentRate;
     private TeardownSession teardownReason;
+    private Consumer<Link> establishedCallback;
+    private Consumer<Link> closedCallback;
 
     @SneakyThrows
     private void init() {
@@ -179,34 +185,49 @@ public class Link extends AbstractDestination {
             throw new IllegalArgumentException("Links can only be established to the SINGLE destination type");
         }
         if (isNull(this.destination)) {
-            initiator = false;
-            prv = new X25519PrivateKeyParameters(new SecureRandom());
-            sigPrv = owner.getIdentity().getSigPrv();
+            this.initiator = false;
+            this.prv = new X25519PrivateKeyParameters(new SecureRandom());
+            this.sigPrv = owner.getIdentity().getSigPrv();
         } else {
-            initiator = true;
-            establishmentTimeout = Transport.getInstance().firstHopTimeout(destination.getHash())
+            this.initiator = true;
+            this.expectedHops = Transport.getInstance().hopsTo(destination.getHash());
+            this.establishmentTimeout = Transport.getInstance().firstHopTimeout(destination.getHash())
                     + ESTABLISHMENT_TIMEOUT_PER_HOP * Math.max(1, Transport.getInstance().hopsTo(destination.getHash()));
-            prv = new X25519PrivateKeyParameters(new SecureRandom());
-            sigPrv = new Ed25519PrivateKeyParameters(new SecureRandom());
+            this.prv = new X25519PrivateKeyParameters(new SecureRandom());
+            this.sigPrv = new Ed25519PrivateKeyParameters(new SecureRandom());
         }
 
-        pub = prv.generatePublicKey();
-        pubBytes = pub.getEncoded();
+        this.pub = prv.generatePublicKey();
+        this.pubBytes = pub.getEncoded();
 
-        peerSigPub = sigPrv.generatePublicKey();
-        peerSigPubBytes = peerSigPub.getEncoded();
+        this.sigPub = sigPrv.generatePublicKey();
+        this.sigPubBytes = sigPub.getEncoded();
 
-        if (initiator) {
-            requestData = concatArrays(pubBytes, peerSigPubBytes);
-            packet = new Packet(destination, requestData, PacketType.LINKREQUEST);
-            packet.pack();
-            establishmentCost.getAndIncrement();
-            setLinkId(packet);
+        if (isNull(peerPubBytes)) {
+            this.peerPub = null;
+            this.peerPubBytes = null;
+        } else {
+            loadPeer(peerPubBytes, peerSigPubBytes);
+        }
+
+        if (nonNull(establishedCallback)) {
+            setLinkEstablishedCallback(establishedCallback);
+        }
+        if (nonNull(closedCallback)) {
+            setLinkClosedCallback(closedCallback);
+        }
+
+        if (this.initiator) {
+            this.requestData = concatArrays(pubBytes, sigPubBytes);
+            this.packet = new Packet(destination, requestData, PacketType.LINKREQUEST);
+            this.packet.pack();
+            this.establishmentCost.getAndIncrement();
+            setLinkId(this.packet);
             Transport.getInstance().registerLink(this);
-            requestTime = Instant.now();
+            this.requestTime = Instant.now();
             startWatchdog();
-            packet.send();
-            hadOutbound();
+            this.packet.send();
+            this.hadOutbound();
 
             log.debug("Link request {}  sent to {}", linkId, destination);
             log.trace("Establishment timeout is {} ms  for link request {}", establishmentTimeout, linkId);
@@ -217,9 +238,30 @@ public class Link extends AbstractDestination {
         init();
     }
 
-    public Link(Destination owner, byte[] peerPubBytes, byte[] peerSigPubBytes) {
+    public Link(
+        Destination owner,
+        byte[] peerPubBytes,
+        byte[] peerSigPubBytes
+    ) {
         this.owner = owner;
         loadPeer(peerPubBytes, peerSigPubBytes);
+        init();
+    }
+
+    public Link (
+        Destination destination,
+        Consumer<Link> estabishedCallback,
+        Consumer<Link> closedCallback,
+        Destination owner,
+        byte[] peerPubBytes,
+        byte[] peerSigPubBytes
+    ) {
+        this.destination = destination;
+        this.establishedCallback = estabishedCallback;
+        this.closedCallback = closedCallback;
+        this.owner = owner;
+        this.peerPubBytes = peerPubBytes;
+        this.peerSigPubBytes = peerSigPubBytes;
         init();
     }
 
@@ -244,11 +286,11 @@ public class Link extends AbstractDestination {
     }
 
     public synchronized void handshake() {
-        if (status == PENDING && nonNull(prv)) {
+        if (status == PENDING && nonNull(this.prv)) {
             this.status = LinkStatus.HANDSHAKE;
 
             var agreement = new X25519Agreement();
-            agreement.init(prv);
+            agreement.init(this.prv);
             var sharedKey = new byte[agreement.getAgreementSize()];
             agreement.calculateAgreement(peerPub, sharedKey, 0);
             this.sharedKey = sharedKey;
@@ -265,10 +307,10 @@ public class Link extends AbstractDestination {
 
     @SneakyThrows
     public void prove() {
-        var signedData = concatArrays(linkId, pubBytes, peerSigPubBytes);
-        var signature = owner.getIdentity().sign(signedData);
+        var signedData = concatArrays(this.linkId, this.pubBytes, this.sigPubBytes);
+        var signature = this.owner.getIdentity().sign(signedData);
 
-        var proofData = concatArrays(signature, pubBytes);
+        var proofData = concatArrays(signature, this.pubBytes);
         var proof = new Packet(this, proofData, PROOF, LRPROOF);
         proof.send();
         this.establishmentCost.getAndAdd(proof.getRaw().length);
@@ -293,7 +335,7 @@ public class Link extends AbstractDestination {
     public synchronized void validateProof(Packet packet) {
         try {
             if (status == PENDING) {
-                if (initiator && packet.getData().length == (SIGLENGTH / 8 + ECPUBSIZE / 2)) {
+                if (this.initiator && packet.getData().length == (SIGLENGTH / 8 + ECPUBSIZE / 2)) {
                     var peerPubBytes = subarray(packet.getData(), SIGLENGTH / 8, SIGLENGTH / 8 + ECPUBSIZE / 2);
                     var peerSigPubBytes = subarray(destination.getIdentity().getPublicKey(), ECPUBSIZE / 2, ECPUBSIZE);
                     loadPeer(peerPubBytes, peerSigPubBytes);
@@ -321,7 +363,7 @@ public class Link extends AbstractDestination {
                         }
 
                         try (var packer = MessagePack.newDefaultBufferPacker()) {
-                            packer.packLong(this.rtt);
+                            packer.packFloat((float) this.rtt);
 
                             var rttData = packer.toByteArray();
                             var rttPacket = new Packet(this, rttData, LRRTT);
@@ -331,7 +373,7 @@ public class Link extends AbstractDestination {
                         }
 
                         if (nonNull(callbacks.getLinkEstablished())) {
-                            defaultThreadFactory().newThread(callbacks.getLinkEstablished()).start();
+                            this.getCallbacks().getLinkEstablished().accept(this);
                         }
                     } else {
                         log.debug("Invalid link proof signature received by {}. Ignoring.", this);
@@ -438,10 +480,11 @@ public class Link extends AbstractDestination {
     public synchronized void rttPacket(Packet packet) {
         try {
             var measuredRtt = Duration.between(requestTime, Instant.now()).toMillis();
+            var rrt = measuredRtt;
             var plainText = decrypt(packet.getData());
             if (nonNull(plainText)) {
                 try (var unpacker = MessagePack.newDefaultUnpacker(plainText)) {
-                    rtt = Math.max(measuredRtt, unpacker.unpackLong());
+                    rtt = Math.max(measuredRtt, (long) unpacker.unpackFloat());
                 }
 
                 activatedAt = Instant.now();
@@ -459,7 +502,7 @@ public class Link extends AbstractDestination {
                 }
             }
         } catch (Exception e) {
-            log.error("Error occurred while processing RTT packet, tearing down link.", e);
+            this.teardown();
         }
     }
 
@@ -528,12 +571,12 @@ public class Link extends AbstractDestination {
      */
     public synchronized void teardown() {
         if (status != PENDING && status != CLOSED) {
-            var teardownPacket = new Packet(this, linkId, LINKCLOSE);
+            var teardownPacket = new Packet(this, this.linkId, LINKCLOSE);
             teardownPacket.send();
             hadOutbound();
         }
-        status = CLOSED;
-        if (initiator) {
+        this.status = CLOSED;
+        if (this.initiator) {
             this.teardownReason = INITIATOR_CLOSED;
         } else {
             this.teardownReason = DESTINATION_CLOSED;
@@ -545,7 +588,7 @@ public class Link extends AbstractDestination {
         try {
             var plainText = decrypt(packet.getData());
             if (Arrays.equals(plainText, linkId)) {
-                status = CLOSED;
+                this.status = CLOSED;
                 if (initiator) {
                     teardownReason = DESTINATION_CLOSED;
                 } else {
@@ -572,8 +615,12 @@ public class Link extends AbstractDestination {
     }
 
     private synchronized void linkClosed() {
-        incomingResources.forEach(Resource::cancel);
-        outgoingResources.forEach(Resource::cancel);
+        try {
+            incomingResources.forEach(Resource::cancel);
+            outgoingResources.forEach(Resource::cancel);
+        } catch (NoClassDefFoundError e) {
+            log.error("Link.linkClosed(): Error cancelling resources");
+        }
 
         if (nonNull(channel)) {
             channel.shutdown();
@@ -815,7 +862,7 @@ public class Link extends AbstractDestination {
     @SneakyThrows
     public synchronized void receive(Packet packet) {
         watchdogLock.lock();
-        if (status == CLOSED
+        if (status != CLOSED
                 && isFalse(
                 initiator && packet.getContext() == PacketContextType.KEEPALIVE
                         && Arrays.equals(packet.getData(), new byte[]{(byte) 0xFF}
@@ -1076,9 +1123,10 @@ public class Link extends AbstractDestination {
         try {
             if (isNull(fernet)) {
                 fernet = new Fernet(derivedKey);
-
-                return fernet.decrypt(data);
             }
+
+            return fernet.decrypt(data);
+
         } catch (Exception e) {
             log.error("Decryption failed on link {}", this, e);
         }
@@ -1106,7 +1154,7 @@ public class Link extends AbstractDestination {
         }
     }
 
-    public void setLinkEstablishedCallback(Runnable establishedCallback) {
+    public void setLinkEstablishedCallback(Consumer<Link> establishedCallback) {
         callbacks.setLinkEstablished(establishedCallback);
     }
 
