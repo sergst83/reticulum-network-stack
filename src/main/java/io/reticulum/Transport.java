@@ -159,7 +159,6 @@ import static org.msgpack.value.ValueFactory.newTimestamp;
 
 @Slf4j
 public final class Transport implements ExitHandler {
-    private final ReentrantLock savingPacketHashlistLock = new ReentrantLock();
     private final ReentrantLock savingPathTableLock = new ReentrantLock();
     private final ReentrantLock savingTunnelTableLock = new ReentrantLock();
     private final ReentrantLock jobsLock = new ReentrantLock();
@@ -249,7 +248,7 @@ public final class Transport implements ExitHandler {
     /**
      * A list of packet hashes for duplicate detection
      */
-    private final List<byte[]> packetHashList = new CopyOnWriteArrayList<>();
+    private final Map<String, byte[]> packetHashMap = new ConcurrentHashMap<>();
     /**
      * A table for keeping track of tagged path requests
      */
@@ -282,23 +281,9 @@ public final class Transport implements ExitHandler {
                     return idt;
                 });
 
-        var packetHashlistPath = owner.getStoragePath().resolve("jpacket_hashlist");
         if (isFalse(owner.isConnectedToSharedInstance())) {
-            if (Files.isReadable(packetHashlistPath)) {
-                try (var unpacker = MessagePack.newDefaultUnpacker(Files.readAllBytes(packetHashlistPath))) {
-                    packetHashList.clear();
-                    packetHashList.addAll(
-                            unpacker.unpackValue()
-                                    .asArrayValue()
-                                    .list()
-                                    .stream()
-                                    .map(value -> value.asBinaryValue().asByteArray())
-                                    .collect(toList())
-                    );
-                } catch (IOException e) {
-                    log.error("Could not load packet hashlist from storage {}", packetHashlistPath, e);
-                }
-            }
+            packetHashMap.clear();
+            packetHashMap.putAll(storage.loadAllPacketHash());
         }
 
         //Create transport-specific destinations
@@ -525,41 +510,13 @@ public final class Transport implements ExitHandler {
             return;
         }
 
-        try {
-            if (savingPacketHashlistLock.tryLock(5, TimeUnit.SECONDS)) {
-                var saveStart = Instant.now();
-
-                if (isFalse(owner.isTransportEnabled())) {
-                    packetHashList.clear();
-                } else {
-                    log.debug("Saving packet hashlist to storage...");
-                }
-
-                var packetHashlistPath = owner.getStoragePath().resolve("packet_hashlist");
-                try (var packer = MessagePack.newDefaultBufferPacker()) {
-                    packer.packValue(
-                            newArray(
-                                    packetHashList.stream()
-                                            .map(ValueFactory::newBinary)
-                                            .collect(toList())
-                            )
-                    );
-
-                    Files.deleteIfExists(packetHashlistPath);
-                    Files.write(packetHashlistPath, packer.toByteArray(), CREATE, WRITE);
-                } catch (IOException e) {
-                    log.error("Could not save packet hashlist to storage", e);
-                }
-
-                log.debug("Saved packet hashlist in {} ms", Duration.between(saveStart, Instant.now()).toMillis());
-            } else {
-                log.error("Could not save packet hashlist to storage, waiting for previous save operation timed out.");
-            }
-        } catch (Exception e) {
-            log.error("Error", e);
-        } finally {
-            savingPacketHashlistLock.unlock();
+        var saveStart = Instant.now();
+        if (isFalse(owner.isTransportEnabled())) {
+            packetHashMap.clear();
         }
+        log.debug("Saving packet hashlist to storage...");
+        storage.saveAllPacketHash(packetHashMap);
+        log.debug("Saved packet hashlist in {} ms", Duration.between(saveStart, Instant.now()).toMillis());
     }
 
     private void savePathTable() {
@@ -899,7 +856,7 @@ public final class Transport implements ExitHandler {
         }
 
         if (packetFilter(packet)) {
-            packetHashList.add(packet.getHash());
+            packetHashMap.put(Hex.encodeHexString(packet.getHash()), packet.getHash());
             cache(packet, false);
 
             //Check special conditions for local clients connected through a shared Reticulum instance
@@ -1907,7 +1864,7 @@ public final class Transport implements ExitHandler {
 
                     if (shouldTransmit) {
                         if (isFalse(storedHash)) {
-                            packetHashList.add(packet.getPacketHash());
+                            packetHashMap.put(Hex.encodeHexString(packet.getPacketHash()), packet.getPacketHash());
                             storedHash = true;
                         }
 
@@ -2041,7 +1998,7 @@ public final class Transport implements ExitHandler {
             }
         }
 
-        if (packetHashList.stream().noneMatch(bytes -> Arrays.equals(bytes, packet.getPacketHash()))) {
+        if (isFalse(packetHashMap.containsKey(Hex.encodeHexString(packet.getPacketHash())))) {
             return true;
         } else {
             if (packet.getPacketType() == ANNOUNCE) {
@@ -2747,10 +2704,10 @@ public final class Transport implements ExitHandler {
                 }
 
                 //Cull the packet hashlist if it has reached its max size
-                if (packetHashList.size() > HASHLIST_MAXSIZE) {
-                    var list = packetHashList.subList(packetHashList.size() - HASHLIST_MAXSIZE, packetHashList.size() - 1);
-                    packetHashList.clear();
-                    packetHashList.addAll(list);
+                if (packetHashMap.size() > HASHLIST_MAXSIZE) {
+                    var list = storage.trimPacketHashList();
+                    packetHashMap.clear();
+                    packetHashMap.putAll(list);
                 }
 
                 //Cull the path request tags list if it has reached its max size
