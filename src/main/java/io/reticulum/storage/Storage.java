@@ -5,15 +5,18 @@ import io.reticulum.identity.IdentityKnownDestination.DestinationData;
 import io.reticulum.storage.converter.DestinationDataConverter;
 import io.reticulum.storage.converter.DestinationTableConverter;
 import io.reticulum.storage.converter.HopEntityConverter;
+import io.reticulum.storage.converter.PacketCacheConverter;
 import io.reticulum.storage.converter.PacketHashConverter;
 import io.reticulum.storage.converter.TransportIdentityConverter;
 import io.reticulum.storage.decorator.DestinationDataDecorator;
 import io.reticulum.storage.entity.DestinationTable;
+import io.reticulum.storage.entity.PacketCache;
 import io.reticulum.storage.entity.PacketHash;
 import io.reticulum.storage.entity.TransportIdentity;
 import lombok.AccessLevel;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
+import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.collections4.MapUtils;
 import org.dizitart.no2.Nitrite;
 import org.dizitart.no2.common.mapper.SimpleNitriteMapper;
@@ -29,7 +32,6 @@ import java.util.function.Supplier;
 import static io.reticulum.constant.TransportConstant.HASHLIST_MAXSIZE;
 import static java.util.function.Function.identity;
 import static java.util.stream.Collectors.toMap;
-import static org.apache.commons.collections4.CollectionUtils.isNotEmpty;
 import static org.dizitart.no2.collection.FindOptions.orderBy;
 import static org.dizitart.no2.common.SortOrder.Descending;
 import static org.dizitart.no2.common.util.Iterables.setOf;
@@ -60,7 +62,7 @@ public final class Storage {
         return STORAGE;
     }
 
-    public static Storage init(final Path storagePath) {
+    public static Storage init(@NonNull final Path storagePath) {
         Storage storage = STORAGE;
         if (storage == null) {
             synchronized (Storage.class) {
@@ -77,6 +79,7 @@ public final class Storage {
                     documentMapper.registerEntityConverter(new PacketHashConverter());
                     documentMapper.registerEntityConverter(new DestinationTableConverter());
                     documentMapper.registerEntityConverter(new HopEntityConverter());
+                    documentMapper.registerEntityConverter(new PacketCacheConverter());
 
                     var builder = Nitrite.builder()
                             .loadModule(storeModule)
@@ -112,8 +115,8 @@ public final class Storage {
         );
     }
 
-    public void saveKnownDestinations(Collection<DestinationData> knownDestinations) {
-        if (isNotEmpty(knownDestinations)) {
+    public void saveKnownDestinations(final Collection<DestinationData> knownDestinations) {
+        if (CollectionUtils.isNotEmpty(knownDestinations)) {
             var repo = db.getRepository(new DestinationDataDecorator());
             doInTransactionWithoutResult(__ -> knownDestinations.forEach(destinationData -> repo.update(destinationData, true)));
         }
@@ -135,9 +138,8 @@ public final class Storage {
         }
     }
 
-
     public void saveDestinationTables(Collection<DestinationTable> destinationTables) {
-        if (isNotEmpty(destinationTables)) {
+        if (CollectionUtils.isNotEmpty(destinationTables)) {
             var repo = db.getRepository(DestinationTable.class);
             doInTransactionWithoutResult(__ -> destinationTables.forEach(destinationTable -> repo.update(destinationTable, true)));
         }
@@ -164,6 +166,18 @@ public final class Storage {
 
             return toSave.stream().collect(toMap(PacketHash::getPacketHash, PacketHash::getHash));
         });
+    }
+
+    public void savePacketCache(@NonNull final PacketCache packetCache) {
+        doInTransactionWithoutResult(__ -> {
+            var repo = db.getRepository(PacketCache.class);
+            repo.update(packetCache, true);
+        });
+    }
+
+    public PacketCache getPacketCache(@NonNull final String packetHash) {
+        return db.getRepository(PacketCache.class)
+                .getById(packetHash);
     }
 
     private <Result> Result doInTransaction(Supplier<Result> supplier) {

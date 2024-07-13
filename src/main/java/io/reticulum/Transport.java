@@ -12,6 +12,7 @@ import io.reticulum.packet.data.DataPacketConverter;
 import io.reticulum.storage.Storage;
 import io.reticulum.storage.entity.DestinationTable;
 import io.reticulum.storage.entity.HopEntity;
+import io.reticulum.storage.entity.PacketCache;
 import io.reticulum.transport.AnnounceEntry;
 import io.reticulum.transport.AnnounceHandler;
 import io.reticulum.transport.AnnounceQueueEntry;
@@ -159,7 +160,6 @@ import static org.apache.commons.lang3.BooleanUtils.isFalse;
 import static org.msgpack.value.ValueFactory.newArray;
 import static org.msgpack.value.ValueFactory.newBinary;
 import static org.msgpack.value.ValueFactory.newInteger;
-import static org.msgpack.value.ValueFactory.newString;
 import static org.msgpack.value.ValueFactory.newTimestamp;
 
 @Slf4j
@@ -575,24 +575,18 @@ public final class Transport implements ExitHandler {
     private void cache(Packet packet, boolean forceCache) {
         if (forceCache || shouldCache(packet)) {
             try {
-                var stringHash = encodeHexString(packet.getHash());
                 String interfaceName = null;
                 if (nonNull(packet.getReceivingInterface())) {
                     interfaceName = packet.getReceivingInterface().getInterfaceName();
                 }
 
-                try (var packer = MessagePack.newDefaultBufferPacker()) {
-                    packer.packValue(
-                            newArray(
-                                    newBinary(packet.getRaw()),
-                                    newString(interfaceName)
-                            )
-                    );
-
-                    var filePath = owner.getCachePath().resolve(stringHash);
-                    Files.deleteIfExists(filePath);
-                    Files.write(filePath, packer.toByteArray(), CREATE, WRITE);
-                }
+                storage.savePacketCache(
+                        PacketCache.builder()
+                                .interfaceName(interfaceName)
+                                .raw(packet.getRaw())
+                                .packetHash(encodeHexString(packet.getHash()))
+                                .build()
+                );
             } catch (Exception e) {
                 log.error("Error writing packet to cache", e);
             }
@@ -600,29 +594,18 @@ public final class Transport implements ExitHandler {
     }
 
     private Packet getCachedPacket(byte[] packetHash) {
-        var strPacketHash = encodeHexString(packetHash);
-        var path = owner.getCachePath().resolve(strPacketHash);
-
-        if (Files.isReadable(path)) {
-            try (var unpacker = MessagePack.newDefaultUnpacker(Files.readAllBytes(path))) {
-                var arrayValue = unpacker.unpackValue().asArrayValue();
-                var raw = arrayValue.get(0).asBinaryValue().asByteArray();
-                var interfaceName = arrayValue.get(1).asStringValue().asString();
-
-                var packet = new Packet(raw);
-                var iface = interfaces.stream()
-                        .filter(i -> StringUtils.equals(i.getInterfaceName(), interfaceName))
-                        .findAny()
-                        .orElse(null);
-                packet.setReceivingInterface(iface);
-
-                return packet;
-            } catch (IOException e) {
-                log.error("Exception occurred while getting cached packet.", e);
-            }
+        var paketCache = storage.getPacketCache(encodeHexString(packetHash));
+        if (isNull(paketCache)) {
+            return null;
         }
 
-        return null;
+        var packet = new Packet(paketCache.getRaw());
+        interfaces.stream()
+                .filter(i -> StringUtils.equals(i.getInterfaceName(), paketCache.getInterfaceName()))
+                .findAny()
+                .ifPresent(packet::setReceivingInterface);
+
+        return packet;
     }
 
     private boolean shouldCache(Packet packet) {
