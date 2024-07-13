@@ -3,15 +3,17 @@ package io.reticulum.storage;
 import io.reticulum.identity.Identity;
 import io.reticulum.identity.IdentityKnownDestination.DestinationData;
 import io.reticulum.storage.converter.DestinationDataConverter;
+import io.reticulum.storage.converter.DestinationTableConverter;
+import io.reticulum.storage.converter.HopEntityConverter;
 import io.reticulum.storage.converter.PacketHashConverter;
 import io.reticulum.storage.converter.TransportIdentityConverter;
 import io.reticulum.storage.decorator.DestinationDataDecorator;
+import io.reticulum.storage.entity.DestinationTable;
 import io.reticulum.storage.entity.PacketHash;
 import io.reticulum.storage.entity.TransportIdentity;
 import lombok.AccessLevel;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
-import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.collections4.MapUtils;
 import org.dizitart.no2.Nitrite;
 import org.dizitart.no2.common.mapper.SimpleNitriteMapper;
@@ -27,6 +29,7 @@ import java.util.function.Supplier;
 import static io.reticulum.constant.TransportConstant.HASHLIST_MAXSIZE;
 import static java.util.function.Function.identity;
 import static java.util.stream.Collectors.toMap;
+import static org.apache.commons.collections4.CollectionUtils.isNotEmpty;
 import static org.dizitart.no2.collection.FindOptions.orderBy;
 import static org.dizitart.no2.common.SortOrder.Descending;
 import static org.dizitart.no2.common.util.Iterables.setOf;
@@ -72,6 +75,8 @@ public final class Storage {
                     documentMapper.registerEntityConverter(new TransportIdentityConverter());
                     documentMapper.registerEntityConverter(new DestinationDataConverter());
                     documentMapper.registerEntityConverter(new PacketHashConverter());
+                    documentMapper.registerEntityConverter(new DestinationTableConverter());
+                    documentMapper.registerEntityConverter(new HopEntityConverter());
 
                     var builder = Nitrite.builder()
                             .loadModule(storeModule)
@@ -108,7 +113,7 @@ public final class Storage {
     }
 
     public void saveKnownDestinations(Collection<DestinationData> knownDestinations) {
-        if (CollectionUtils.isNotEmpty(knownDestinations)) {
+        if (isNotEmpty(knownDestinations)) {
             var repo = db.getRepository(new DestinationDataDecorator());
             doInTransactionWithoutResult(__ -> knownDestinations.forEach(destinationData -> repo.update(destinationData, true)));
         }
@@ -128,6 +133,18 @@ public final class Storage {
         } else {
             repo.clear();
         }
+    }
+
+
+    public void saveDestinationTables(Collection<DestinationTable> destinationTables) {
+        if (isNotEmpty(destinationTables)) {
+            var repo = db.getRepository(DestinationTable.class);
+            doInTransactionWithoutResult(__ -> destinationTables.forEach(destinationTable -> repo.update(destinationTable, true)));
+        }
+    }
+
+    public Collection<DestinationTable> getDestinationTables() {
+        return db.getRepository(DestinationTable.class).find().toList();
     }
 
     public Map<String, byte[]> loadAllPacketHash() {

@@ -15,9 +15,9 @@ public class HopEntity implements Serializable {
     private byte[] via; //1
     private int hops; //2
     private Instant expires; //3
-    private List<byte[]> randomBlobs;
-    private String interfaceName; //5
-    private byte[] packetRaw; //6
+    private List<byte[]> randomBlobs; //4
+    private byte[] interfaceHash; //5
+    private byte[] packetHash; //6
 
     @Data
     @Builder

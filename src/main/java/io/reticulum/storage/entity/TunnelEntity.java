@@ -1,6 +1,5 @@
 package io.reticulum.storage.entity;
 
-import io.reticulum.storage.Storage;
 import lombok.Builder;
 import lombok.Data;
 import org.dizitart.no2.repository.annotations.Entity;
@@ -9,9 +8,11 @@ import org.dizitart.no2.repository.annotations.Id;
 import java.time.Instant;
 import java.util.Map;
 
+import static io.reticulum.storage.Storage.TUNNELS;
+
 @Data
 @Builder
-@Entity(Storage.TUNNELS)
+@Entity(TUNNELS)
 public class TunnelEntity {
     @Id
     private String tunnelIdHex;
