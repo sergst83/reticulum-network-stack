@@ -8,11 +8,13 @@ import io.reticulum.storage.converter.HopEntityConverter;
 import io.reticulum.storage.converter.PacketCacheConverter;
 import io.reticulum.storage.converter.PacketHashConverter;
 import io.reticulum.storage.converter.TransportIdentityConverter;
+import io.reticulum.storage.converter.TunnelEntityConverter;
 import io.reticulum.storage.decorator.DestinationDataDecorator;
 import io.reticulum.storage.entity.DestinationTable;
 import io.reticulum.storage.entity.PacketCache;
 import io.reticulum.storage.entity.PacketHash;
 import io.reticulum.storage.entity.TransportIdentity;
+import io.reticulum.storage.entity.TunnelEntity;
 import lombok.AccessLevel;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
@@ -80,6 +82,7 @@ public final class Storage {
                     documentMapper.registerEntityConverter(new DestinationTableConverter());
                     documentMapper.registerEntityConverter(new HopEntityConverter());
                     documentMapper.registerEntityConverter(new PacketCacheConverter());
+                    documentMapper.registerEntityConverter(new TunnelEntityConverter());
 
                     var builder = Nitrite.builder()
                             .loadModule(storeModule)
@@ -178,6 +181,23 @@ public final class Storage {
     public PacketCache getPacketCache(@NonNull final String packetHash) {
         return db.getRepository(PacketCache.class)
                 .getById(packetHash);
+    }
+
+    public void cleanPacketCache() {
+        doInTransactionWithoutResult(__ -> {
+            db.getRepository(PacketCache.class).clear();
+        });
+    }
+
+    public void saveTunnelTable(Collection<TunnelEntity> tunnels) {
+        if (CollectionUtils.isNotEmpty(tunnels)) {
+            var repo = db.getRepository(TunnelEntity.class);
+            doInTransactionWithoutResult(__ -> tunnels.forEach(tunnelEntity -> repo.update(tunnelEntity, true)));
+        }
+    }
+
+    public Collection<TunnelEntity> getTunnelTables() {
+        return db.getRepository(TunnelEntity.class).find().toList();
     }
 
     private <Result> Result doInTransaction(Supplier<Result> supplier) {

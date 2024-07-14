@@ -18,7 +18,7 @@ public class TunnelEntity {
     private String tunnelIdHex;
 
     private byte[] tunnelId; //0
-    private String interfaceName; // 1
+    private byte[] interfaceHash; // 1
     private Map<String, HopEntity> tunnelPaths; //2
     private Instant expires; //3
 }

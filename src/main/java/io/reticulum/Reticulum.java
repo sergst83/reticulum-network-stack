@@ -6,6 +6,7 @@ import io.reticulum.interfaces.AbstractConnectionInterface;
 import io.reticulum.interfaces.ConnectionInterface;
 import io.reticulum.interfaces.local.LocalClientInterface;
 import io.reticulum.interfaces.local.LocalServerInterface;
+import io.reticulum.storage.Storage;
 import io.reticulum.utils.IdentityUtils;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -19,7 +20,6 @@ import sun.misc.Signal;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -35,12 +35,12 @@ import static io.reticulum.constant.ReticulumConstant.ETC_DIR;
 import static io.reticulum.constant.ReticulumConstant.IFAC_SALT;
 import static io.reticulum.constant.ReticulumConstant.PERSIST_INTERVAL;
 import static io.reticulum.constant.ReticulumConstant.RESOURCE_CACHE;
-import static io.reticulum.constant.TransportConstant.DESTINATION_TIMEOUT;
 import static io.reticulum.identity.IdentityKnownDestination.loadKnownDestinations;
 import static io.reticulum.utils.CommonUtils.exit;
 import static io.reticulum.utils.CommonUtils.panic;
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -82,7 +82,6 @@ public class Reticulum implements ExitHandler {
     @Getter
     private Path storagePath;
     @Getter
-    private Path cachePath;
     private Path resourcePath;
 
     @Getter
@@ -185,9 +184,9 @@ public class Reticulum implements ExitHandler {
         }
 
         // Clean packet caches
-        try (var streamPath = Files.walk(cachePath)) {
-            CLEAN_CONSUMER.accept(streamPath, DESTINATION_TIMEOUT);
-        } catch (IOException e) {
+        try {
+            Storage.getInstance().cleanPacketCache();
+        } catch (Exception e) {
             log.error("Error while cleaning caches cache.", e);
         }
     }
@@ -256,51 +255,41 @@ public class Reticulum implements ExitHandler {
     }
 
     private void initConfig(String configDir) throws IOException {
-        String configDir1;
+        String configDirLocal;
         if (isNotBlank(configDir)) {
-            configDir1 = configDir;
+            configDirLocal = configDir;
         } else {
             if (Files.isDirectory(Path.of(ETC_DIR)) && Files.exists(Path.of(ETC_DIR, CONFIG_FILE_NAME))) {
-                configDir1 = ETC_DIR;
+                configDirLocal = ETC_DIR;
             } else if (
                     Files.isDirectory(Path.of(USER_HOME, ".config", "reticulum"))
                             && Files.exists(Path.of(ETC_DIR, ".config", "reticulum", CONFIG_FILE_NAME))
             ) {
-                configDir1 = Path.of(USER_HOME, ".config", "reticulum").toString();
+                configDirLocal = Path.of(USER_HOME, ".config", "reticulum").toString();
             } else {
-                configDir1 = Path.of(USER_HOME, ".reticulum").toString();
+                configDirLocal = Path.of(USER_HOME, ".reticulum").toString();
             }
         }
 
-        this.configPath = Path.of(configDir1);
+        this.configPath = Path.of(configDirLocal);
         if (Files.notExists(configPath)) {
-            Files.createDirectories(cachePath);
-        }
-        Path configFile = configPath.resolve(CONFIG_FILE_NAME);
-        this.storagePath = Path.of(configDir1, "storage");
-        this.cachePath = Path.of(configDir1, "storage", "cache");
-        this.resourcePath = Path.of(configDir1, "storage", "resources");
-        Path identityPath = Path.of(configDir1, "storage", "identities");
-
-        if (Files.notExists(configFile)) {
-            var defaultConfig = this.getClass().getClassLoader().getResourceAsStream("reticulum.default.yml");
-            Files.copy(defaultConfig, configFile, StandardCopyOption.REPLACE_EXISTING);
+            Files.createDirectories(configPath);
         }
 
+        this.storagePath = configPath.resolve( "storage");
         if (Files.notExists(storagePath)) {
             Files.createDirectories(storagePath);
         }
 
-        if (Files.notExists(cachePath)) {
-            Files.createDirectories(cachePath);
-        }
-
+        this.resourcePath = storagePath.resolve("resources");
         if (Files.notExists(resourcePath)) {
             Files.createDirectories(resourcePath);
         }
 
-        if (Files.notExists(identityPath)) {
-            Files.createDirectories(identityPath);
+        var configFile = configPath.resolve(CONFIG_FILE_NAME);
+        if (Files.notExists(configFile)) {
+            var defaultConfig = this.getClass().getClassLoader().getResourceAsStream("reticulum.default.yml");
+            Files.copy(defaultConfig, configFile, REPLACE_EXISTING);
         }
 
         if (Files.isRegularFile(configFile)) {
@@ -314,7 +303,7 @@ public class Reticulum implements ExitHandler {
             log.info("Could not load config file, creating default configuration file...");
             createDefaultConfig();
             this.config = ConfigObj.initConfig(configFile);
-            log.info("Default config file created. Make any necessary changes in {}/config and restart Reticulum if needed.", configDir1);
+            log.info("Default config file created. Make any necessary changes in {}/config and restart Reticulum if needed.", configDirLocal);
         }
 
         log.info("Config loaded from {}", configFile);

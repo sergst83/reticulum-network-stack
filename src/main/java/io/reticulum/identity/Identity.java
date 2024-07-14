@@ -1,6 +1,5 @@
 package io.reticulum.identity;
 
-import io.reticulum.Reticulum;
 import io.reticulum.Transport;
 import io.reticulum.cryptography.Fernet;
 import io.reticulum.destination.AbstractDestination;
@@ -37,7 +36,6 @@ import static io.reticulum.utils.IdentityUtils.truncatedHash;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static org.apache.commons.lang3.ArrayUtils.subarray;
-import static org.apache.commons.lang3.BooleanUtils.isTrue;
 
 /**
  * This class is used to manage identities in Reticulum. It provides methods

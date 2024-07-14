@@ -13,6 +13,7 @@ import io.reticulum.storage.Storage;
 import io.reticulum.storage.entity.DestinationTable;
 import io.reticulum.storage.entity.HopEntity;
 import io.reticulum.storage.entity.PacketCache;
+import io.reticulum.storage.entity.TunnelEntity;
 import io.reticulum.transport.AnnounceEntry;
 import io.reticulum.transport.AnnounceHandler;
 import io.reticulum.transport.AnnounceQueueEntry;
@@ -35,13 +36,8 @@ import org.apache.commons.lang3.tuple.Pair;
 import org.bouncycastle.crypto.digests.SHA256Digest;
 import org.bouncycastle.crypto.generators.HKDFBytesGenerator;
 import org.bouncycastle.crypto.params.HKDFParameters;
-import org.msgpack.core.MessagePack;
-import org.msgpack.value.Value;
-import org.msgpack.value.ValueFactory;
 
-import java.io.IOException;
 import java.math.BigInteger;
-import java.nio.file.Files;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -146,21 +142,14 @@ import static io.reticulum.utils.DestinationUtils.hashFromNameAndIdentity;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.utils.IdentityUtils.getRandomHash;
-import static java.nio.file.StandardOpenOption.CREATE;
-import static java.nio.file.StandardOpenOption.WRITE;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
-import static java.util.stream.Collectors.toList;
 import static org.apache.commons.codec.binary.Hex.decodeHex;
 import static org.apache.commons.codec.binary.Hex.encodeHexString;
 import static org.apache.commons.collections4.CollectionUtils.isNotEmpty;
 import static org.apache.commons.lang3.ArrayUtils.getLength;
 import static org.apache.commons.lang3.ArrayUtils.subarray;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
-import static org.msgpack.value.ValueFactory.newArray;
-import static org.msgpack.value.ValueFactory.newBinary;
-import static org.msgpack.value.ValueFactory.newInteger;
-import static org.msgpack.value.ValueFactory.newTimestamp;
 
 @Slf4j
 public final class Transport implements ExitHandler {
@@ -344,64 +333,40 @@ public final class Transport implements ExitHandler {
                 log.debug("Loaded {}  path table entries  from storage", destinationTable.size());
             }
 
-            var tunnelTablePath = owner.getStoragePath().resolve("jtunnels");
-            if (Files.isReadable(tunnelTablePath) && isFalse(owner.isConnectedToSharedInstance())) {
-                try (var unpacker = MessagePack.newDefaultUnpacker(Files.readAllBytes(tunnelTablePath))) {
-                    for (Value value : unpacker.unpackValue().asArrayValue()) {
-                        var serialisedTunnel = value.asArrayValue();
+            var tunnelList = storage.getTunnelTables();
+            if (isNotEmpty(tunnelList) && isFalse(owner.isConnectedToSharedInstance())) {
+                for (TunnelEntity tunnelEntity : tunnelList) {
+                    var tunnelPaths = new HashMap<String, Hops>();
+                    tunnelEntity.getTunnelPaths().forEach((destinationHash, hopEntry) -> {
+                        var receivingInterface = findInterfaceFromHash(hopEntry.getInterfaceHash());
+                        var announcePacket = getCachedPacket(hopEntry.getPacketHash());
+                        if (nonNull(announcePacket)) {
+                            // We increase the hops, since reading a packet
+                            // from cache is equivalent to receiving it again
+                            // over an interface. It is cached with it's non-increased hop-count.
+                            announcePacket.setHops(announcePacket.getHops() + 1);
 
-                        var tunnelId = serialisedTunnel.get(0).asBinaryValue().asByteArray();
-                        var interfaceHash = serialisedTunnel.get(1).asBinaryValue().asByteArray();
-                        var serialisedPaths = serialisedTunnel.get(2).asArrayValue();
-                        var expires = serialisedTunnel.get(3).asTimestampValue().toInstant();
-
-                        var tunnelPaths = new HashMap<String, Hops>();
-                        for (Value serialisedPathValue : serialisedPaths) {
-                            var serialisedEntry = serialisedPathValue.asArrayValue();
-
-                            var destinationHash = serialisedEntry.get(0).asBinaryValue().asByteArray();
-                            var timestamp = serialisedEntry.get(1).asTimestampValue().toInstant();
-                            var receivedFrom = serialisedEntry.get(2).asBinaryValue().asByteArray();
-                            var hops = serialisedEntry.get(3).asIntegerValue().asInt();
-                            var expired = serialisedEntry.get(4).asTimestampValue().toInstant();
-                            var randomBlods = serialisedEntry.get(5).asArrayValue().list().stream()
-                                    .map(v -> v.asBinaryValue().asByteArray())
-                                    .collect(toList());
-                            var receivingInterface = findInterfaceFromHash(serialisedEntry.get(6).asBinaryValue().asByteArray());
-                            var announcePacket = getCachedPacket(serialisedEntry.get(7).asBinaryValue().asByteArray());
-
-                            if (nonNull(announcePacket)) {
-                                // We increase the hops, since reading a packet
-                                // from cache is equivalent to receiving it again
-                                // over an interface. It is cached with it's non-
-                                // increased hop-count.
-                                announcePacket.setHops(announcePacket.getHops() + 1);
-
-                                var tunnelPath = Hops.builder()
-                                        .timestamp(timestamp)
-                                        .via(receivedFrom)
-                                        .expires(expired)
-                                        .randomBlobs(randomBlods)
-                                        .anInterface(receivingInterface)
-                                        .packet(announcePacket)
-                                        .build();
-                                tunnelPaths.put(encodeHexString(destinationHash), tunnelPath);
-                            }
+                            var tunnelPath = Hops.builder()
+                                    .timestamp(hopEntry.getTimestamp())
+                                    .hops(hopEntry.getHops())
+                                    .via(hopEntry.getVia())
+                                    .expires(hopEntry.getExpires())
+                                    .randomBlobs(hopEntry.getRandomBlobs())
+                                    .anInterface(receivingInterface)
+                                    .packet(announcePacket)
+                                    .build();
+                            tunnelPaths.put(destinationHash, tunnelPath);
                         }
-
-                        tunnels.put(
-                                encodeHexString(tunnelId),
-                                Tunnel.builder()
-                                        .tunnelId(tunnelId)
-                                        .tunnelPaths(tunnelPaths)
-                                        .expires(expires)
-                                        .build()
-                        );
-                    }
-
-                    log.debug("Loaded {} tunnel table entries from storage", tunnels.size());
-                } catch (IOException e) {
-                    log.error("Could not load tunnel table from storage {}", tunnelTablePath, e);
+                    });
+                    tunnels.put(
+                            tunnelEntity.getTunnelIdHex(),
+                            Tunnel.builder()
+                                    .tunnelId(tunnelEntity.getTunnelId())
+                                    .tunnelPaths(tunnelPaths)
+                                    .expires(tunnelEntity.getExpires())
+                                    .anInterface(findInterfaceFromHash(tunnelEntity.getInterfaceHash()))
+                                    .build()
+                    );
                 }
             }
         }
@@ -521,7 +486,6 @@ public final class Transport implements ExitHandler {
 
                 log.debug("Saving path table to storage...");
 
-                var serialisedDestinations = new LinkedList<Value>();
                 var dtList = new LinkedList<DestinationTable>();
                 for (String destinationHash : destinationTable.keySet()) {
                     // Get the destination entry from the destination table
@@ -532,26 +496,28 @@ public final class Transport implements ExitHandler {
                     var iface = findInterfaceFromHash(interfaceHash);
                     if (nonNull(iface)) {
                         //Get the destination entry from the destination table
-                        var hop =  HopEntity.builder()
-                                .timestamp(de.getTimestamp())
-                                .via(de.getVia())
-                                .hops(de.getHops())
-                                .expires(de.getExpires())
-                                .randomBlobs(de.getRandomBlobs())
-                                .interfaceHash(interfaceHash)
-                                .packetHash(de.getPacket().getHash())
-                                .build();
-                        var dt = DestinationTable.builder()
-                                .destinationHash(destinationHash)
-                                .hop(hop)
-                                .build();
-                        dtList.add(dt);
+                        dtList.add(
+                                DestinationTable.builder()
+                                        .destinationHash(destinationHash)
+                                        .hop(
+                                                HopEntity.builder()
+                                                        .timestamp(de.getTimestamp())
+                                                        .via(de.getVia())
+                                                        .hops(de.getHops())
+                                                        .expires(de.getExpires())
+                                                        .randomBlobs(de.getRandomBlobs())
+                                                        .interfaceHash(interfaceHash)
+                                                        .packetHash(de.getPacket().getHash())
+                                                        .build()
+                                        )
+                                        .build()
+                        );
                         cache(de.getPacket(), true);
                     }
                 }
                 storage.saveDestinationTables(dtList);
 
-                log.debug("Saved {}  path table entries in {} ms", serialisedDestinations, Duration.between(saveStart, Instant.now()).toMillis());
+                log.debug("Saved {}  path table entries in {} ms", dtList, Duration.between(saveStart, Instant.now()).toMillis());
             } else {
                 log.error("Could not save path table to storage, waiting for previous save operation timed out.");
             }
@@ -635,7 +601,7 @@ public final class Transport implements ExitHandler {
 
                 log.debug("Saving tunnel table to storage...");
 
-                var serialisedTunnels = new LinkedList<Value>();
+                var serialisedTunnels = new LinkedList<TunnelEntity>();
                 for (String tunnelId : tunnels.keySet()) {
                     var te = tunnels.get(tunnelId);
                     var iface = te.getInterface();
@@ -647,43 +613,32 @@ public final class Transport implements ExitHandler {
                         interfaceHash = iface.getHash();
                     }
 
-                    var serialisedPaths = new LinkedList<Value>();
+                    var serialisedPaths = new HashMap<String, HopEntity>();
                     for (String destinationHash : tunnelPaths.keySet()) {
                         var de = tunnelPaths.get(destinationHash);
-
-                        serialisedPaths.add(
-                                newArray(
-                                        newBinary(decodeHex(destinationHash)),
-                                        newTimestamp(de.getTimestamp()),
-                                        newBinary(de.getVia()),
-                                        newInteger(de.getHops()),
-                                        newTimestamp(de.getExpires()),
-                                        newArray(de.getRandomBlobs().stream().map(ValueFactory::newBinary).collect(toList())),
-                                        newBinary(interfaceHash),
-                                        newBinary(de.getPacket().getHash())
-                                )
-                        );
-
+                        var hopEntity = HopEntity.builder()
+                                .timestamp(de.getTimestamp())
+                                .via(de.getVia())
+                                .hops(de.getHops())
+                                .expires(de.getExpires())
+                                .randomBlobs(de.getRandomBlobs())
+                                .interfaceHash(interfaceHash)
+                                .packetHash(de.getPacket().getHash())
+                                .build();
+                        serialisedPaths.put(destinationHash, hopEntity);
                         cache(de.getPacket(), true);
                     }
 
                     serialisedTunnels.add(
-                            newArray(
-                                    newBinary(decodeHex(tunnelId)),
-                                    newBinary(interfaceHash),
-                                    newArray(serialisedPaths),
-                                    newTimestamp(expires)
-                            )
+                            TunnelEntity.builder()
+                                    .expires(expires)
+                                    .tunnelIdHex(tunnelId)
+                                    .tunnelId(te.getTunnelId())
+                                    .tunnelPaths(serialisedPaths)
+                                    .build()
                     );
                 }
-
-                try (var packer = MessagePack.newDefaultBufferPacker()) {
-                    packer.packValue(newArray(serialisedTunnels));
-
-                    var filePath = owner.getStoragePath().resolve("jtunnels");
-                    Files.deleteIfExists(filePath);
-                    Files.write(filePath, packer.toByteArray(), CREATE, WRITE);
-                }
+                storage.saveTunnelTable(serialisedTunnels);
 
                 log.debug("Saved {} tunnel table entries in {} ms", serialisedTunnels.size(), Duration.between(start, Instant.now()).toMillis());
             } else {
@@ -696,7 +651,7 @@ public final class Transport implements ExitHandler {
         }
     }
 
-    // TODO: 12.05.2023 подлежит рефакторингу.
+    // TODO: 12.05.2023 for refactoring.
     public void inbound(final byte[] raw, final ConnectionInterface iface) {
         byte[] localRaw;
         //If interface access codes are enabled, we must authenticate each packet.

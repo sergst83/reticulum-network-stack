@@ -9,7 +9,6 @@ import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Hex;
 
-import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -61,7 +60,12 @@ public class ResourceUtils {
             resource.setWindowFlexibility(WINDOW_FLEXIBILITY);
             resource.setLastActivity(Instant.now());
 
-            resource.setStoragePath(Path.of(Transport.getInstance().getOwner().getStoragePath().toString(), Hex.encodeHexString(resource.getOriginalHash())));
+            resource.setStoragePath(
+                    Transport.getInstance()
+                            .getOwner()
+                            .getResourcePath()
+                            .resolve("j_".concat(Hex.encodeHexString(resource.getOriginalHash())))
+            );
             resource.setSegmentIndex(adv.getI());
             resource.setTotalSegments(adv.getL());
             resource.setSplit(adv.getL() > 1);

@@ -42,8 +42,6 @@ import static org.apache.commons.lang3.BooleanUtils.isFalse;
 @Slf4j
 public class IdentityKnownDestination {
 
-    static final String KNOWN_DESTINATIONS_FILE_NAME = "known_destinations";
-
     static final Map<String, DestinationData> KNOWN_DESTINATIONS = new ConcurrentHashMap<>();
 
     // TODO: Improve the storage method so we don't have to

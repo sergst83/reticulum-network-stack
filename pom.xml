@@ -14,7 +14,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <lombok.version>1.18.30</lombok.version>
         <jackson.version>2.16.1</jackson.version>
-        <nitrite.version>4.2.0</nitrite.version>
+        <nitrite.version>4.3.0</nitrite.version>
     </properties>
 
     <dependencyManagement>
@@ -26,6 +26,7 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <!-- https://nitrite.dizitart.com/java-sdk/repository/read/index.html -->
             <dependency>
                 <groupId>org.dizitart</groupId>
                 <artifactId>nitrite-bom</artifactId>
