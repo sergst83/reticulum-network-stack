@@ -15,7 +15,7 @@ public class Hops {
     private byte[] via; //1
     private int hops; //2
     private Instant expires; //3
-    private List<byte[]> randomBlobs;
+    private List<byte[]> randomBlobs; //4
     private ConnectionInterface anInterface; //5
     private Packet packet; //6
 

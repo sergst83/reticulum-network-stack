@@ -9,6 +9,11 @@ import io.reticulum.packet.PacketReceipt;
 import io.reticulum.packet.PacketReceiptStatus;
 import io.reticulum.packet.data.DataPacket;
 import io.reticulum.packet.data.DataPacketConverter;
+import io.reticulum.storage.Storage;
+import io.reticulum.storage.entity.DestinationTable;
+import io.reticulum.storage.entity.HopEntity;
+import io.reticulum.storage.entity.PacketCache;
+import io.reticulum.storage.entity.TunnelEntity;
 import io.reticulum.transport.AnnounceEntry;
 import io.reticulum.transport.AnnounceHandler;
 import io.reticulum.transport.AnnounceQueueEntry;
@@ -24,7 +29,6 @@ import lombok.Getter;
 import lombok.NonNull;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -32,13 +36,8 @@ import org.apache.commons.lang3.tuple.Pair;
 import org.bouncycastle.crypto.digests.SHA256Digest;
 import org.bouncycastle.crypto.generators.HKDFBytesGenerator;
 import org.bouncycastle.crypto.params.HKDFParameters;
-import org.msgpack.core.MessagePack;
-import org.msgpack.value.Value;
-import org.msgpack.value.ValueFactory;
 
-import java.io.IOException;
 import java.math.BigInteger;
-import java.nio.file.Files;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -133,6 +132,7 @@ import static io.reticulum.packet.PacketType.ANNOUNCE;
 import static io.reticulum.packet.PacketType.DATA;
 import static io.reticulum.packet.PacketType.LINKREQUEST;
 import static io.reticulum.packet.PacketType.PROOF;
+import static io.reticulum.storage.Storage.DESTINATION_TABLE;
 import static io.reticulum.transport.TransportState.STATE_RESPONSIVE;
 import static io.reticulum.transport.TransportState.STATE_UNKNOWN;
 import static io.reticulum.transport.TransportState.STATE_UNRESPONSIVE;
@@ -142,23 +142,17 @@ import static io.reticulum.utils.DestinationUtils.hashFromNameAndIdentity;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.utils.IdentityUtils.getRandomHash;
-import static java.nio.file.StandardOpenOption.CREATE;
-import static java.nio.file.StandardOpenOption.WRITE;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
-import static java.util.stream.Collectors.toList;
+import static org.apache.commons.codec.binary.Hex.decodeHex;
+import static org.apache.commons.codec.binary.Hex.encodeHexString;
+import static org.apache.commons.collections4.CollectionUtils.isNotEmpty;
 import static org.apache.commons.lang3.ArrayUtils.getLength;
 import static org.apache.commons.lang3.ArrayUtils.subarray;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
-import static org.msgpack.value.ValueFactory.newArray;
-import static org.msgpack.value.ValueFactory.newBinary;
-import static org.msgpack.value.ValueFactory.newInteger;
-import static org.msgpack.value.ValueFactory.newString;
-import static org.msgpack.value.ValueFactory.newTimestamp;
 
 @Slf4j
 public final class Transport implements ExitHandler {
-    private final ReentrantLock savingPacketHashlistLock = new ReentrantLock();
     private final ReentrantLock savingPathTableLock = new ReentrantLock();
     private final ReentrantLock savingTunnelTableLock = new ReentrantLock();
     private final ReentrantLock jobsLock = new ReentrantLock();
@@ -175,6 +169,7 @@ public final class Transport implements ExitHandler {
     private final Reticulum owner;
     @Getter
     private Identity identity;
+    private final Storage storage;
 
     /**
      * All active interfaces
@@ -247,7 +242,7 @@ public final class Transport implements ExitHandler {
     /**
      * A list of packet hashes for duplicate detection
      */
-    private final List<byte[]> packetHashList = new CopyOnWriteArrayList<>();
+    private final Map<String, byte[]> packetHashMap = new ConcurrentHashMap<>();
     /**
      * A table for keeping track of tagged path requests
      */
@@ -266,41 +261,23 @@ public final class Transport implements ExitHandler {
     private final Deque<Pair<byte[], Integer>> localClientQCache = new ConcurrentLinkedDeque<>();
 
     private void init() {
-        var transportIdentityPath = owner.getStoragePath().resolve("jtransport_identity");
-        if (Files.isReadable(transportIdentityPath)) {
-            identity = Identity.fromFile(transportIdentityPath);
-        }
+        identity = Optional.ofNullable(storage.getIdentity())
+                .map(i -> {
+                    log.debug("Loaded Transport Identity from storage");
 
-        if (isNull(identity)) {
-            log.debug("No valid Transport Identity in storage, creating...");
-            identity = new Identity();
-            try {
-                Files.deleteIfExists(transportIdentityPath);
-                Files.write(transportIdentityPath, identity.getPrivateKey(), CREATE, WRITE);
-            } catch (IOException e) {
-                log.error("Error while saving identity to {}", transportIdentityPath, e);
-            }
-        } else {
-            log.debug("Loaded Transport Identity from storage");
-        }
+                    return i;
+                })
+                .orElseGet(() -> {
+                    log.debug("No valid Transport Identity in storage, creating...");
+                    var idt = new Identity();
+                    storage.saveIdentity(idt);
 
-        var packetHashlistPath = owner.getStoragePath().resolve("jpacket_hashlist");
+                    return idt;
+                });
+
         if (isFalse(owner.isConnectedToSharedInstance())) {
-            if (Files.isReadable(packetHashlistPath)) {
-                try (var unpacker = MessagePack.newDefaultUnpacker(Files.readAllBytes(packetHashlistPath))) {
-                    packetHashList.clear();
-                    packetHashList.addAll(
-                            unpacker.unpackValue()
-                                    .asArrayValue()
-                                    .list()
-                                    .stream()
-                                    .map(value -> value.asBinaryValue().asByteArray())
-                                    .collect(toList())
-                    );
-                } catch (IOException e) {
-                    log.error("Could not load packet hashlist from storage {}", packetHashlistPath, e);
-                }
-            }
+            packetHashMap.clear();
+            packetHashMap.putAll(storage.loadAllPacketHash());
         }
 
         //Create transport-specific destinations
@@ -315,119 +292,81 @@ public final class Transport implements ExitHandler {
         controlHashes.add(tunnelSynthesizeDestination.getHash());
 
         if (owner.isTransportEnabled()) {
-            var destinationTablePath = owner.getStoragePath().resolve("jdestination_table");
-            if (Files.isReadable(destinationTablePath) && isFalse(owner.isConnectedToSharedInstance())) {
-                try (var unpacker = MessagePack.newDefaultUnpacker(Files.readAllBytes(destinationTablePath))) {
-                    for (Value value : unpacker.unpackValue().asArrayValue().list()) {
-                        var serialisedEntry = value.asArrayValue();
-
-                        var destinationHash = serialisedEntry.get(0).asBinaryValue().asByteArray();
-                        if (getLength(destinationHash) == TRUNCATED_HASHLENGTH / 8) {
-                            var timestamp = serialisedEntry.get(1).asTimestampValue().toInstant();
-                            var receivedFrom = serialisedEntry.get(2).asBinaryValue().asByteArray();
-                            var hops = serialisedEntry.get(3).asIntegerValue().asInt();
-                            var expired = serialisedEntry.get(4).asTimestampValue().toInstant();
-                            var randomBlods = serialisedEntry.get(5).asArrayValue().list().stream()
-                                    .map(v -> v.asBinaryValue().asByteArray())
-                                    .collect(toList());
-                            var receivingInterface = findInterfaceFromHash(serialisedEntry.get(6).asBinaryValue().asByteArray());
-                            var announcePacket = getCachedPacket(serialisedEntry.get(7).asBinaryValue().asByteArray());
-
-                            if (nonNull(announcePacket) && nonNull(receivingInterface)) {
-                                announcePacket.unpack();
-                                // We increase the hops, since reading a packet
-                                // from cache is equivalent to receiving it again
-                                // over an interface. It is cached with it's non-
-                                // increased hop-count.
-                                announcePacket.setHops(announcePacket.getHops() + 1);
-                                destinationTable.put(
-                                        Hex.encodeHexString(destinationHash),
-                                        Hops.builder()
-                                                .timestamp(timestamp)
-                                                .via(receivedFrom)
-                                                .expires(expired)
-                                                .hops(hops)
-                                                .randomBlobs(randomBlods)
-                                                .packet(announcePacket)
-                                                .build()
-                                );
-                                log.debug("Loaded path table entry for {} from storage {}", Hex.encodeHexString(destinationHash), destinationTablePath);
-                            } else {
-                                log.debug("Could not reconstruct path table entry from storage for {}", Hex.encodeHexString(destinationHash));
-                                if (isNull(announcePacket)) {
-                                    log.debug("The announce packet could not be loaded from cache");
-                                }
-                                if (isNull(receivingInterface)) {
-                                    log.debug("The interface is no longer available");
-                                }
+            var dtList = storage.getDestinationTables();
+            if (isNotEmpty(dtList) && isFalse(owner.isConnectedToSharedInstance())) {
+                for (DestinationTable entry : dtList) {
+                    var destinationHash = entry.getDestinationHash();
+                    var hopEntry = entry.getHop();
+                    if (getLength(destinationHash) == TRUNCATED_HASHLENGTH / 8) {
+                        var receivingInterface = findInterfaceFromHash(hopEntry.getInterfaceHash());
+                        var announcePacket = getCachedPacket(hopEntry.getPacketHash());
+                        if (nonNull(announcePacket) && nonNull(receivingInterface)) {
+                            announcePacket.unpack();
+                            // We increase the hops, since reading a packet
+                            // from cache is equivalent to receiving it again
+                            // over an interface. It is cached with it's non-increased hop-count.
+                            announcePacket.setHops(announcePacket.getHops() + 1);
+                            destinationTable.put(
+                                    destinationHash,
+                                    Hops.builder()
+                                            .timestamp(hopEntry.getTimestamp())
+                                            .via(hopEntry.getVia())
+                                            .expires(hopEntry.getExpires())
+                                            .hops(hopEntry.getHops())
+                                            .randomBlobs(hopEntry.getRandomBlobs())
+                                            .packet(announcePacket)
+                                            .build()
+                            );
+                            log.debug("Loaded path table entry for {} from storage {}", destinationHash, DESTINATION_TABLE);
+                        } else {
+                            log.debug("Could not reconstruct path table entry from storage for {}", destinationHash);
+                            if (isNull(announcePacket)) {
+                                log.debug("The announce packet could not be loaded from cache");
+                            }
+                            if (isNull(receivingInterface)) {
+                                log.debug("The interface is no longer available");
                             }
                         }
                     }
-
-                    log.debug("Loaded {}  path table entries  from storage", destinationTable.size());
-                } catch (IOException e) {
-                    log.error("Could not load destination table from storage {}", destinationTablePath, e);
                 }
+
+                log.debug("Loaded {}  path table entries  from storage", destinationTable.size());
             }
 
-            var tunnelTablePath = owner.getStoragePath().resolve("jtunnels");
-            if (Files.isReadable(tunnelTablePath) && isFalse(owner.isConnectedToSharedInstance())) {
-                try (var unpacker = MessagePack.newDefaultUnpacker(Files.readAllBytes(tunnelTablePath))) {
-                    for (Value value : unpacker.unpackValue().asArrayValue()) {
-                        var serialisedTunnel = value.asArrayValue();
+            var tunnelList = storage.getTunnelTables();
+            if (isNotEmpty(tunnelList) && isFalse(owner.isConnectedToSharedInstance())) {
+                for (TunnelEntity tunnelEntity : tunnelList) {
+                    var tunnelPaths = new HashMap<String, Hops>();
+                    tunnelEntity.getTunnelPaths().forEach((destinationHash, hopEntry) -> {
+                        var receivingInterface = findInterfaceFromHash(hopEntry.getInterfaceHash());
+                        var announcePacket = getCachedPacket(hopEntry.getPacketHash());
+                        if (nonNull(announcePacket)) {
+                            // We increase the hops, since reading a packet
+                            // from cache is equivalent to receiving it again
+                            // over an interface. It is cached with it's non-increased hop-count.
+                            announcePacket.setHops(announcePacket.getHops() + 1);
 
-                        var tunnelId = serialisedTunnel.get(0).asBinaryValue().asByteArray();
-                        var interfaceHash = serialisedTunnel.get(1).asBinaryValue().asByteArray();
-                        var serialisedPaths = serialisedTunnel.get(2).asArrayValue();
-                        var expires = serialisedTunnel.get(3).asTimestampValue().toInstant();
-
-                        var tunnelPaths = new HashMap<String, Hops>();
-                        for (Value serialisedPathValue : serialisedPaths) {
-                            var serialisedEntry = serialisedPathValue.asArrayValue();
-
-                            var destinationHash = serialisedEntry.get(0).asBinaryValue().asByteArray();
-                            var timestamp = serialisedEntry.get(1).asTimestampValue().toInstant();
-                            var receivedFrom = serialisedEntry.get(2).asBinaryValue().asByteArray();
-                            var hops = serialisedEntry.get(3).asIntegerValue().asInt();
-                            var expired = serialisedEntry.get(4).asTimestampValue().toInstant();
-                            var randomBlods = serialisedEntry.get(5).asArrayValue().list().stream()
-                                    .map(v -> v.asBinaryValue().asByteArray())
-                                    .collect(toList());
-                            var receivingInterface = findInterfaceFromHash(serialisedEntry.get(6).asBinaryValue().asByteArray());
-                            var announcePacket = getCachedPacket(serialisedEntry.get(7).asBinaryValue().asByteArray());
-
-                            if (nonNull(announcePacket)) {
-                                // We increase the hops, since reading a packet
-                                // from cache is equivalent to receiving it again
-                                // over an interface. It is cached with it's non-
-                                // increased hop-count.
-                                announcePacket.setHops(announcePacket.getHops() + 1);
-
-                                var tunnelPath = Hops.builder()
-                                        .timestamp(timestamp)
-                                        .via(receivedFrom)
-                                        .expires(expired)
-                                        .randomBlobs(randomBlods)
-                                        .anInterface(receivingInterface)
-                                        .packet(announcePacket)
-                                        .build();
-                                tunnelPaths.put(Hex.encodeHexString(destinationHash), tunnelPath);
-                            }
+                            var tunnelPath = Hops.builder()
+                                    .timestamp(hopEntry.getTimestamp())
+                                    .hops(hopEntry.getHops())
+                                    .via(hopEntry.getVia())
+                                    .expires(hopEntry.getExpires())
+                                    .randomBlobs(hopEntry.getRandomBlobs())
+                                    .anInterface(receivingInterface)
+                                    .packet(announcePacket)
+                                    .build();
+                            tunnelPaths.put(destinationHash, tunnelPath);
                         }
-
-                        tunnels.put(
-                                Hex.encodeHexString(tunnelId),
-                                Tunnel.builder()
-                                        .tunnelId(tunnelId)
-                                        .tunnelPaths(tunnelPaths)
-                                        .expires(expires)
-                                        .build()
-                        );
-                    }
-
-                    log.debug("Loaded {} tunnel table entries from storage", tunnels.size());
-                } catch (IOException e) {
-                    log.error("Could not load tunnel table from storage {}", tunnelTablePath, e);
+                    });
+                    tunnels.put(
+                            tunnelEntity.getTunnelIdHex(),
+                            Tunnel.builder()
+                                    .tunnelId(tunnelEntity.getTunnelId())
+                                    .tunnelPaths(tunnelPaths)
+                                    .expires(tunnelEntity.getExpires())
+                                    .anInterface(findInterfaceFromHash(tunnelEntity.getInterfaceHash()))
+                                    .build()
+                    );
                 }
             }
         }
@@ -441,8 +380,9 @@ public final class Transport implements ExitHandler {
         }
     }
 
-    private Transport(@NonNull Reticulum reticulum) {
+    private Transport(@NonNull final Reticulum reticulum) {
         this.owner = reticulum;
+        this.storage = Storage.init(reticulum.getStoragePath());
     }
 
     public static Transport start(@NonNull Reticulum reticulum) {
@@ -526,41 +466,13 @@ public final class Transport implements ExitHandler {
             return;
         }
 
-        try {
-            if (savingPacketHashlistLock.tryLock(5, TimeUnit.SECONDS)) {
-                var saveStart = Instant.now();
-
-                if (isFalse(owner.isTransportEnabled())) {
-                    packetHashList.clear();
-                } else {
-                    log.debug("Saving packet hashlist to storage...");
-                }
-
-                var packetHashlistPath = owner.getStoragePath().resolve("packet_hashlist");
-                try (var packer = MessagePack.newDefaultBufferPacker()) {
-                    packer.packValue(
-                            newArray(
-                                    packetHashList.stream()
-                                            .map(ValueFactory::newBinary)
-                                            .collect(toList())
-                            )
-                    );
-
-                    Files.deleteIfExists(packetHashlistPath);
-                    Files.write(packetHashlistPath, packer.toByteArray(), CREATE, WRITE);
-                } catch (IOException e) {
-                    log.error("Could not save packet hashlist to storage", e);
-                }
-
-                log.debug("Saved packet hashlist in {} ms", Duration.between(saveStart, Instant.now()).toMillis());
-            } else {
-                log.error("Could not save packet hashlist to storage, waiting for previous save operation timed out.");
-            }
-        } catch (Exception e) {
-            log.error("Error", e);
-        } finally {
-            savingPacketHashlistLock.unlock();
+        var saveStart = Instant.now();
+        if (isFalse(owner.isTransportEnabled())) {
+            packetHashMap.clear();
         }
+        log.debug("Saving packet hashlist to storage...");
+        storage.saveAllPacketHash(packetHashMap);
+        log.debug("Saved packet hashlist in {} ms", Duration.between(saveStart, Instant.now()).toMillis());
     }
 
     private void savePathTable() {
@@ -574,7 +486,7 @@ public final class Transport implements ExitHandler {
 
                 log.debug("Saving path table to storage...");
 
-                var serialisedDestinations = new LinkedList<Value>();
+                var dtList = new LinkedList<DestinationTable>();
                 for (String destinationHash : destinationTable.keySet()) {
                     // Get the destination entry from the destination table
                     var de = destinationTable.get(destinationHash);
@@ -584,31 +496,28 @@ public final class Transport implements ExitHandler {
                     var iface = findInterfaceFromHash(interfaceHash);
                     if (nonNull(iface)) {
                         //Get the destination entry from the destination table
-                        serialisedDestinations.add(
-                                newArray(
-                                        newBinary(Hex.decodeHex(destinationHash)),
-                                        newTimestamp(de.getTimestamp()),
-                                        newBinary(de.getVia()),
-                                        newInteger(de.getHops()),
-                                        newTimestamp(de.getExpires()),
-                                        newArray(de.getRandomBlobs().stream().map(ValueFactory::newBinary).collect(toList())),
-                                        newBinary(interfaceHash),
-                                        newBinary(de.getPacket().getHash())
-                                )
+                        dtList.add(
+                                DestinationTable.builder()
+                                        .destinationHash(destinationHash)
+                                        .hop(
+                                                HopEntity.builder()
+                                                        .timestamp(de.getTimestamp())
+                                                        .via(de.getVia())
+                                                        .hops(de.getHops())
+                                                        .expires(de.getExpires())
+                                                        .randomBlobs(de.getRandomBlobs())
+                                                        .interfaceHash(interfaceHash)
+                                                        .packetHash(de.getPacket().getHash())
+                                                        .build()
+                                        )
+                                        .build()
                         );
                         cache(de.getPacket(), true);
                     }
                 }
+                storage.saveDestinationTables(dtList);
 
-                try (var packer = MessagePack.newDefaultBufferPacker()) {
-                    packer.packValue(newArray(serialisedDestinations));
-
-                    var destinationTablePath = owner.getStoragePath().resolve("destination_table");
-                    Files.deleteIfExists(destinationTablePath);
-                    Files.write(destinationTablePath, packer.toByteArray(), CREATE, WRITE);
-                }
-
-                log.debug("Saved {}  path table entries in {} ms", serialisedDestinations, Duration.between(saveStart, Instant.now()).toMillis());
+                log.debug("Saved {}  path table entries in {} ms", dtList, Duration.between(saveStart, Instant.now()).toMillis());
             } else {
                 log.error("Could not save path table to storage, waiting for previous save operation timed out.");
             }
@@ -632,24 +541,18 @@ public final class Transport implements ExitHandler {
     private void cache(Packet packet, boolean forceCache) {
         if (forceCache || shouldCache(packet)) {
             try {
-                var stringHash = Hex.encodeHexString(packet.getHash());
                 String interfaceName = null;
                 if (nonNull(packet.getReceivingInterface())) {
                     interfaceName = packet.getReceivingInterface().getInterfaceName();
                 }
 
-                try (var packer = MessagePack.newDefaultBufferPacker()) {
-                    packer.packValue(
-                            newArray(
-                                    newBinary(packet.getRaw()),
-                                    newString(interfaceName)
-                            )
-                    );
-
-                    var filePath = owner.getCachePath().resolve(stringHash);
-                    Files.deleteIfExists(filePath);
-                    Files.write(filePath, packer.toByteArray(), CREATE, WRITE);
-                }
+                storage.savePacketCache(
+                        PacketCache.builder()
+                                .interfaceName(interfaceName)
+                                .raw(packet.getRaw())
+                                .packetHash(encodeHexString(packet.getHash()))
+                                .build()
+                );
             } catch (Exception e) {
                 log.error("Error writing packet to cache", e);
             }
@@ -657,29 +560,18 @@ public final class Transport implements ExitHandler {
     }
 
     private Packet getCachedPacket(byte[] packetHash) {
-        var strPacketHash = Hex.encodeHexString(packetHash);
-        var path = owner.getCachePath().resolve(strPacketHash);
-
-        if (Files.isReadable(path)) {
-            try (var unpacker = MessagePack.newDefaultUnpacker(Files.readAllBytes(path))) {
-                var arrayValue = unpacker.unpackValue().asArrayValue();
-                var raw = arrayValue.get(0).asBinaryValue().asByteArray();
-                var interfaceName = arrayValue.get(1).asStringValue().asString();
-
-                var packet = new Packet(raw);
-                var iface = interfaces.stream()
-                        .filter(i -> StringUtils.equals(i.getInterfaceName(), interfaceName))
-                        .findAny()
-                        .orElse(null);
-                packet.setReceivingInterface(iface);
-
-                return packet;
-            } catch (IOException e) {
-                log.error("Exception occurred while getting cached packet.", e);
-            }
+        var paketCache = storage.getPacketCache(encodeHexString(packetHash));
+        if (isNull(paketCache)) {
+            return null;
         }
 
-        return null;
+        var packet = new Packet(paketCache.getRaw());
+        interfaces.stream()
+                .filter(i -> StringUtils.equals(i.getInterfaceName(), paketCache.getInterfaceName()))
+                .findAny()
+                .ifPresent(packet::setReceivingInterface);
+
+        return packet;
     }
 
     private boolean shouldCache(Packet packet) {
@@ -709,7 +601,7 @@ public final class Transport implements ExitHandler {
 
                 log.debug("Saving tunnel table to storage...");
 
-                var serialisedTunnels = new LinkedList<Value>();
+                var serialisedTunnels = new LinkedList<TunnelEntity>();
                 for (String tunnelId : tunnels.keySet()) {
                     var te = tunnels.get(tunnelId);
                     var iface = te.getInterface();
@@ -721,43 +613,32 @@ public final class Transport implements ExitHandler {
                         interfaceHash = iface.getHash();
                     }
 
-                    var serialisedPaths = new LinkedList<Value>();
+                    var serialisedPaths = new HashMap<String, HopEntity>();
                     for (String destinationHash : tunnelPaths.keySet()) {
                         var de = tunnelPaths.get(destinationHash);
-
-                        serialisedPaths.add(
-                                newArray(
-                                        newBinary(Hex.decodeHex(destinationHash)),
-                                        newTimestamp(de.getTimestamp()),
-                                        newBinary(de.getVia()),
-                                        newInteger(de.getHops()),
-                                        newTimestamp(de.getExpires()),
-                                        newArray(de.getRandomBlobs().stream().map(ValueFactory::newBinary).collect(toList())),
-                                        newBinary(interfaceHash),
-                                        newBinary(de.getPacket().getHash())
-                                )
-                        );
-
+                        var hopEntity = HopEntity.builder()
+                                .timestamp(de.getTimestamp())
+                                .via(de.getVia())
+                                .hops(de.getHops())
+                                .expires(de.getExpires())
+                                .randomBlobs(de.getRandomBlobs())
+                                .interfaceHash(interfaceHash)
+                                .packetHash(de.getPacket().getHash())
+                                .build();
+                        serialisedPaths.put(destinationHash, hopEntity);
                         cache(de.getPacket(), true);
                     }
 
                     serialisedTunnels.add(
-                            newArray(
-                                    newBinary(Hex.decodeHex(tunnelId)),
-                                    newBinary(interfaceHash),
-                                    newArray(serialisedPaths),
-                                    newTimestamp(expires)
-                            )
+                            TunnelEntity.builder()
+                                    .expires(expires)
+                                    .tunnelIdHex(tunnelId)
+                                    .tunnelId(te.getTunnelId())
+                                    .tunnelPaths(serialisedPaths)
+                                    .build()
                     );
                 }
-
-                try (var packer = MessagePack.newDefaultBufferPacker()) {
-                    packer.packValue(newArray(serialisedTunnels));
-
-                    var filePath = owner.getStoragePath().resolve("tunnels");
-                    Files.deleteIfExists(filePath);
-                    Files.write(filePath, packer.toByteArray(), CREATE, WRITE);
-                }
+                storage.saveTunnelTable(serialisedTunnels);
 
                 log.debug("Saved {} tunnel table entries in {} ms", serialisedTunnels.size(), Duration.between(start, Instant.now()).toMillis());
             } else {
@@ -770,7 +651,7 @@ public final class Transport implements ExitHandler {
         }
     }
 
-    // TODO: 12.05.2023 подлежит рефакторингу.
+    // TODO: 12.05.2023 for refactoring.
     public void inbound(final byte[] raw, final ConnectionInterface iface) {
         byte[] localRaw;
         //If interface access codes are enabled, we must authenticate each packet.
@@ -859,7 +740,7 @@ public final class Transport implements ExitHandler {
         if (nonNull(iface)) {
             if (nonNull(iface.getRStatRssi())) {
                 packet.setRssi(iface.getRStatRssi());
-                if (CollectionUtils.isNotEmpty(localClientInterfaces)) {
+                if (isNotEmpty(localClientInterfaces)) {
                     localClientRssiCache.add(Pair.of(packet.getHash(), packet.getRssi()));
 
                     while (localClientRssiCache.size() > LOCAL_CLIENT_CACHE_MAXSIZE) {
@@ -870,7 +751,7 @@ public final class Transport implements ExitHandler {
 
             if (nonNull(iface.getRStatSnr())) {
                 packet.setSnr(iface.getRStatSnr());
-                if (CollectionUtils.isNotEmpty(localClientInterfaces)) {
+                if (isNotEmpty(localClientInterfaces)) {
                     localClientSnrCache.add(Pair.of(packet.getHash(), packet.getSnr()));
 
                     while (localClientSnrCache.size() > LOCAL_CLIENT_CACHE_MAXSIZE) {
@@ -881,7 +762,7 @@ public final class Transport implements ExitHandler {
 
             if (nonNull(iface.getRStatQ())) {
                 packet.setQ(iface.getRStatQ());
-                if (CollectionUtils.isNotEmpty(localClientInterfaces)) {
+                if (isNotEmpty(localClientInterfaces)) {
                     localClientQCache.push(Pair.of(packet.getPacketHash(), packet.getQ()));
 
                     while (localClientQCache.size() > LOCAL_CLIENT_CACHE_MAXSIZE) {
@@ -891,7 +772,7 @@ public final class Transport implements ExitHandler {
             }
         }
 
-        if (CollectionUtils.isNotEmpty(localClientInterfaces)) {
+        if (isNotEmpty(localClientInterfaces)) {
             if (isLocalClientInterface(iface)) {
                 packet.setHops(packet.getHops() - 1);
             }
@@ -900,22 +781,22 @@ public final class Transport implements ExitHandler {
         }
 
         if (packetFilter(packet)) {
-            packetHashList.add(packet.getHash());
+            packetHashMap.put(encodeHexString(packet.getHash()), packet.getHash());
             cache(packet, false);
 
             //Check special conditions for local clients connected through a shared Reticulum instance
             var fromLocalClient = localClientInterfaces.contains(packet.getReceivingInterface());
             var forLocalClient = packet.getPacketType() != ANNOUNCE
-                    && destinationTable.containsKey(Hex.encodeHexString(packet.getDestinationHash()))
-                    && destinationTable.get(Hex.encodeHexString(packet.getDestinationHash())).getHops() == 0;
+                    && destinationTable.containsKey(encodeHexString(packet.getDestinationHash()))
+                    && destinationTable.get(encodeHexString(packet.getDestinationHash())).getHops() == 0;
             var forLocalClientLink = packet.getPacketType() != ANNOUNCE
-                    && linkTable.containsKey(Hex.encodeHexString(packet.getDestinationHash()))
+                    && linkTable.containsKey(encodeHexString(packet.getDestinationHash()))
                     && (
-                    localClientInterfaces.contains(linkTable.get(Hex.encodeHexString(packet.getDestinationHash())).getNextHopInterface())
-                            || localClientInterfaces.contains(linkTable.get(Hex.encodeHexString(packet.getDestinationHash())).getReceivingInterface())
+                    localClientInterfaces.contains(linkTable.get(encodeHexString(packet.getDestinationHash())).getNextHopInterface())
+                            || localClientInterfaces.contains(linkTable.get(encodeHexString(packet.getDestinationHash())).getReceivingInterface())
             );
-            var proofForLocalClient = reverseTable.containsKey(Hex.encodeHexString(packet.getDestinationHash()))
-                    && localClientInterfaces.contains(reverseTable.get(Hex.encodeHexString(packet.getDestinationHash())).getReceivingInterface());
+            var proofForLocalClient = reverseTable.containsKey(encodeHexString(packet.getDestinationHash()))
+                    && localClientInterfaces.contains(reverseTable.get(encodeHexString(packet.getDestinationHash())).getReceivingInterface());
 
             //Plain broadcast packets from local clients are sent
             // directly on all attached interfaces, since they are
@@ -960,8 +841,8 @@ public final class Transport implements ExitHandler {
                 // If the packet is in transport, check whether we are the designated next hop, and process it accordingly if we are.
                 if (nonNull(packet.getTransportId()) && packet.getPacketType() != ANNOUNCE) {
                     if (Arrays.equals(packet.getTransportId(), identity.getHash())) {
-                        if (destinationTable.containsKey(Hex.encodeHexString(packet.getDestinationHash()))) {
-                            var hopsEntry = destinationTable.get(Hex.encodeHexString(packet.getDestinationHash()));
+                        if (destinationTable.containsKey(encodeHexString(packet.getDestinationHash()))) {
+                            var hopsEntry = destinationTable.get(encodeHexString(packet.getDestinationHash()));
                             var nextHop = hopsEntry.getVia();
                             var remainingHops = hopsEntry.getHops();
 
@@ -982,7 +863,7 @@ public final class Transport implements ExitHandler {
                                 dataPacket.getHeader().setHops((byte) packet.getHops());
                             }
 
-                            var outboundInterface = destinationTable.get(Hex.encodeHexString(packet.getDestinationHash())).getInterface();
+                            var outboundInterface = destinationTable.get(encodeHexString(packet.getDestinationHash())).getInterface();
 
                             if (packet.getPacketType() == LINKREQUEST) {
                                 var now = Instant.now();
@@ -1003,7 +884,7 @@ public final class Transport implements ExitHandler {
                                         .proofTimestamp(proofTimeout)
                                         .build();
 
-                                linkTable.put(Hex.encodeHexString(packet.getTruncatedHash()), linkEntry);
+                                linkTable.put(encodeHexString(packet.getTruncatedHash()), linkEntry);
                             } else {
                                 //Entry format is
                                 var reserveEntry = ReversEntry.builder()
@@ -1012,7 +893,7 @@ public final class Transport implements ExitHandler {
                                         .timestamp(Instant.now())
                                         .build();
 
-                                reverseTable.put(Hex.encodeHexString(packet.getDestinationHash()), reserveEntry);
+                                reverseTable.put(encodeHexString(packet.getDestinationHash()), reserveEntry);
                             }
 
                             transmit(outboundInterface, DataPacketConverter.toBytes(dataPacket));
@@ -1022,7 +903,7 @@ public final class Transport implements ExitHandler {
                             // mechanism here, to signal to the source that their expected path failed.
                             log.debug(
                                     "Got packet in transport, but no known path to final destination {}. Dropping packet.",
-                                    Hex.encodeHexString(packet.getDestinationHash())
+                                    encodeHexString(packet.getDestinationHash())
                             );
                         }
                     }
@@ -1030,8 +911,8 @@ public final class Transport implements ExitHandler {
 
                 //Link transport handling. Directs packets according to entries in the link tables
                 if (packet.getPacketType() != ANNOUNCE && packet.getPacketType() != LINKREQUEST && packet.getContext() != LRPROOF) {
-                    if (linkTable.containsKey(Hex.encodeHexString(packet.getDestinationHash()))) {
-                        var linkEntry = linkTable.get(Hex.encodeHexString(packet.getDestinationHash()));
+                    if (linkTable.containsKey(encodeHexString(packet.getDestinationHash()))) {
+                        var linkEntry = linkTable.get(encodeHexString(packet.getDestinationHash()));
                         //If receiving and outbound interface is the same for this link, direction doesn't matter, and we simply send the packet on.
                         ConnectionInterface outboundInterface = null;
                         if (Objects.equals(linkEntry.getNextHopInterface(), linkEntry.getReceivingInterface())) {
@@ -1071,7 +952,7 @@ public final class Transport implements ExitHandler {
                 if (nonNull(iface) && validateAnnounce(packet)) {
                     iface.receivedAnnounce();
                 }
-                if (isFalse(destinationTable.containsKey(Hex.encodeHexString(packet.getDestinationHash())))) {
+                if (isFalse(destinationTable.containsKey(encodeHexString(packet.getDestinationHash())))) {
                     // This is an unknown destination, and we'll apply
                     // potential ingress limiting. Already known
                     // destinations will have re-announces controlled
@@ -1094,16 +975,16 @@ public final class Transport implements ExitHandler {
 
                         //Check if this is a next retransmission from another node. If it is, we're removing the
                         // announce in question from our pending table
-                        if (owner.isTransportEnabled() && announceTable.containsKey(Hex.encodeHexString(packet.getDestinationHash()))) {
-                            var announceEntry = announceTable.get(Hex.encodeHexString(packet.getDestinationHash()));
+                        if (owner.isTransportEnabled() && announceTable.containsKey(encodeHexString(packet.getDestinationHash()))) {
+                            var announceEntry = announceTable.get(encodeHexString(packet.getDestinationHash()));
 
                             if (packet.getHops() - 1 == announceEntry.getHops()) {
-                                log.debug("Heard a local rebroadcast of announce for {}", Hex.encodeHexString(packet.getDestinationHash()));
+                                log.debug("Heard a local rebroadcast of announce for {}", encodeHexString(packet.getDestinationHash()));
                                 announceEntry.setLocalRebroadcasts(announceEntry.getLocalRebroadcasts() + 1);
                                 if (announceEntry.getLocalRebroadcasts() >= LOCAL_REBROADCASTS_MAX) {
                                     log.debug("Max local rebroadcasts of announce for {} reached, dropping announce from our table",
-                                            Hex.encodeHexString(packet.getDestinationHash()));
-                                    announceTable.remove(Hex.encodeHexString(packet.getDestinationHash()));
+                                            encodeHexString(packet.getDestinationHash()));
+                                    announceTable.remove(encodeHexString(packet.getDestinationHash()));
                                 }
                             }
 
@@ -1111,8 +992,8 @@ public final class Transport implements ExitHandler {
                                 var now = Instant.now();
                                 if (now.isBefore(announceEntry.getRetransmitTimeout())) {
                                     log.debug("Rebroadcasted announce for {} has been passed on to another node, no further tries needed",
-                                            Hex.encodeHexString(packet.getDestinationHash()));
-                                    announceTable.remove(Hex.encodeHexString(packet.getDestinationHash()));
+                                            encodeHexString(packet.getDestinationHash()));
+                                    announceTable.remove(encodeHexString(packet.getDestinationHash()));
                                 }
                             }
                         }
@@ -1136,8 +1017,8 @@ public final class Transport implements ExitHandler {
                                 KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10
                         );
                         List<byte[]> randomBlobs = new ArrayList<>();
-                        if (destinationTable.containsKey(Hex.encodeHexString(packet.getDestinationHash()))) {
-                            var hopsEntry = destinationTable.get(Hex.encodeHexString(packet.getDestinationHash()));
+                        if (destinationTable.containsKey(encodeHexString(packet.getDestinationHash()))) {
+                            var hopsEntry = destinationTable.get(encodeHexString(packet.getDestinationHash()));
                             randomBlobs = hopsEntry.getRandomBlobs();
 
                             //If we already have a path to the announced destination, but the hop count is equal or less, we'll update our tables.
@@ -1176,7 +1057,7 @@ public final class Transport implements ExitHandler {
                                     if (randomBlobs.stream().noneMatch(bytes -> Arrays.equals(bytes, randomBlob))) {
                                         // TODO: 11.05.2023 Check that this ^ approach actually works under all circumstances
                                         log.debug("Replacing destination table entry for {} with new announce due to expired path",
-                                                Hex.encodeHexString(packet.getDestinationHash()));
+                                                encodeHexString(packet.getDestinationHash()));
                                         markPathUnknownState(packet.getDestinationHash());
                                         shouldAdd = true;
                                     } else {
@@ -1189,7 +1070,7 @@ public final class Transport implements ExitHandler {
                                     if (announceEmitted > pathAnnounceEmitted) {
                                         if (randomBlobs.stream().noneMatch(bytes -> Arrays.equals(bytes, randomBlob))) {
                                             log.debug("Replacing destination table entry for {}  with new announce, since it was more recently emitted",
-                                                    Hex.encodeHexString(packet.getDestinationHash()));
+                                                    encodeHexString(packet.getDestinationHash()));
                                             markPathUnknownState(packet.getDestinationHash());
                                             shouldAdd = true;
                                         } else {
@@ -1203,7 +1084,7 @@ public final class Transport implements ExitHandler {
                                     else if (announceEmitted == pathAnnounceEmitted) {
                                         if (pathIsUnresponsive(packet.getDestinationHash())) {
                                             log.debug("Replacing destination table entry for {} with new announce, since previously tried path was unresponsive",
-                                                    Hex.encodeHexString(packet.getDestinationHash()));
+                                                    encodeHexString(packet.getDestinationHash()));
                                             shouldAdd = true;
                                         } else {
                                             shouldAdd = false;
@@ -1221,7 +1102,7 @@ public final class Transport implements ExitHandler {
 
                             var rateBlocked = false;
                             if (packet.getContext() != PATH_RESPONSE && nonNull(packet.getReceivingInterface().getAnnounceRateTarget())) {
-                                if (isFalse(announceRateTable.containsKey(Hex.encodeHexString(packet.getDestinationHash())))) {
+                                if (isFalse(announceRateTable.containsKey(encodeHexString(packet.getDestinationHash())))) {
                                     var rateEntryBuilder = RateEntry.builder()
                                             .last(now)
                                             .rateViolations(0)
@@ -1229,9 +1110,9 @@ public final class Transport implements ExitHandler {
                                             .timestamps(new ArrayList<>() {{
                                                 add(now);
                                             }});
-                                    announceRateTable.put(Hex.encodeHexString(packet.getDestinationHash()), rateEntryBuilder.build());
+                                    announceRateTable.put(encodeHexString(packet.getDestinationHash()), rateEntryBuilder.build());
                                 } else {
-                                    var rateEntry = announceRateTable.get(Hex.encodeHexString(packet.getDestinationHash()));
+                                    var rateEntry = announceRateTable.get(encodeHexString(packet.getDestinationHash()));
                                     rateEntry.getTimestamps().add(now);
 
                                     while (rateEntry.getTimestamps().size() > MAX_RATE_TIMESTAMPS) {
@@ -1284,7 +1165,7 @@ public final class Transport implements ExitHandler {
 
                                 if (rateBlocked) {
                                     log.debug("Blocking rebroadcast of announce from {} due to excessive announce rate",
-                                            Hex.encodeHexString(packet.getDestinationHash()));
+                                            encodeHexString(packet.getDestinationHash()));
                                 } else {
                                     if (fromLocalClient(packet)) {
                                         //If the announce is from a local client, it is announced immediately, but only one time.
@@ -1293,7 +1174,7 @@ public final class Transport implements ExitHandler {
                                     }
 
                                     announceTable.put(
-                                            Hex.encodeHexString(packet.getDestinationHash()),
+                                            encodeHexString(packet.getDestinationHash()),
                                             AnnounceEntry.builder()
                                                     .timestamp(now)
                                                     .retransmitTimeout(retransmitTimeout)
@@ -1310,13 +1191,13 @@ public final class Transport implements ExitHandler {
                             // TODO: 11.05.2023 Check from_local_client once and store result
                             else if (fromLocalClient(packet) && packet.getContext() == PATH_RESPONSE) {
                                 //If this is a path response from a local client, check if any external interfaces have pending path requests.
-                                if (pendingLocalPathRequests.containsKey(Hex.encodeHexString(packet.getDestinationHash()))) {
-                                    pendingLocalPathRequests.remove(Hex.encodeHexString(packet.getDestinationHash()));
+                                if (pendingLocalPathRequests.containsKey(encodeHexString(packet.getDestinationHash()))) {
+                                    pendingLocalPathRequests.remove(encodeHexString(packet.getDestinationHash()));
                                     retransmitTimeout = now;
                                     retries = PATHFINDER_R;
 
                                     announceTable.put(
-                                            Hex.encodeHexString(packet.getDestinationHash()),
+                                            encodeHexString(packet.getDestinationHash()),
                                             AnnounceEntry.builder()
                                                     .timestamp(now)
                                                     .retransmitTimeout(retransmitTimeout)
@@ -1333,11 +1214,11 @@ public final class Transport implements ExitHandler {
                             }
 
                             //If we have any local clients connected, we re-transmit the announce to them immediately
-                            if (CollectionUtils.isNotEmpty(localClientInterfaces)) {
+                            if (isNotEmpty(localClientInterfaces)) {
                                 var announceIdentity = recall(packet.getDestinationHash());
                                 var announceDestination = new Destination(announceIdentity, OUT, SINGLE, "unknown", "unknown");
                                 announceDestination.setHash(packet.getDestinationHash());
-                                announceDestination.setHexHash(Hex.encodeHexString(announceDestination.getHash()));
+                                announceDestination.setHexHash(encodeHexString(announceDestination.getHash()));
                                 var announceContext = NONE;
                                 var announceData = packet.getData();
 
@@ -1381,17 +1262,17 @@ public final class Transport implements ExitHandler {
 
                             //If we have any waiting discovery path requests for this destination, we retransmit to that
                             // interface immediately
-                            if (discoveryPathRequests.containsKey(Hex.encodeHexString(packet.getDestinationHash()))) {
-                                var prEntry = discoveryPathRequests.get(Hex.encodeHexString(packet.getDestinationHash()));
+                            if (discoveryPathRequests.containsKey(encodeHexString(packet.getDestinationHash()))) {
+                                var prEntry = discoveryPathRequests.get(encodeHexString(packet.getDestinationHash()));
                                 attachedInterface = prEntry.getRequestingInterface();
 
                                 log.debug("Got matching announce, answering waiting discovery path request for {} on {}",
-                                        Hex.encodeHexString(packet.getDestinationHash()), attachedInterface.getInterfaceName()
+                                        encodeHexString(packet.getDestinationHash()), attachedInterface.getInterfaceName()
                                 );
                                 var announceIdentity = recall(packet.getDestinationHash());
                                 var announceDestination = new Destination(announceIdentity, OUT, SINGLE, "unknown", "unknown");
                                 announceDestination.setHash(packet.getDestinationHash());
-                                announceDestination.setHexHash(Hex.encodeHexString(announceDestination.getHash()));
+                                announceDestination.setHexHash(encodeHexString(announceDestination.getHash()));
                                 var announceData = packet.getData();
 
                                 var newAnnounce = new Packet(
@@ -1418,31 +1299,31 @@ public final class Transport implements ExitHandler {
                                     .packet(packet)
                                     .build();
                             destinationTable.put(
-                                    Hex.encodeHexString(packet.getDestinationHash()),
+                                    encodeHexString(packet.getDestinationHash()),
                                     destinationTableEntry
                             );
                             log.debug(
                                     "Destination {} is now {} hops away via {} on {}",
-                                    Hex.encodeHexString(packet.getDestinationHash()),
+                                    encodeHexString(packet.getDestinationHash()),
                                     announceHops,
-                                    Hex.encodeHexString(receivedFrom),
+                                    encodeHexString(receivedFrom),
                                     packet.getReceivingInterface().getInterfaceName()
                             );
 
                             //If the receiving interface is a tunnel, we add the announce to the tunnels table
                             if (
                                     nonNull(packet.getReceivingInterface().getTunnelId())
-                                            && tunnels.containsKey(Hex.encodeHexString(packet.getReceivingInterface().getTunnelId()))
+                                            && tunnels.containsKey(encodeHexString(packet.getReceivingInterface().getTunnelId()))
                             ) {
-                                var tunnelEntry = tunnels.get(Hex.encodeHexString(packet.getReceivingInterface().getTunnelId()));
+                                var tunnelEntry = tunnels.get(encodeHexString(packet.getReceivingInterface().getTunnelId()));
                                 var paths = tunnelEntry.getTunnelPaths();
-                                paths.put(Hex.encodeHexString(packet.getDestinationHash()), destinationTableEntry);
+                                paths.put(encodeHexString(packet.getDestinationHash()), destinationTableEntry);
                                 expires = Instant.now().plusSeconds(DESTINATION_TIMEOUT);
                                 tunnelEntry.setExpires(expires);
                                 log.debug(
                                         "Path to {} associated with tunnel {}.",
-                                        Hex.encodeHexString(packet.getDestinationHash()),
-                                        Hex.encodeHexString(packet.getReceivingInterface().getTunnelId())
+                                        encodeHexString(packet.getDestinationHash()),
+                                        encodeHexString(packet.getReceivingInterface().getTunnelId())
                                 );
                             }
 
@@ -1537,9 +1418,9 @@ public final class Transport implements ExitHandler {
                     // This is a link request proof, check if it needs to be transported
                     if (
                             (owner.isTransportEnabled() || forLocalClient || forLocalClientLink)
-                                    && linkTable.containsKey(Hex.encodeHexString(packet.getDestinationHash()))
+                                    && linkTable.containsKey(encodeHexString(packet.getDestinationHash()))
                     ) {
-                        var linkEntry = linkTable.get(Hex.encodeHexString(packet.getDestinationHash()));
+                        var linkEntry = linkTable.get(encodeHexString(packet.getDestinationHash()));
                         if (packet.getHops() == linkEntry.getRemainingHops()) {
                             if (Objects.equals(packet.getReceivingInterface(), linkEntry.getNextHopInterface())) {
                                 try {
@@ -1563,7 +1444,7 @@ public final class Transport implements ExitHandler {
                                             transmit(linkEntry.getReceivingInterface(), DataPacketConverter.toBytes(dataPacket));
                                         } else {
                                             log.debug("Invalid link request proof in transport for link {}, dropping proof.",
-                                                    Hex.encodeHexString(packet.getDestinationHash()));
+                                                    encodeHexString(packet.getDestinationHash()));
                                         }
                                     }
                                 } catch (Exception e) {
@@ -1581,7 +1462,7 @@ public final class Transport implements ExitHandler {
                                     // Add this packet to the filter hashlist if we
                                     // have determined that it's actually destined
                                     // for this system, and then validate the proof
-                                    packetHashList.add(packet.getHash());
+                                    packetHashMap.put(encodeHexString(packet.getHash()), packet.getHash());
                                     link.validateProof(packet);
                                 }
                             }
@@ -1609,9 +1490,9 @@ public final class Transport implements ExitHandler {
                     //Check if this proof needs to be transported
                     if (
                             (owner.isTransportEnabled() || fromLocalClient || proofForLocalClient)
-                                    && reverseTable.containsKey(Hex.encodeHexString(packet.getDestinationHash()))
+                                    && reverseTable.containsKey(encodeHexString(packet.getDestinationHash()))
                     ) {
-                        var reverseEntry = reverseTable.remove(Hex.encodeHexString(packet.getDestinationHash()));
+                        var reverseEntry = reverseTable.remove(encodeHexString(packet.getDestinationHash()));
                         if (Objects.equals(packet.getReceivingInterface(), reverseEntry.getOutboundInterface())) {
                             log.debug("Proof received on correct interface, transporting it via {}",
                                     reverseEntry.getReceivingInterface().getInterfaceName());
@@ -1689,9 +1570,9 @@ public final class Transport implements ExitHandler {
                 packet.getPacketType() != ANNOUNCE
                         && packet.getDestination().getType() != PLAIN
                         && packet.getDestination().getType() != GROUP
-                        && destinationTable.containsKey(Hex.encodeHexString(packet.getDestinationHash()))
+                        && destinationTable.containsKey(encodeHexString(packet.getDestinationHash()))
         ) {
-            var hopsEntry = destinationTable.get(Hex.encodeHexString(packet.getDestinationHash()));
+            var hopsEntry = destinationTable.get(encodeHexString(packet.getDestinationHash()));
             var outboundInterface = hopsEntry.getInterface();
 
             //If there's more than one hop to the destination, and we know
@@ -1845,7 +1726,7 @@ public final class Transport implements ExitHandler {
                                         anInterface.setAnnounceAllowedAt(Instant.EPOCH);
                                     }
 
-                                    var queuedAnnounces = CollectionUtils.isNotEmpty(anInterface.getAnnounceQueue());
+                                    var queuedAnnounces = isNotEmpty(anInterface.getAnnounceQueue());
                                     if (isFalse(queuedAnnounces) && outboundTime.isAfter(anInterface.getAnnounceAllowedAt())) {
                                         var txTime = packet.getRaw().length * 8 / anInterface.getBitrate();
                                         var waitTime = txTime / anInterface.getAnnounceCap();
@@ -1885,7 +1766,7 @@ public final class Transport implements ExitHandler {
                                                         .raw(packet.getRaw())
                                                         .build();
 
-                                                queuedAnnounces = CollectionUtils.isNotEmpty(anInterface.getAnnounceQueue());
+                                                queuedAnnounces = isNotEmpty(anInterface.getAnnounceQueue());
                                                 anInterface.getAnnounceQueue().add(entry);
 
                                                 var waitTime = Math.max(Duration.between(Instant.now(), anInterface.getAnnounceAllowedAt()).toMillis(), 0);
@@ -1908,7 +1789,7 @@ public final class Transport implements ExitHandler {
 
                     if (shouldTransmit) {
                         if (isFalse(storedHash)) {
-                            packetHashList.add(packet.getPacketHash());
+                            packetHashMap.put(encodeHexString(packet.getPacketHash()), packet.getPacketHash());
                             storedHash = true;
                         }
 
@@ -1941,7 +1822,7 @@ public final class Transport implements ExitHandler {
      * @return The interface for the next hop to the specified destination, or null if the interface is unknown.
      */
     private ConnectionInterface nextHopInterface(byte[] destinationHash) {
-        return Optional.ofNullable(destinationTable.get(Hex.encodeHexString(destinationHash)))
+        return Optional.ofNullable(destinationTable.get(encodeHexString(destinationHash)))
                 .map(Hops::getInterface)
                 .orElse(null);
     }
@@ -2017,7 +1898,7 @@ public final class Transport implements ExitHandler {
         if (packet.getDestinationType() == PLAIN) {
             if (packet.getPacketType() != ANNOUNCE) {
                 if (packet.getHops() > 1) {
-                    log.debug("Dropped PLAIN packet {} with {} hops", Hex.encodeHexString(packet.getHash()), packet.getHops());
+                    log.debug("Dropped PLAIN packet {} with {} hops", encodeHexString(packet.getHash()), packet.getHops());
                     return false;
                 } else {
                     return true;
@@ -2031,7 +1912,7 @@ public final class Transport implements ExitHandler {
         if (packet.getDestinationType() == GROUP) {
             if (packet.getPacketType() != ANNOUNCE) {
                 if (packet.getHops() > 1) {
-                    log.debug("Dropped GROUP packet {} with {} hops", Hex.encodeHexString(packet.getHash()), packet.getHops());
+                    log.debug("Dropped GROUP packet {} with {} hops", encodeHexString(packet.getHash()), packet.getHops());
                     return false;
                 } else {
                     return true;
@@ -2042,7 +1923,7 @@ public final class Transport implements ExitHandler {
             }
         }
 
-        if (packetHashList.stream().noneMatch(bytes -> Arrays.equals(bytes, packet.getPacketHash()))) {
+        if (isFalse(packetHashMap.containsKey(encodeHexString(packet.getPacketHash())))) {
             return true;
         } else {
             if (packet.getPacketType() == ANNOUNCE) {
@@ -2055,7 +1936,7 @@ public final class Transport implements ExitHandler {
             }
         }
 
-        log.trace("Filtered packet with hash {}", Hex.encodeHexString(packet.getPacketHash()));
+        log.trace("Filtered packet with hash {}", encodeHexString(packet.getPacketHash()));
 
         return false;
     }
@@ -2098,7 +1979,7 @@ public final class Transport implements ExitHandler {
 
     public void dropAnnounceQueues() {
         for (ConnectionInterface anInterface : interfaces) {
-            if (CollectionUtils.isNotEmpty(anInterface.getAnnounceQueue())) {
+            if (isNotEmpty(anInterface.getAnnounceQueue())) {
                 var na = anInterface.getAnnounceQueue().size();
                 if (na > 0) {
                     var naStr = String.format("%s announce", na);
@@ -2147,7 +2028,7 @@ public final class Transport implements ExitHandler {
      * @return The number of hops to the specified destination, or ``RNS.Transport.PATHFINDER_M`` if the number of hops is unknown.
      */
     public int hopsTo(byte[] destinationHash) {
-        return Optional.ofNullable(destinationTable.get(Hex.encodeHexString(destinationHash)))
+        return Optional.ofNullable(destinationTable.get(encodeHexString(destinationHash)))
                 .map(Hops::getPathLength)
                 .orElse(PATHFINDER_M);
     }
@@ -2291,10 +2172,10 @@ public final class Transport implements ExitHandler {
                         );
                     } else {
                         log.debug("Ignoring duplicate path request for {} with tag {}",
-                                Hex.encodeHexString(destinationHash), Hex.encodeHexString(uniqueTag));
+                                encodeHexString(destinationHash), encodeHexString(uniqueTag));
                     }
                 } else {
-                    log.debug("Ignoring tagless path request for {}.", Hex.encodeHexString(destinationHash));
+                    log.debug("Ignoring tagless path request for {}.", encodeHexString(destinationHash));
                 }
             }
         } catch (Exception e) {
@@ -2317,15 +2198,15 @@ public final class Transport implements ExitHandler {
             }
         }
 
-        log.debug("Path request for {} on {}", Hex.encodeHexString(destinationHash), attachedInterface);
+        log.debug("Path request for {} on {}", encodeHexString(destinationHash), attachedInterface);
 
-        if (localClientInterfaces.size() > 0) {
-            if (destinationTable.containsKey(Hex.encodeHexString(destinationHash))) {
-                var destinationInterface = destinationTable.get(Hex.encodeHexString(destinationHash)).getInterface();
+        if (isFalse(localClientInterfaces.isEmpty())) {
+            if (destinationTable.containsKey(encodeHexString(destinationHash))) {
+                var destinationInterface = destinationTable.get(encodeHexString(destinationHash)).getInterface();
 
                 if (isLocalClientInterface(destinationInterface)) {
                     pendingLocalPathRequests.put(
-                            Hex.encodeHexString(destinationHash),
+                            encodeHexString(destinationHash),
                             attachedInterface
                     );
                 }
@@ -2340,12 +2221,12 @@ public final class Transport implements ExitHandler {
             localDestination.announce(true, tag, attachedInterface);
 
             log.debug("Answering path request for {} on {}, destination is local to this system",
-                    Hex.encodeHexString(destinationHash), attachedInterface);
+                    encodeHexString(destinationHash), attachedInterface);
         } else if (
                 (getOwner().isTransportEnabled() || isFromLocalClient)
-                        && destinationTable.containsKey(Hex.encodeHexString(destinationHash))
+                        && destinationTable.containsKey(encodeHexString(destinationHash))
         ) {
-            var hopEntry = destinationTable.get(Hex.encodeHexString(destinationHash));
+            var hopEntry = destinationTable.get(encodeHexString(destinationHash));
             var packet = hopEntry.getPacket();
             var nextHop = hopEntry.getVia();
             var receivedFrom = hopEntry.getPacket().getTransportId(); //todo в питоне тут ошибка
@@ -2360,9 +2241,9 @@ public final class Transport implements ExitHandler {
                     // inefficient. There is probably a better way. Doing
                     // path invalidation here would decrease the network
                     // convergence time. Maybe just drop it?
-                    log.debug("Not answering path request for {}, since next hop is the requestor", Hex.encodeHexString(destinationHash));
+                    log.debug("Not answering path request for {}, since next hop is the requestor", encodeHexString(destinationHash));
                 } else {
-                    log.debug("Answering path request for {} on {}", Hex.encodeHexString(destinationHash), attachedInterface);
+                    log.debug("Answering path request for {} on {}", encodeHexString(destinationHash), attachedInterface);
 
                     var now = Instant.now();
                     var retries = PATHFINDER_R;
@@ -2377,13 +2258,13 @@ public final class Transport implements ExitHandler {
                     // rebroadcast locally. In such a case the actual announce
                     // is temporarily held, and then reinserted when the path
                     // request has been served to the peer.
-                    if (announceTable.containsKey(Hex.encodeHexString(destinationHash))) {
-                        var heldEntry = announceTable.get(Hex.encodeHexString(destinationHash));
-                        heldAnnounces.put(Hex.encodeHexString(destinationHash), heldEntry);
+                    if (announceTable.containsKey(encodeHexString(destinationHash))) {
+                        var heldEntry = announceTable.get(encodeHexString(destinationHash));
+                        heldAnnounces.put(encodeHexString(destinationHash), heldEntry);
                     }
 
                     announceTable.put(
-                            Hex.encodeHexString(destinationHash),
+                            encodeHexString(destinationHash),
                             AnnounceEntry.builder()
                                     .timestamp(now)
                                     .retransmitTimeout(retransmitTimeout)
@@ -2401,7 +2282,7 @@ public final class Transport implements ExitHandler {
         } else if (isFromLocalClient) {
             //Forward path request on all interfaces except the local client
             log.debug("Forwarding path request from local client for {} on {} to all other interfaces",
-                    Hex.encodeHexString(destinationHash), attachedInterface);
+                    encodeHexString(destinationHash), attachedInterface);
             var requestTag = getRandomHash();
             for (ConnectionInterface connectionInterface : interfaces) {
                 if (isFalse(Objects.equals(connectionInterface, attachedInterface))) {
@@ -2409,16 +2290,16 @@ public final class Transport implements ExitHandler {
                 }
             }
         } else if (shouldSearchForUnknown) {
-            if (discoveryPathRequests.containsKey(Hex.encodeHexString(destinationHash))) {
+            if (discoveryPathRequests.containsKey(encodeHexString(destinationHash))) {
                 log.debug("There is already a waiting path request for {} on behalf of path request on {}",
-                        Hex.encodeHexString(destinationHash), attachedInterface);
+                        encodeHexString(destinationHash), attachedInterface);
 
             } else {
                 //Forward path request on all interfaces except the requestor interface
                 log.debug("Attempting to discover unknown path to {} on behalf of path request on {}",
-                        Hex.encodeHexString(destinationHash), attachedInterface);
+                        encodeHexString(destinationHash), attachedInterface);
 
-                discoveryPathRequests.put(Hex.encodeHexString(destinationHash),
+                discoveryPathRequests.put(encodeHexString(destinationHash),
                         PathRequestEntry.builder()
                                 .destinationHash(destinationHash)
                                 .timeout(Instant.now().plusSeconds(PATH_REQUEST_TIMEOUT))
@@ -2436,12 +2317,12 @@ public final class Transport implements ExitHandler {
             }
         } else if (isFalse(isFromLocalClient) && localClientInterfaces.size() > 0) {
             //Forward the path request on all local client interfaces
-            log.debug("Forwarding path request for {} on {} to local clients", Hex.encodeHexString(destinationHash), attachedInterface);
+            log.debug("Forwarding path request for {} on {} to local clients", encodeHexString(destinationHash), attachedInterface);
             for (ConnectionInterface connectionInterface : localClientInterfaces) {
                 requestPath(destinationHash, connectionInterface, null, false);
             }
         } else {
-            log.debug("Ignoring path request for {} on {}, no path known", Hex.encodeHexString(destinationHash), attachedInterface);
+            log.debug("Ignoring path request for {} on {}, no path known", encodeHexString(destinationHash), attachedInterface);
         }
     }
 
@@ -2452,11 +2333,7 @@ public final class Transport implements ExitHandler {
      * @param destinationHash
      */
     public Boolean hasPath(@NonNull byte[] destinationHash) {
-        if (destinationTable.containsKey(Hex.encodeHexString(destinationHash))) {
-            return true;
-        } else {
-            return false;
-        }
+        return destinationTable.containsKey(encodeHexString(destinationHash));
     }
 
     /**
@@ -2494,7 +2371,7 @@ public final class Transport implements ExitHandler {
         var packet = new Packet(pathRequestDst, pathRequestData, DATA, BROADCAST, HEADER_1, onInterface);
 
         if (nonNull(onInterface) && recursive) {
-            var queuedAnnounces = CollectionUtils.isNotEmpty(onInterface.getAnnounceQueue());
+            var queuedAnnounces = isNotEmpty(onInterface.getAnnounceQueue());
             if (queuedAnnounces) {
                 log.debug("Blocking recursive path request on {}  due to queued announces", onInterface);
                 return;
@@ -2512,7 +2389,7 @@ public final class Transport implements ExitHandler {
         }
 
         packet.send();
-        pathRequests.put(Hex.encodeHexString(destinationHash), Instant.now());
+        pathRequests.put(encodeHexString(destinationHash), Instant.now());
     }
 
     private void tunnelSynthesizeHandler(byte[] data, Packet packet) {
@@ -2544,11 +2421,11 @@ public final class Transport implements ExitHandler {
     private void handleTunnel(byte[] tunnelId, ConnectionInterface iface) {
         var expires = Instant.now().plusSeconds(DESTINATION_TIMEOUT);
         Map<String, Hops> paths = new HashMap<>();
-        if (isFalse(tunnels.containsKey(Hex.encodeHexString(tunnelId)))) {
-            log.debug("Tunnel endpoint {} established.", Hex.encodeHexString(tunnelId));
+        if (isFalse(tunnels.containsKey(encodeHexString(tunnelId)))) {
+            log.debug("Tunnel endpoint {} established.", encodeHexString(tunnelId));
             iface.setTunnelId(tunnelId);
             tunnels.put(
-                    Hex.encodeHexString(tunnelId),
+                    encodeHexString(tunnelId),
                     Tunnel.builder()
                             .tunnelId(tunnelId)
                             .expires(expires)
@@ -2557,8 +2434,8 @@ public final class Transport implements ExitHandler {
                             .build()
             );
         } else {
-            log.debug("Tunnel endpoint {} reappeared. Restoring paths...", Hex.encodeHexString(tunnelId));
-            var tunnelEntry = tunnels.get(Hex.encodeHexString(tunnelId));
+            log.debug("Tunnel endpoint {} reappeared. Restoring paths...", encodeHexString(tunnelId));
+            var tunnelEntry = tunnels.get(encodeHexString(tunnelId));
             tunnelEntry.setAnInterface(iface);
             tunnelEntry.setExpires(expires);
             iface.setTunnelId(tunnelId);
@@ -2566,33 +2443,33 @@ public final class Transport implements ExitHandler {
 
             var deprecatedPaths = new LinkedList<byte[]>();
             for (Map.Entry<String, Hops> entry : paths.entrySet()) {
-                var destinationHash = Hex.decodeHex(entry.getKey());
+                var destinationHash = decodeHex(entry.getKey());
                 var pathEntry = entry.getValue();
                 var packet = pathEntry.getPacket();
                 var announceHops = pathEntry.getHops();
                 expires = pathEntry.getExpires();
 
                 var shouldAdd = false;
-                if (destinationTable.containsKey(Hex.encodeHexString(destinationHash))) {
-                    var oldEntry = destinationTable.get(Hex.encodeHexString(destinationHash));
+                if (destinationTable.containsKey(encodeHexString(destinationHash))) {
+                    var oldEntry = destinationTable.get(encodeHexString(destinationHash));
                     var oldHops = oldEntry.getHops();
                     var oldExpires = oldEntry.getExpires();
                     if (announceHops < oldHops || Instant.now().isAfter(oldExpires)) {
                         shouldAdd = true;
                     } else {
-                        log.debug("Did not restore path to {} because a newer path with fewer hops exist", Hex.encodeHexString(packet.getDestinationHash()));
+                        log.debug("Did not restore path to {} because a newer path with fewer hops exist", encodeHexString(packet.getDestinationHash()));
                     }
                 } else {
                     if (Instant.now().isBefore(expires)) {
                         shouldAdd = true;
                     } else {
-                        log.debug("Did not restore path to {} because it has expired", Hex.encodeHexString(packet.getDestinationHash()));
+                        log.debug("Did not restore path to {} because it has expired", encodeHexString(packet.getDestinationHash()));
                     }
                 }
 
                 if (shouldAdd) {
                     destinationTable.put(
-                            Hex.encodeHexString(destinationHash),
+                            encodeHexString(destinationHash),
                             pathEntry.toBuilder()
                                     .timestamp(Instant.now())
                                     .anInterface(iface)
@@ -2601,9 +2478,9 @@ public final class Transport implements ExitHandler {
 
                     log.debug(
                             "Restored path to {} is now {} hops away via {}",
-                            Hex.encodeHexString(packet.getDestinationHash()),
+                            encodeHexString(packet.getDestinationHash()),
                             announceHops,
-                            Hex.encodeHexString(pathEntry.getVia())
+                            encodeHexString(pathEntry.getVia())
                     );
                 } else {
                     deprecatedPaths.add(destinationHash);
@@ -2611,8 +2488,8 @@ public final class Transport implements ExitHandler {
             }
 
             for (byte[] deprecatedPath : deprecatedPaths) {
-                log.debug("Removing path to {} from tunnel {}", Hex.encodeHexString(deprecatedPath), Hex.encodeHexString(tunnelId));
-                paths.remove(Hex.encodeHexString(deprecatedPath));
+                log.debug("Removing path to {} from tunnel {}", encodeHexString(deprecatedPath), encodeHexString(tunnelId));
+                paths.remove(encodeHexString(deprecatedPath));
             }
         }
     }
@@ -2641,16 +2518,16 @@ public final class Transport implements ExitHandler {
                                 // send one directly.
                                 if (isFalse(owner.isConnectedToSharedInstance())) {
                                     var lastPathRequest = Instant.EPOCH;
-                                    if (pathRequests.containsKey(Hex.encodeHexString(link.getDestination().getHash()))) {
-                                        lastPathRequest = pathRequests.get(Hex.encodeHexString(link.getDestination().getHash()));
+                                    if (pathRequests.containsKey(encodeHexString(link.getDestination().getHash()))) {
+                                        lastPathRequest = pathRequests.get(encodeHexString(link.getDestination().getHash()));
                                     }
 
                                     if (Duration.between(lastPathRequest, Instant.now()).toSeconds() > PATH_REQUEST_MI) {
                                         log.debug("Trying to rediscover path for {} since an attempted link was never established",
-                                                Hex.encodeHexString(link.getDestination().getHash()));
-                                        if (pathRequestList.keySet().stream().noneMatch(bytes -> StringUtils.equals(bytes, Hex.encodeHexString(link.getDestination().getHash())))) {
+                                                encodeHexString(link.getDestination().getHash()));
+                                        if (pathRequestList.keySet().stream().noneMatch(bytes -> StringUtils.equals(bytes, encodeHexString(link.getDestination().getHash())))) {
                                             blockedIf = null;
-                                            pathRequestList.put(Hex.encodeHexString(link.getDestination().getHash()), blockedIf);
+                                            pathRequestList.put(encodeHexString(link.getDestination().getHash()), blockedIf);
                                         }
                                     }
                                 }
@@ -2702,7 +2579,7 @@ public final class Transport implements ExitHandler {
                                 var announceIdentity = recall(packet.getDestinationHash());
                                 var announceDestination = new Destination(announceIdentity, OUT, SINGLE, "unknown", "unknown");
                                 announceDestination.setHash(packet.getDestinationHash());
-                                announceDestination.setHexHash(Hex.encodeHexString(announceDestination.getHash()));
+                                announceDestination.setHexHash(encodeHexString(announceDestination.getHash()));
 
                                 var newPacket = new Packet(
                                         announceDestination,
@@ -2748,10 +2625,10 @@ public final class Transport implements ExitHandler {
                 }
 
                 //Cull the packet hashlist if it has reached its max size
-                if (packetHashList.size() > HASHLIST_MAXSIZE) {
-                    var list = packetHashList.subList(packetHashList.size() - HASHLIST_MAXSIZE, packetHashList.size() - 1);
-                    packetHashList.clear();
-                    packetHashList.addAll(list);
+                if (packetHashMap.size() > HASHLIST_MAXSIZE) {
+                    var list = storage.trimPacketHashList();
+                    packetHashMap.clear();
+                    packetHashMap.putAll(list);
                 }
 
                 //Cull the path request tags list if it has reached its max size
@@ -2792,7 +2669,7 @@ public final class Transport implements ExitHandler {
                                 staleLinks.add(linkIdHex);
 
                                 var lastPathRequest = pathRequests.getOrDefault(
-                                        Hex.encodeHexString(linkEntry.getDestinationHash()),
+                                        encodeHexString(linkEntry.getDestinationHash()),
                                         Instant.EPOCH
                                 );
 
@@ -2803,9 +2680,9 @@ public final class Transport implements ExitHandler {
 
                                 // If the path has been invalidated between the time of
                                 // making the link request and now, try to rediscover it
-                                if (isFalse(destinationTable.containsKey(Hex.encodeHexString(linkEntry.getDestinationHash())))) {
+                                if (isFalse(destinationTable.containsKey(encodeHexString(linkEntry.getDestinationHash())))) {
                                     log.debug("Trying to rediscover path for {} since an attempted link was never established, and path is now missing",
-                                            Hex.encodeHexString(linkEntry.getDestinationHash()));
+                                            encodeHexString(linkEntry.getDestinationHash()));
                                     pathRequestConditions = true;
                                 }
 
@@ -2814,7 +2691,7 @@ public final class Transport implements ExitHandler {
                                 // has not already happened recently.
                                 else if (isFalse(pathRequestThrottle && lrTokenHops == 0)) {
                                     log.debug("Trying to rediscover path for {} since an attempted local client link was never established",
-                                            Hex.encodeHexString(linkEntry.getDestinationHash()));
+                                            encodeHexString(linkEntry.getDestinationHash()));
                                     pathRequestConditions = true;
                                 }
 
@@ -2824,7 +2701,7 @@ public final class Transport implements ExitHandler {
                                 // In that case, try to discover a new path.
                                 else if (isFalse(pathRequestThrottle && hopsTo(linkEntry.getDestinationHash()) == 1)) {
                                     log.debug("Trying to rediscover path for {}  since an attempted link was never established, and destination was previously local to an interface on this instance",
-                                            Hex.encodeHexString(linkEntry.getDestinationHash()));
+                                            encodeHexString(linkEntry.getDestinationHash()));
                                     pathRequestConditions = true;
                                     blockedIf = linkEntry.getReceivingInterface();
                                 }
@@ -2835,7 +2712,7 @@ public final class Transport implements ExitHandler {
                                 // and mark the old one as potentially unresponsive.
                                 else if (isFalse(pathRequestThrottle && lrTokenHops == 1)) {
                                     log.debug("Trying to rediscover path for {} since an attempted link was never established, and link initiator is local to an interface on this instance",
-                                            Hex.encodeHexString(linkEntry.getDestinationHash()));
+                                            encodeHexString(linkEntry.getDestinationHash()));
                                     pathRequestConditions = true;
                                     blockedIf = linkEntry.getReceivingInterface();
 
@@ -2847,7 +2724,7 @@ public final class Transport implements ExitHandler {
                                 }
 
                                 if (pathRequestConditions) {
-                                    pathRequestList.putIfAbsent(Hex.encodeHexString(linkEntry.getDestinationHash()), blockedIf);
+                                    pathRequestList.putIfAbsent(encodeHexString(linkEntry.getDestinationHash()), blockedIf);
 
                                     if (owner.isTransportEnabled()) {
                                         // Drop current path if we are not a transport instance, to
@@ -2991,12 +2868,12 @@ public final class Transport implements ExitHandler {
         for (String destinationHashString : pathRequestList.keySet()) {
             blockedIf = pathRequestList.get(destinationHashString);
             if (isNull(blockedIf)) {
-                requestPath(Hex.decodeHex(destinationHashString), null, null, false);
+                requestPath(decodeHex(destinationHashString), null, null, false);
             } else {
                 for (ConnectionInterface anInterface : interfaces) {
                     if (isFalse(Objects.equals(anInterface, blockedIf))) {
 //                        log.debug("Transmitting path request on {}", anInterface);
-                        requestPath(Hex.decodeHex(destinationHashString), anInterface, null, false);
+                        requestPath(decodeHex(destinationHashString), anInterface, null, false);
                     } else {
 //                        log.debug("Blocking path request on {}", anInterface);
                     }
@@ -3006,8 +2883,8 @@ public final class Transport implements ExitHandler {
     }
 
     private boolean markPathResponsive(byte[] destinationHash) {
-        if (destinationTable.containsKey(Hex.encodeHexString(destinationHash))) {
-            pathStates.put(Hex.encodeHexString(destinationHash), STATE_RESPONSIVE);
+        if (destinationTable.containsKey(encodeHexString(destinationHash))) {
+            pathStates.put(encodeHexString(destinationHash), STATE_RESPONSIVE);
             return true;
         }
 
@@ -3015,8 +2892,8 @@ public final class Transport implements ExitHandler {
     }
 
     private boolean markPathUnknownState(byte[] destinationHash) {
-        if (destinationTable.containsKey(Hex.encodeHexString(destinationHash))) {
-            pathStates.put(Hex.encodeHexString(destinationHash), STATE_UNKNOWN);
+        if (destinationTable.containsKey(encodeHexString(destinationHash))) {
+            pathStates.put(encodeHexString(destinationHash), STATE_UNKNOWN);
             return true;
         }
 
@@ -3024,8 +2901,8 @@ public final class Transport implements ExitHandler {
     }
 
     private boolean markPathUnresponsive(byte[] destinationHash) {
-        if (destinationTable.containsKey(Hex.encodeHexString(destinationHash))) {
-            pathStates.put(Hex.encodeHexString(destinationHash), STATE_UNRESPONSIVE);
+        if (destinationTable.containsKey(encodeHexString(destinationHash))) {
+            pathStates.put(encodeHexString(destinationHash), STATE_UNRESPONSIVE);
             return true;
         }
 
@@ -3033,8 +2910,8 @@ public final class Transport implements ExitHandler {
     }
 
     private boolean pathIsUnresponsive(byte[] destinationHash) {
-        if (pathStates.containsKey(Hex.encodeHexString(destinationHash))) {
-            return pathStates.get(Hex.encodeHexString(destinationHash)) == STATE_UNRESPONSIVE;
+        if (pathStates.containsKey(encodeHexString(destinationHash))) {
+            return pathStates.get(encodeHexString(destinationHash)) == STATE_UNRESPONSIVE;
         }
 
         return false;
@@ -3053,8 +2930,8 @@ public final class Transport implements ExitHandler {
     }
 
     private boolean expirePath(byte[] destinationHash) {
-        if (destinationTable.containsKey(Hex.encodeHexString(destinationHash))) {
-            var entry = destinationTable.get(Hex.encodeHexString(destinationHash));
+        if (destinationTable.containsKey(encodeHexString(destinationHash))) {
+            var entry = destinationTable.get(encodeHexString(destinationHash));
             entry.setTimestamp(Instant.EPOCH);
             tablesLastCulled.set(Instant.EPOCH);
 

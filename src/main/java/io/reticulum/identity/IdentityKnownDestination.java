@@ -2,11 +2,10 @@ package io.reticulum.identity;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.reticulum.Transport;
 import io.reticulum.destination.Destination;
 import io.reticulum.packet.Packet;
+import io.reticulum.storage.Storage;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -15,15 +14,10 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.lang3.ArrayUtils;
-import org.msgpack.jackson.dataformat.MessagePackMapper;
 
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.ReentrantLock;
 
 import static io.reticulum.constant.IdentityConstant.KEYSIZE;
 import static io.reticulum.constant.IdentityConstant.NAME_HASH_LENGTH;
@@ -47,10 +41,6 @@ import static org.apache.commons.lang3.BooleanUtils.isFalse;
 @NoArgsConstructor(access = PRIVATE)
 @Slf4j
 public class IdentityKnownDestination {
-    private static final ReentrantLock WRITE_LOCK = new ReentrantLock();
-    private static final ObjectMapper OBJECT_MAPPER = new MessagePackMapper();
-
-    static final String KNOWN_DESTINATIONS_FILE_NAME = "known_destinations";
 
     static final Map<String, DestinationData> KNOWN_DESTINATIONS = new ConcurrentHashMap<>();
 
@@ -60,47 +50,16 @@ public class IdentityKnownDestination {
     // simply overwrite on exit now that every local client
     // disconnect triggers a data persist.
     public static void saveKnownDestinations() {
-        WRITE_LOCK.lock();
         var start = System.currentTimeMillis();
-        var destinationFilePath = Transport.getInstance().getOwner().getStoragePath().resolve(KNOWN_DESTINATIONS_FILE_NAME);
-        try {
-            if (Files.isReadable(destinationFilePath)) {
-                var storage = OBJECT_MAPPER.readValue(
-                        destinationFilePath.toFile(),
-                        new TypeReference<Map<String, DestinationData>>() {}
-                );
-                storage.forEach(KNOWN_DESTINATIONS::putIfAbsent);
-                Files.delete(destinationFilePath);
-            }
-            log.debug("saving known destinations to storage... {}", KNOWN_DESTINATIONS.keySet().size());
-            OBJECT_MAPPER.writeValue(destinationFilePath.toFile(), KNOWN_DESTINATIONS);
-            log.debug("Saved known destinations to storage in {} ms.", System.currentTimeMillis() - start);
-        } catch (IOException e) {
-            log.error("Error while saving known destinations to disk", e);
-        }
-        WRITE_LOCK.unlock();
+        log.debug("saving known destinations to storage... {}", KNOWN_DESTINATIONS.keySet().size());
+        Storage.getInstance().saveKnownDestinations(KNOWN_DESTINATIONS.values());
+        log.debug("Saved known destinations to storage in {} ms.", System.currentTimeMillis() - start);
     }
 
     public static void loadKnownDestinations() {
-        try {
-            var destinationFilePath = Transport.getInstance().getOwner().getStoragePath().resolve(KNOWN_DESTINATIONS_FILE_NAME);
-            if (Files.isReadable(destinationFilePath)) {
-                var storage = OBJECT_MAPPER.readValue(
-                        destinationFilePath.toFile(),
-                        new TypeReference<Map<String, DestinationData>>() {}
-                );
-                storage.forEach((knownDestination, value) -> {
-                    if (length(knownDestination) == TRUNCATED_HASHLENGTH / 8) {
-                        KNOWN_DESTINATIONS.put(knownDestination, storage.get(knownDestination));
-                    }
-                });
-                log.info("Loaded {} known destination from storage", storage.keySet().size());
-            } else {
-                log.info("Destinations file does not exist, no known destinations loaded");
-            }
-        } catch (IOException e) {
-            log.error("Error loading known destinations from disk, file will be recreated on exit", e);
-        }
+        var destinations = Storage.getInstance().loadKnownDestinations();
+        KNOWN_DESTINATIONS.putAll(destinations);
+        log.info("Loaded {} known destination from storage", destinations.size());
     }
 
     public static boolean validateAnnounce(final Packet packet) {
@@ -199,7 +158,7 @@ public class IdentityKnownDestination {
             );
         }
 
-        KNOWN_DESTINATIONS.put(key, new DestinationData(System.currentTimeMillis(), packetHash, publicKey, app_data));
+        KNOWN_DESTINATIONS.put(key, new DestinationData(key, System.currentTimeMillis(), packetHash, publicKey, app_data));
     }
 
     /**
@@ -249,7 +208,8 @@ public class IdentityKnownDestination {
     @Data
     @AllArgsConstructor
     @NoArgsConstructor
-    static final class DestinationData {
+    public static final class DestinationData {
+        private String destinationHash;
         private long timestamp;
         @JsonAlias({"packetHash"})
         private byte[] packet_hash;
