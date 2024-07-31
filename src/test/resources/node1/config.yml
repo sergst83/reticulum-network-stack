@@ -1,0 +1,39 @@
+---
+# Reticulum config for unit tests
+
+reticulum:
+
+  enable_transport: false
+
+  share_instance: false
+  #share_instance: true
+
+  ## default ports
+  #shared_instance_port: 37428
+  #instance_control_port: 37429
+  ## use a different port
+  shared_instance_port: 37528
+  instance_control_port: 37528
+
+  panic_on_interface_error: false
+
+interfaces:
+
+  "Default Interface":
+    type: AutoInterface
+    #enabled: false
+    enabled: false
+
+  "TCP Client Interface mobilefabrik":
+    type: TCPClientInterface
+    enabled: true
+    target_host: phantom.mobilefabrik.com
+    target_port: 4242
+
+  #"TCP Server Interface":
+  #  type: TCPServerInterface
+  #  enabled: true
+  #  network_name: qortal
+  #  listen_ip: 0.0.0.0
+  #  listen_port: 3434
+  #  ifac_size: 16
