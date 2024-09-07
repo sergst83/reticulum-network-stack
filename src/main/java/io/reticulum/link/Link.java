@@ -23,6 +23,7 @@ import lombok.Getter;
 import lombok.NonNull;
 import lombok.Setter;
 import lombok.SneakyThrows;
+import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Hex;
 import org.bouncycastle.crypto.agreement.X25519Agreement;
@@ -115,6 +116,7 @@ import static org.apache.commons.lang3.BooleanUtils.isFalse;
 @Slf4j
 @Getter
 @Setter
+@ToString(of = {"linkId"})
 public class Link extends AbstractDestination {
 
     private byte[] linkId;
@@ -205,7 +207,6 @@ public class Link extends AbstractDestination {
 
         if (isNull(peerPubBytes)) {
             this.peerPub = null;
-            this.peerPubBytes = null;
         } else {
             loadPeer(peerPubBytes, peerSigPubBytes);
         }

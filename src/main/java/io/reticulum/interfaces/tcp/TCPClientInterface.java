@@ -3,15 +3,11 @@ package io.reticulum.interfaces.tcp;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
-import io.netty.handler.codec.DelimiterBasedFrameDecoder;
-import io.netty.handler.codec.bytes.ByteArrayDecoder;
-import io.netty.handler.codec.bytes.ByteArrayEncoder;
 import io.reticulum.Transport;
 import io.reticulum.interfaces.AbstractConnectionInterface;
 import io.reticulum.interfaces.ConnectionInterface;
@@ -26,8 +22,8 @@ import org.apache.commons.lang3.BooleanUtils;
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
 import java.time.Duration;
-import java.time.Instant;
-import java.util.concurrent.Executors;
+import java.util.Timer;
+import java.util.TimerTask;
 
 import static java.util.Objects.nonNull;
 import static java.util.Objects.requireNonNullElse;
@@ -38,7 +34,8 @@ import static org.apache.commons.lang3.BooleanUtils.isFalse;
 @Setter
 public class TCPClientInterface extends AbstractConnectionInterface implements HDLC, KISS {
 
-    private static final int HW_MTU = 1064;
+    private Timer timer;
+
     private static final int BITRATE_GUESS = 10_000_000;
     private static final long INITIAL_CONNECT_TIMEOUT = 5_000; //milliseconds
     private static final long RECONNECT_WAIT = 5; //seconds
@@ -47,7 +44,6 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
 
     private Integer maxReconnectTries;
 
-    private volatile boolean initiator = false;
     private volatile boolean reconnecting = false;
     private volatile boolean neverConnected = true;
     private volatile boolean writing = false;
@@ -75,6 +71,8 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
 
         this.interfaceMode = InterfaceMode.MODE_FULL;
         this.bitrate = BITRATE_GUESS;
+
+        timer = new Timer();
     }
 
     public TCPClientInterface(
@@ -111,7 +109,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
         try {
             connect(null);
         } catch (InterruptedException e) {
-            throw new RuntimeException(e);
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -163,52 +161,48 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
         }
     }
 
-    private synchronized void reconnect() {
-        if (initiator) {
-            if (isFalse(reconnecting)) {
-                reconnecting = true;
-                var attempts = 0;
-                while (isFalse(online.get())) {
-                    try {
-                        Thread.sleep(Duration.ofSeconds(RECONNECT_WAIT).toMillis());
-                    } catch (InterruptedException e) {
-                        throw new RuntimeException(e);
+    private void startReconnecting() {
+        timer.schedule(new TimerTask() {
+            @Override
+            public void run() {
+                if (online.get()) {
+                    cancel();
+                } else {
+                    var attempts = 0;
+                    if (isFalse(reconnecting)) {
+                        reconnecting = true;
+                        attempts++;
+                        if (attempts > maxReconnectTries) {
+                            log.error("Max reconnection attempts reached for {}", this);
+                            teardown();
+                            cancel();
+                        } else {
+                            reconnect(attempts);
+                        }
                     }
-                    attempts++;
-
-                    if (attempts > maxReconnectTries) {
-                        log.error("Max reconnection attempts reached for {}", this);
-                        teardown();
-                        break;
-                    }
-
-                    try {
-                        connect(null);
-                    } catch (Exception e) {
-                        log.debug("Connection attempt for {}  failed.", this, e);
-                    }
-                }
-
-                if (isFalse(neverConnected)) {
-                    log.info("Reconnected socket for {}", this);
-                }
-
-                reconnecting = false;
-
-                if (isFalse(kissFraming)) {
-                    Transport.getInstance().synthesizeTunnel(this);
                 }
             }
-        } else {
-            log.error("Attempt to reconnect on a non-initiator TCP interface. This should not happen");
-            throw new IllegalStateException("Attempt to reconnect on a non-initiator TCP interface");
+        }, 500, Duration.ofSeconds(RECONNECT_WAIT).toMillis());
+    }
+
+    private void reconnect(final int currentAttempt) {
+        try {
+            connect(null);
+            reconnecting = false;
+            if (isFalse(neverConnected)) {
+                log.info("Reconnected socket for {}", this);
+            }
+            if (isFalse(kissFraming)) {
+                Transport.getInstance().synthesizeTunnel(this);
+            }
+        } catch (Exception e) {
+            log.debug("Connection attempt for {}  failed.", currentAttempt, e);
         }
     }
 
     private synchronized boolean connect(Boolean initial) throws InterruptedException {
         var init = BooleanUtils.isTrue(initial);
 
-        var delimiter = kissFraming ? delimitersKiss() : delimitersHdlc();
         var packetInboundHandler = new PacketInboundHandler(this);
         EventLoopGroup workerGroup = new NioEventLoopGroup();
         try {
@@ -219,35 +213,23 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
             bootstrap
                     .group(workerGroup).channel(NioSocketChannel.class)
                     .option(ChannelOption.SO_KEEPALIVE, true)
-                    .handler(new ChannelInitializer<SocketChannel>() {
-                        @Override
-                        protected void initChannel(SocketChannel ch) throws Exception {
-                            ch.pipeline()
-                                    .addLast(
-//                                            new LoggingHandler(ByteBufFormat.HEX_DUMP),
-                                            new DelimiterBasedFrameDecoder(HW_MTU, true, delimiter),
-                                            new ByteArrayDecoder(),
-                                            new ByteArrayEncoder(),
-                                            packetInboundHandler
-                                    );
-                        }
-                    });
+                    .handler(new TCPChannelInitializer(packetInboundHandler, kissFraming));
 
             // Start the client.
-            ChannelFuture channelFuture = bootstrap.connect(targetHost, targetPort).sync();
-            this.channelFuture = channelFuture;
-
-            Executors.defaultThreadFactory().newThread(() -> {
-                // Wait until the connection is closed.
-                try {
-                    channelFuture.channel().closeFuture().sync();
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
-                } finally {
-                    workerGroup.shutdownGracefully();
-                    online.set(false);
-                }
-            });
+            this.channelFuture = bootstrap.connect(targetHost, targetPort)
+                    .addListener(
+                            (ChannelFutureListener) future -> future.channel().closeFuture()
+                            .addListener((ChannelFutureListener) closeFeature -> {
+                                //Listen close detect listener
+                                if (isFalse(detached)) {
+                                    startReconnecting();
+                                } else {
+                                    // Wait until the connection is closed.
+                                    workerGroup.shutdownGracefully();
+                                    online.set(false);
+                                }
+                            })
+                    ).sync();
 
             log.debug("TCP connection for {} established", this);
         } catch (Exception e) {
@@ -284,26 +266,12 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
     }
 
     @Override
-    public void sentAnnounce(boolean fromSpawned) {
-        if (fromSpawned) {
-            oaFreqDeque.add(0, Instant.now());
-        }
-    }
-
-    @Override
-    public void receivedAnnounce(boolean fromSpawned) {
-        if (fromSpawned) {
-            iaFreqDeque.add(0, Instant.now());
-        }
-    }
-
-    @Override
     public String toString() {
         return getInterfaceName() + "/" + targetHost + ":" + targetPort;
     }
 
     private void teardown() {
-        if (initiator && isFalse(detached)) {
+        if (isFalse(detached)) {
             log.error("The interface {} experienced an unrecoverable error and is being torn down. Restart Reticulum to attempt to open this interface again.", this);
             if (Transport.getInstance().getOwner().isPanicOnIntefaceError()) {
                 System.exit(255);
@@ -320,10 +288,6 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
             ((AbstractConnectionInterface) parentInterface).getClients().decrementAndGet();
         }
 
-        if (Transport.getInstance().getInterfaces().contains(this)) {
-            if (isFalse(initiator)) {
-                Transport.getInstance().getInterfaces().remove(this);
-            }
-        }
+        Transport.getInstance().getInterfaces().remove(this);
     }
 }

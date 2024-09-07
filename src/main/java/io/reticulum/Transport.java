@@ -386,7 +386,7 @@ public final class Transport implements ExitHandler {
         this.storage = Storage.init(reticulum.getStoragePath());
     }
 
-    public static Transport start(@NonNull Reticulum reticulum) {
+    public static Transport start(@NonNull final Reticulum reticulum) {
         Transport transport = INSTANCE;
         if (transport == null) {
             synchronized (Transport.class) {

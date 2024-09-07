@@ -6,6 +6,7 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.auto.AutoInterface;
 import io.reticulum.interfaces.tcp.TCPClientInterface;
+import io.reticulum.interfaces.tcp.TCPServerInterface;
 import io.reticulum.packet.Packet;
 import io.reticulum.transport.AnnounceQueueEntry;
 import io.reticulum.utils.IdentityUtils;
@@ -21,7 +22,8 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 )
 @JsonSubTypes({
         @Type(value = AutoInterface.class, name = "AutoInterface"),
-        @Type(value = TCPClientInterface.class, name = "TCPClientInterface")
+        @Type(value = TCPClientInterface.class, name = "TCPClientInterface"),
+        @Type(value = TCPServerInterface.class, name = "TCPServerInterface")
 })
 public interface ConnectionInterface {
 
