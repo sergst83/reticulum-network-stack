@@ -1,0 +1,12 @@
+---
+# Reticulum config for unit tests
+
+reticulum:
+  enable_transport: true
+  share_instance: false
+  panic_on_interface_error: false
+interfaces:
+  "TCP Server Interface localhost":
+    type: TCPServerInterface
+    enabled: true
+    listen_port: 4242

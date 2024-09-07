@@ -27,7 +27,7 @@ interfaces:
   "TCP Client Interface mobilefabrik":
     type: TCPClientInterface
     enabled: true
-    target_host: phantom.mobilefabrik.com
+    target_host: 127.0.0.1
     target_port: 4242
 
   #"TCP Server Interface":

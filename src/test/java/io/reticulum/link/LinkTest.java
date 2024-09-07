@@ -2,28 +2,20 @@ package io.reticulum.link;
 
 //import io.reticulum.destination.DestinationType;
 //import io.reticulum.transport.TransportType;
+
+import examples.LinkApp;
+import io.reticulum.Reticulum;
 import lombok.extern.slf4j.Slf4j;
-//import io.reticulum.Reticulum;
-//import static io.reticulum.link.TeardownSession.DESTINATION_CLOSED;
-//import static io.reticulum.link.TeardownSession.INITIATOR_CLOSED;
-//import static io.reticulum.link.TeardownSession.TIMEOUT;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.util.concurrent.TimeUnit;
+
 import static io.reticulum.link.LinkStatus.ACTIVE;
 import static org.apache.commons.codec.binary.Hex.encodeHexString;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
-
-import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.Test;
-
-import examples.LinkApp;
-//import lombok.extern.slf4j.Slf4j;
-import io.reticulum.Transport;
-
-//import java.io.IOException;
-//import java.nio.ByteBuffer;
-//import java.util.function.Function;
-import java.util.concurrent.TimeUnit;
-//import static java.util.Objects.nonNull;
-import static java.util.Objects.isNull;
 
 //import static org.junit.jupiter.api.Assertions.*;
 
@@ -33,6 +25,16 @@ class LinkTest {
     LinkApp node1;
     LinkApp node2;
     LinkStatus linkStatus;
+
+    @BeforeAll
+    static void init() {
+        System.setProperty("io.netty.tryReflectionSetAccessible", "true");
+    }
+
+    @BeforeAll
+    static void starLocalSertver() throws IOException {
+        var server = new Reticulum("src/test/resources/tcp_server_node");
+    }
 
     @Test
     void testLinkStatus() {

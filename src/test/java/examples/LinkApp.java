@@ -2,20 +2,13 @@ package examples;
 
 import io.reticulum.Reticulum;
 import io.reticulum.Transport;
+import io.reticulum.constant.LinkConstant;
 import io.reticulum.destination.Destination;
 import io.reticulum.destination.DestinationType;
 import io.reticulum.destination.Direction;
 import io.reticulum.identity.Identity;
 import io.reticulum.link.Link;
-import io.reticulum.constant.LinkConstant;
 import io.reticulum.packet.Packet;
-import static io.reticulum.link.TeardownSession.DESTINATION_CLOSED;
-//import static io.reticulum.link.TeardownSession.INITIATOR_CLOSED;
-import static io.reticulum.link.TeardownSession.TIMEOUT;
-import static io.reticulum.identity.IdentityKnownDestination.recall;
-import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
-
-//import lombok.Data;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -23,13 +16,14 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.TimeUnit;
 
+import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
+import static io.reticulum.identity.IdentityKnownDestination.recall;
+import static io.reticulum.link.TeardownSession.DESTINATION_CLOSED;
+import static io.reticulum.link.TeardownSession.TIMEOUT;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.nonNull;
-//import static org.apache.commons.lang3.BooleanUtils.isFalse;
-//import static org.mockito.ArgumentMatchers.isNull;
-
-import java.util.concurrent.TimeUnit;
 
 //import static org.apache.commons.codec.binary.Hex.encodeHexString;
 //import static org.apache.commons.codec.binary.Hex.decodeHex;
