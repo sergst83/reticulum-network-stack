@@ -1,4 +1,4 @@
-package io.reticulum.channel.message;
+package io.reticulum.message;
 
 public final class MessageFactory {
 

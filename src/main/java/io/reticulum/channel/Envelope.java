@@ -1,7 +1,7 @@
 package io.reticulum.channel;
 
-import io.reticulum.channel.message.MessageBase;
-import io.reticulum.channel.message.MessageFactory;
+import io.reticulum.message.MessageBase;
+import io.reticulum.message.MessageFactory;
 import io.reticulum.packet.Packet;
 import lombok.Data;
 import org.apache.commons.lang3.ArrayUtils;
@@ -28,6 +28,8 @@ public class Envelope {
     private Integer sequence;
     private boolean tracked;
     private Instant ts;
+    private boolean packed;
+    private boolean unpacked;
 
     private Envelope(LinkChannelOutlet outlet, MessageBase message, byte[] raw, Integer sequence) {
         this.ts = Instant.now();
@@ -39,6 +41,8 @@ public class Envelope {
         this.outlet = outlet;
         this.tries = 0;
         this.tracked = false;
+        this.packed = false;
+        this.unpacked = false;
     }
 
     public Envelope(LinkChannelOutlet outlet, byte[] raw) {
@@ -49,7 +53,7 @@ public class Envelope {
         this(outlet, message, null, sequence);
     }
 
-    public synchronized MessageBase unpack() {
+    public MessageBase unpack() {
         var buffer = ByteBuffer.wrap(ArrayUtils.subarray(this.raw, 0, 6));
         var msgtype = (int) buffer.getShort(0);
         this.sequence = (int) buffer.getShort(2);
@@ -58,6 +62,7 @@ public class Envelope {
         var raw = ArrayUtils.subarray(this.raw, 6, this.raw.length);
         message = MessageFactory.getInstance(msgtype);
         message.unpack(raw);
+        unpacked = true;
 
         return message;
     }
@@ -71,7 +76,8 @@ public class Envelope {
                 .putShort(message.msgType().shortValue())
                 .putShort(sequence.shortValue())
                 .putShort(Integer.valueOf(data.length).shortValue());
-        this.raw = concatArrays(buffer.array(), data);
+        raw = concatArrays(buffer.array(), data);
+        packed = true;
 
         return this.raw;
     }

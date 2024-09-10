@@ -1,9 +1,9 @@
-package io.reticulum.channel.message;
+package io.reticulum.message;
 
-public class MessageTest extends MessageBase{
+public class SystemMessage extends MessageBase{
     @Override
     public Integer msgType() {
-        return 0xabcd;
+        return 0xf000;
     }
 
     @Override

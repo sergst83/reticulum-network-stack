@@ -1,4 +1,4 @@
-package io.reticulum.channel.message;
+package io.reticulum.message;
 
 import io.reticulum.channel.Channel;
 

@@ -1,13 +1,13 @@
 package io.reticulum.channel;
 
-import io.reticulum.channel.message.MessageBase;
+import io.reticulum.link.Link;
+import io.reticulum.message.MessageBase;
 import io.reticulum.packet.Packet;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Objects;
@@ -24,6 +24,31 @@ import static java.util.stream.Collectors.toList;
 import static org.apache.commons.lang3.ArrayUtils.getLength;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
+/**
+ * Provides reliable delivery of messages over a link.
+ * <br/>
+ * <br/>
+ * {@link Channel} differs from {@link io.reticulum.destination.Request} and {@link io.reticulum.resource.Resource}
+ * in some important ways:
+ * <br/>
+ * <strong>Continuous</strong>:
+ * Messages can be sent or received as long as {@link io.reticulum.link.Link} is open.
+ * <br/>
+ * <strong>Bi-directional</strong>:
+ * Messages can be sent in either direction on {@link io.reticulum.link.Link} neither end is the client or server.
+ * <br/>
+ * <strong>Size-constrained</strong>:
+ * Messages must be encoded into a single packet.
+ * <br/>
+ * <br/>
+ * {@link Channel} is similar to {@link Packet}, except that it
+ * provides reliable delivery (automatic retries) as well
+ * as a structure for exchanging several types of
+ * messages over the {@link io.reticulum.link.Link}
+ * <br/>
+ * {@link Channel} is not instantiated directly, but rather
+ * obtained from a {@link io.reticulum.link.Link} with {@link Link#getChannel()}
+ */
 @Slf4j
 public class Channel {
     private final LinkChannelOutlet outlet;
@@ -83,7 +108,7 @@ public class Channel {
         for (Envelope existing : ring) {
             if (
                     existing.getSequence() > envelope.getSequence()
-                    && isFalse(existing.getSequence() / 2 > envelope.getSequence()) //account for overflow
+                            && isFalse(existing.getSequence() / 2 > envelope.getSequence()) //account for overflow
             ) {
                 ring.set(i, envelope);
 
@@ -168,7 +193,7 @@ public class Channel {
             for (Envelope envelope : txRing) {
                 if (
                         Objects.equals(envelope.getOutlet(), outlet)
-                        && isFalse(
+                                && isFalse(
                                 nonNull(envelope.getPacket())
                                         || outlet.getPacketState(envelope.getPacket()) == MSGSTATE_SENT
                         )
@@ -181,7 +206,7 @@ public class Channel {
         return true;
     }
 
-    private void packetTxOp (Packet packet, Function<Envelope, Boolean> op) {
+    private void packetTxOp(Packet packet, Function<Envelope, Boolean> op) {
         var envelop = txRing.stream()
                 .filter(e -> Arrays.equals(outlet.getPacketId(e.getPacket()), outlet.getPacketId(packet)))
                 .findFirst()
