@@ -38,7 +38,7 @@ public class HopEntityConverter implements EntityConverter<HopEntity> {
         return HopEntity.builder()
                 .timestamp(document.get("timestamp", Instant.class))
                 .via(document.get("via", byte[].class))
-                .hops(document.get("hops", int.class))
+                .hops(document.get("hops", Integer.class))
                 .expires(document.get("expires", Instant.class))
                 .randomBlobs(randomBlobs)
                 .interfaceHash(document.get("interfaceHash", byte[].class))
