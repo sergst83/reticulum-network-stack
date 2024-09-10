@@ -261,6 +261,7 @@ public final class Transport implements ExitHandler {
     private final Deque<Pair<byte[], Integer>> localClientSnrCache = new ConcurrentLinkedDeque<>();
     private final Deque<Pair<byte[], Integer>> localClientQCache = new ConcurrentLinkedDeque<>();
 
+    @SneakyThrows
     private void init() {
         identity = Optional.ofNullable(storage.getIdentity())
                 .map(i -> {
@@ -298,7 +299,7 @@ public final class Transport implements ExitHandler {
                 for (DestinationTable entry : dtList) {
                     var destinationHash = entry.getDestinationHash();
                     var hopEntry = entry.getHop();
-                    if (getLength(destinationHash) == TRUNCATED_HASHLENGTH / 8) {
+                    if (getLength(decodeHex(destinationHash)) == TRUNCATED_HASHLENGTH / 8) {
                         var receivingInterface = findInterfaceFromHash(hopEntry.getInterfaceHash());
                         var announcePacket = getCachedPacket(hopEntry.getPacketHash());
                         if (nonNull(announcePacket) && nonNull(receivingInterface)) {
