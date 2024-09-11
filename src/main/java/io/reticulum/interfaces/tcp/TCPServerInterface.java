@@ -74,7 +74,7 @@ public class TCPServerInterface extends AbstractConnectionInterface implements H
                 // Use NioserVersocketChannel as a channel for the channel to implement
                 .channel(NioServerSocketChannel.class)
                 // Set the thread queue to wait for the number of connections
-                .option(ChannelOption.SO_BACKLOG, 128)
+                .option(ChannelOption.SO_BACKLOG, 1024)
                 // Set up to keep the activity connection status
                 .childOption(ChannelOption.SO_KEEPALIVE, true)
                 .childHandler(new TCPChannelInitializer(packetInboundHandler, false));

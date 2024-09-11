@@ -7,7 +7,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.ArrayUtils;
 
+import static io.netty.channel.ChannelHandler.Sharable;
+
 @Slf4j
+@Sharable
 @RequiredArgsConstructor
 public class PacketInboundHandler extends SimpleChannelInboundHandler<byte[]> {
 
