@@ -64,8 +64,7 @@ public class TCPServerInterface extends AbstractConnectionInterface implements H
     }
 
     public void startListening() throws InterruptedException {
-        var packetInboundHandler = new PacketInboundHandler(this);
-
+        var self = this;
         EventLoopGroup bossGroup = new NioEventLoopGroup();
         EventLoopGroup workerGroup = new NioEventLoopGroup();
         ServerBootstrap bootstrap = new ServerBootstrap();
@@ -77,7 +76,7 @@ public class TCPServerInterface extends AbstractConnectionInterface implements H
                 .option(ChannelOption.SO_BACKLOG, 1024)
                 // Set up to keep the activity connection status
                 .childOption(ChannelOption.SO_KEEPALIVE, true)
-                .childHandler(new TCPChannelInitializer(packetInboundHandler, false));
+                .childHandler(new TCPChannelInitializer(self, false));
 
         // Start server .
         this.channelFuture = bootstrap.bind(listenPort)
