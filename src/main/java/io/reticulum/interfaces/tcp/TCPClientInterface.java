@@ -2,9 +2,11 @@ package io.reticulum.interfaces.tcp;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelOption;
+import io.netty.channel.ChannelOutboundInvoker;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioSocketChannel;
@@ -21,7 +23,9 @@ import org.apache.commons.lang3.BooleanUtils;
 
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
+import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -41,9 +45,11 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
     private static final long RECONNECT_WAIT = 5; //seconds
 
     private ChannelFuture channelFuture;
+    private Channel channel;
 
     private Integer maxReconnectTries;
 
+    private boolean initiator;
     private volatile boolean reconnecting = false;
     private volatile boolean neverConnected = true;
     private volatile boolean writing = false;
@@ -63,6 +69,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
 
     public TCPClientInterface() {
         super();
+        this.initiator = true;
         this.rxb.set(BigInteger.ZERO);
         this.txb.set(BigInteger.ZERO);
 
@@ -75,34 +82,32 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
         timer = new Timer();
     }
 
+    /**
+     * A constructor for creating an interface for a return channel to the client connected to the server
+     *
+     * @param name interface name
+     * @param channel channel for sending data to the client
+     * @param i2pTunneled
+     */
     public TCPClientInterface(
             String name,
-            String targetHost,
-            Integer targetPort,
-            Integer maxReconnectTries,
-            Boolean kissFraming,
-            Boolean i2pTunneled,
-            Long connectionTimeoutMs
+            Channel channel,
+            Boolean i2pTunneled
     ) {
         this();
+        this.channel = channel;
+        this.initiator = false;
         this.interfaceName = name;
         this.maxReconnectTries = requireNonNullElse(maxReconnectTries, 0);
 
-        if (nonNull(connectionTimeoutMs)) {
-            this.connectionTimeout = connectionTimeoutMs;
-        }
-        if (nonNull(targetHost)) {
-            this.targetHost = targetHost;
-        }
-        if (nonNull(targetPort)) {
-            this.targetPort = targetPort;
-        }
-        if (nonNull(kissFraming)) {
-            this.kissFraming = kissFraming;
-        }
         if (nonNull(i2pTunneled)) {
             this.i2pTunneled = i2pTunneled;
         }
+
+        //for toString
+        var remoteAddress = (InetSocketAddress) channel.remoteAddress();
+        targetHost = remoteAddress.getAddress().getHostAddress();
+        targetPort = remoteAddress.getPort();
     }
 
     public void run() {
@@ -147,7 +152,9 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
                     os.write(FLAG);
                 }
 
-                channelFuture.sync().channel().writeAndFlush(os.toByteArray());
+                getChannel()
+                        .map(ch -> ch.writeAndFlush(os.toByteArray()))
+                        .orElseThrow(() -> new RuntimeException("Channel is not present."));
 
                 writing = false;
                 txb.accumulateAndGet(BigInteger.valueOf(data.length), BigInteger::add);
@@ -165,27 +172,32 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
         timer.schedule(new TimerTask() {
             @Override
             public void run() {
-                if (online.get()) {
-                    cancel();
-                } else {
-                    var attempts = 0;
-                    if (isFalse(reconnecting)) {
-                        reconnecting = true;
-                        attempts++;
-                        if (attempts > maxReconnectTries) {
-                            log.error("Max reconnection attempts reached for {}", this);
-                            teardown();
-                            cancel();
-                        } else {
-                            reconnect(attempts);
+                if (initiator) {
+                    if (online.get()) {
+                        cancel();
+                    } else {
+                        var attempts = 0;
+                        if (isFalse(reconnecting)) {
+                            reconnecting = true;
+                            attempts++;
+                            if (attempts > maxReconnectTries) {
+                                log.error("Max reconnection attempts reached for {}", this);
+                                teardown();
+                                cancel();
+                            } else {
+                                reconnect(attempts);
+                            }
                         }
                     }
+                } else {
+                    log.error("Attempt to reconnect on a non-initiator TCP interface. This should not happen");
+                    throw new IllegalStateException("Attempt to reconnect on a non-initiator TCP interface");
                 }
             }
         }, 500, Duration.ofSeconds(RECONNECT_WAIT).toMillis());
     }
 
-    private void reconnect(final int currentAttempt) {
+    private synchronized void reconnect(final int currentAttempt) {
         try {
             connect(null);
             reconnecting = false;
@@ -202,8 +214,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
 
     private synchronized boolean connect(Boolean initial) throws InterruptedException {
         var init = BooleanUtils.isTrue(initial);
-
-        var packetInboundHandler = new PacketInboundHandler(this);
+        var self = this;
         EventLoopGroup workerGroup = new NioEventLoopGroup();
         try {
             if (init) {
@@ -213,7 +224,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
             bootstrap
                     .group(workerGroup).channel(NioSocketChannel.class)
                     .option(ChannelOption.SO_KEEPALIVE, true)
-                    .handler(new TCPChannelInitializer(packetInboundHandler, kissFraming));
+                    .handler(new TCPChannelInitializer(self, kissFraming));
 
             // Start the client.
             this.channelFuture = bootstrap.connect(targetHost, targetPort)
@@ -251,12 +262,13 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
 
     @Override
     public synchronized void detach() {
-        if (nonNull(channelFuture) && channelFuture.channel().isActive()) {
+        var channel = getChannel();
+        if (channel.map(Channel::isActive).orElse(false)) {
             log.debug("Detaching {}", this);
             detached = true;
 
             try {
-                channelFuture.channel().close();
+                channel.ifPresent(ChannelOutboundInvoker::close);
             } catch (Exception e) {
                 log.error("Error while shutting down channel for {}", this, e);
             }
@@ -271,7 +283,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
     }
 
     private void teardown() {
-        if (isFalse(detached)) {
+        if (initiator && isFalse(detached)) {
             log.error("The interface {} experienced an unrecoverable error and is being torn down. Restart Reticulum to attempt to open this interface again.", this);
             if (Transport.getInstance().getOwner().isPanicOnIntefaceError()) {
                 System.exit(255);
@@ -288,6 +300,23 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
             ((AbstractConnectionInterface) parentInterface).getClients().decrementAndGet();
         }
 
-        Transport.getInstance().getInterfaces().remove(this);
+        if (Transport.getInstance().getInterfaces().contains(this)) {
+            if (isFalse(initiator)) {
+                Transport.getInstance().getInterfaces().remove(this);
+            }
+        }
+    }
+
+    private Optional<Channel> getChannel() {
+        return Optional.ofNullable(channelFuture)
+                .map(future -> {
+                    try {
+                        return future.sync().channel();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException(e);
+                    }
+                })
+                .or(() -> Optional.ofNullable(channel));
     }
 }
