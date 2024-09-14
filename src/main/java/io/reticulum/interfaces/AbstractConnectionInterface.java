@@ -41,6 +41,7 @@ import static io.reticulum.interfaces.InterfaceMode.MODE_FULL;
 import static java.math.BigInteger.ZERO;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
+import static java.util.Objects.requireNonNullElse;
 import static java.util.stream.Collectors.toList;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
@@ -148,20 +149,20 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
         }
     }
 
-    public void setAnnounceRateTarget(int newAnnounceRateTarget) {
-        if (newAnnounceRateTarget > 0) {
+    public void setAnnounceRateTarget(Integer newAnnounceRateTarget) {
+        if (requireNonNullElse(newAnnounceRateTarget, 0) > 0) {
             announceRateTarget = newAnnounceRateTarget;
         }
     }
 
-    public void setAnnounceRateGrace(int newAnnounceRateGrace) {
-        if (newAnnounceRateGrace > 0) {
+    public void setAnnounceRateGrace(Integer newAnnounceRateGrace) {
+        if (requireNonNullElse(newAnnounceRateGrace, 0) > 0) {
             this.announceRateGrace = newAnnounceRateGrace;
         }
     }
 
-    public void setAnnounceRatePenalty(int newAnnounceRatePenalty) {
-        if (newAnnounceRatePenalty > 0) {
+    public void setAnnounceRatePenalty(Integer newAnnounceRatePenalty) {
+        if (requireNonNullElse(newAnnounceRatePenalty, 0) > 0) {
             this.announceRatePenalty = newAnnounceRatePenalty;
         }
     }
