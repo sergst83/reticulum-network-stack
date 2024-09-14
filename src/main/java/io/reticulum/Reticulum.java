@@ -1,20 +1,16 @@
 package io.reticulum;
 
 import io.reticulum.config.ConfigObj;
-import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.AbstractConnectionInterface;
 import io.reticulum.interfaces.ConnectionInterface;
 import io.reticulum.interfaces.local.LocalClientInterface;
 import io.reticulum.interfaces.local.LocalServerInterface;
 import io.reticulum.storage.Storage;
 import io.reticulum.utils.IdentityUtils;
+import io.reticulum.utils.InterfaceUtils;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.MapUtils;
-import org.apache.commons.lang3.ArrayUtils;
-import org.bouncycastle.crypto.digests.SHA256Digest;
-import org.bouncycastle.crypto.generators.HKDFBytesGenerator;
-import org.bouncycastle.crypto.params.HKDFParameters;
 import sun.misc.Signal;
 
 import java.io.IOException;
@@ -38,8 +34,6 @@ import static io.reticulum.constant.ReticulumConstant.RESOURCE_CACHE;
 import static io.reticulum.identity.IdentityKnownDestination.loadKnownDestinations;
 import static io.reticulum.utils.CommonUtils.exit;
 import static io.reticulum.utils.CommonUtils.panic;
-import static io.reticulum.utils.IdentityUtils.fullHash;
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
@@ -210,40 +204,15 @@ public class Reticulum implements ExitHandler {
                     panic();
                 }
 
-                if (isNotBlank(iface.getIfacNetName()) || isNotBlank(iface.getIfacNetKey())) {
-                    var ifacOrigin = new byte[]{};
-
-                    if (isNotBlank(iface.getIfacNetName())) {
-                        ifacOrigin = ArrayUtils.addAll(ifacOrigin, fullHash(iface.getIfacNetName().getBytes(UTF_8)));
+                InterfaceUtils.initIFac(iface);
+                if (Objects.equals(iface.getType(), "TCPClientInterface")) {
+                    if (isNull(iface.getIfacSize())) {
+                        iface.setIfacSize(16);
                     }
-
-                    if (isNotBlank(iface.getIfacNetKey())) {
-                        ifacOrigin = ArrayUtils.addAll(ifacOrigin, fullHash(iface.getIfacNetKey().getBytes(UTF_8)));
-                    }
-
-                    if (Objects.equals(iface.getType(), "TCPClientInterface")) {
-                        if (isNull(iface.getIfacSize())) {
-                            iface.setIfacSize(16);
-                        }
-                    }
-
-                    // TODO: 07.03.2023 проверить чтоб были хеши и ключи одинаковые с питоном
-                    //                  check that the hashes and keys are the same with Python
-                    var ifacOriginHash = fullHash(ifacOrigin);
-                    var hkdf = new HKDFBytesGenerator(new SHA256Digest());
-                    hkdf.init(new HKDFParameters(ifacOriginHash, IFAC_SALT, new byte[0]));
-                    var ifacKey = new byte[64];
-                    hkdf.generateBytes(ifacKey, 0, ifacKey.length);
-
-                    var identity = Identity.fromBytes(ifacKey);
-                    iface.setIfacKey(ifacKey);
-                    if (nonNull(identity)) {
-                        iface.setIdentity(identity);
-                        iface.setIfacSignature(identity.sign(fullHash(ifacKey)));
-                    } else {
-                        log.warn("Identity is null. Interface {} not initialised correctly!", iface);
-                        continue;
-                    }
+                }
+                if (isNull(iface.getIdentity())) {
+                    log.warn("Identity is null. Interface {} not initialised correctly!", iface);
+                    continue;
                 }
 
                 interfaceList.add(iface);

@@ -52,7 +52,6 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
     private boolean initiator;
     private volatile boolean reconnecting = false;
     private volatile boolean neverConnected = true;
-    private volatile boolean writing = false;
     private volatile boolean detached = false;
 
     private ConnectionInterface parentInterface;
@@ -87,7 +86,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
      *
      * @param name interface name
      * @param channel channel for sending data to the client
-     * @param i2pTunneled
+     * @param i2pTunneled if tunneled
      */
     public TCPClientInterface(
             String name,
@@ -139,8 +138,6 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
     public synchronized void processOutgoing(byte[] data) {
         if (online.get()) {
             try(var os = new ByteArrayOutputStream()) {
-                writing = true;
-
                 if (kissFraming) {
                     os.write(FEND);
                     os.write(CMD_DATA);
@@ -156,7 +153,6 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
                         .map(ch -> ch.writeAndFlush(os.toByteArray()))
                         .orElseThrow(() -> new RuntimeException("Channel is not present."));
 
-                writing = false;
                 txb.accumulateAndGet(BigInteger.valueOf(data.length), BigInteger::add);
                 if (nonNull(parentInterface)) {
                     ((AbstractConnectionInterface) parentInterface).getTxb()
@@ -164,6 +160,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
                 }
             } catch (Exception e) {
                 log.error("Exception occurred while transmitting via {}, tearing down interface.", this, e);
+                teardown();
             }
         }
     }
@@ -254,7 +251,6 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
         }
 
         online.set(true);
-        writing = false;
         neverConnected = false;
 
         return true;
