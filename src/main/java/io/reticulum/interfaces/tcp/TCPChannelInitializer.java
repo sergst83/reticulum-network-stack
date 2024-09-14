@@ -10,11 +10,9 @@ import io.reticulum.Transport;
 import io.reticulum.interfaces.ConnectionInterface;
 import io.reticulum.interfaces.HDLC;
 import io.reticulum.interfaces.KISS;
+import io.reticulum.utils.InterfaceUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-
-import static org.apache.commons.lang3.ArrayUtils.isNotEmpty;
-import static org.apache.commons.lang3.StringUtils.isNotBlank;
 
 @Slf4j
 @RequiredArgsConstructor
@@ -55,16 +53,14 @@ public class TCPChannelInitializer extends ChannelInitializer<SocketChannel> imp
             spownedInterface.setIfacSize(serverInterface.getIfacSize());
             spownedInterface.setIfacNetName(serverInterface.getIfacNetName());
             spownedInterface.setIfacKey(serverInterface.getIfacKey());
-            if (isNotBlank(spownedInterface.getIfacNetName()) || isNotEmpty(spownedInterface.getIfacKey())) {
-
-            }
+            InterfaceUtils.initIFac(serverInterface);
             spownedInterface.setAnnounceRateTarget(serverInterface.getAnnounceRateTarget());
             spownedInterface.setAnnounceRateGrace(serverInterface.getAnnounceRateGrace());
             spownedInterface.setAnnounceRatePenalty(serverInterface.getAnnounceRatePenalty());
             spownedInterface.setInterfaceMode(serverInterface.getInterfaceMode());
             spownedInterface.getOnline().set(true);
 
-            log.info("Spawned new TCPClient Interface: {}", serverInterface.getInterfaceName());
+            log.info("Spawned new TCPClient Interface: {}", spownedInterface.getInterfaceName());
             Transport.getInstance().getInterfaces().add(spownedInterface);
             serverInterface.getClients().incrementAndGet();
 
