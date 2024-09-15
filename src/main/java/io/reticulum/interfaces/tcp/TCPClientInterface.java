@@ -29,6 +29,7 @@ import java.util.Optional;
 import java.util.Timer;
 import java.util.TimerTask;
 
+import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static java.util.Objects.requireNonNullElse;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
@@ -73,10 +74,13 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
         this.txb.set(BigInteger.ZERO);
 
         this.IN = true;
-        this.OUT = true;
 
         this.interfaceMode = InterfaceMode.MODE_FULL;
         this.bitrate = BITRATE_GUESS;
+
+        if (isNull(ifacSize)) {
+            ifacSize = 16;
+        }
 
         timer = new Timer();
     }

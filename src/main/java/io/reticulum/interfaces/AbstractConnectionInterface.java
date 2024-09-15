@@ -127,10 +127,6 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
     protected Queue<AnnounceQueueEntry> announceQueue = new ConcurrentLinkedQueue<>();
     protected Map<String, Packet> heldAnnounces = new ConcurrentHashMap<>();
 
-    public void setIfacSize(int newIfacSize) {
-        ifacSize = newIfacSize;
-    }
-
     public void setIfacNetName(String newIfacNetname) {
         if (StringUtils.isNotBlank(newIfacNetname)) {
             ifacNetName = newIfacNetname;
