@@ -18,7 +18,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -205,11 +204,7 @@ public class Reticulum implements ExitHandler {
                 }
 
                 InterfaceUtils.initIFac(iface);
-                if (Objects.equals(iface.getType(), "TCPClientInterface")) {
-                    if (isNull(iface.getIfacSize())) {
-                        iface.setIfacSize(16);
-                    }
-                }
+
                 if (isNull(iface.getIdentity())) {
                     log.warn("Identity is null. Interface {} not initialised correctly!", iface);
                     continue;

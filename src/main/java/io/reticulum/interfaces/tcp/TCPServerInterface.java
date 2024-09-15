@@ -20,6 +20,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.math.BigInteger;
 import java.time.Instant;
 
+import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 
 @Slf4j
@@ -44,10 +45,13 @@ public class TCPServerInterface extends AbstractConnectionInterface implements H
         this.txb.set(BigInteger.ZERO);
 
         this.IN = true;
-        this.OUT = false;
 
         this.interfaceMode = InterfaceMode.MODE_FULL;
         this.bitrate = BITRATE_GUESS;
+
+        if (isNull(ifacSize)) {
+            ifacSize = 16;
+        }
     }
 
     public void run() {
