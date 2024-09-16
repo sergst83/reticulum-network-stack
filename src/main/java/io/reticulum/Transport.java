@@ -783,8 +783,31 @@ public final class Transport implements ExitHandler {
         }
 
         if (packetFilter(packet)) {
-            packetHashMap.put(encodeHexString(packet.getHash()), packet.getHash());
-            cache(packet, false);
+            // By default, remember packet hashes to avoid routing loops in the network, using the packet filter.
+            var rememberPacketHash = true;
+
+            // If this packet belongs to a link in our link table,
+            // we'll have to defer adding it to the filter list.
+            // In some cases, we might see a packet over a shared-
+            // medium interface, belonging to a link that transports
+            // or terminates with this instance, but before it would
+            // normally reach us. If the packet is appended to the
+            // filter list at this point, link transport will break.
+            if (linkTable.containsKey(encodeHexString(packet.getDestinationHash()))) {
+                rememberPacketHash = false;
+            }
+
+            // If this is a link request proof, don't add it until
+            // we are sure it's not actually somewhere else in the
+            // routing chain.
+            if (packet.getPacketType() == PROOF && packet.getContext() == LRPROOF) {
+                rememberPacketHash = false;
+            }
+
+            if (rememberPacketHash) {
+                packetHashMap.put(encodeHexString(packet.getPacketHash()), packet.getPacketHash());
+                cache(packet, false);
+            }
 
             //Check special conditions for local clients connected through a shared Reticulum instance
             var fromLocalClient = localClientInterfaces.contains(packet.getReceivingInterface());
@@ -886,7 +909,9 @@ public final class Transport implements ExitHandler {
                                         .proofTimestamp(proofTimeout)
                                         .build();
 
-                                linkTable.put(encodeHexString(packet.getTruncatedHash()), linkEntry);
+//                                linkTable.put(encodeHexString(packet.getTruncatedHash()), linkEntry);
+                                // I changed it to destination Hash, because in java we search by string representation and truncatedHash can be != destinationHash
+                                linkTable.put(encodeHexString(packet.getDestinationHash()), linkEntry);
                             } else {
                                 //Entry format is
                                 var reserveEntry = ReversEntry.builder()
@@ -1309,7 +1334,7 @@ public final class Transport implements ExitHandler {
                                     encodeHexString(packet.getDestinationHash()),
                                     announceHops,
                                     encodeHexString(receivedFrom),
-                                    packet.getReceivingInterface().getInterfaceName()
+                                    packet.getReceivingInterface()
                             );
 
                             //If the receiving interface is a tunnel, we add the announce to the tunnels table

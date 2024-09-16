@@ -2,6 +2,7 @@ package io.reticulum.interfaces.tcp;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelOption;
@@ -18,7 +19,9 @@ import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.math.BigInteger;
+import java.net.InetSocketAddress;
 import java.time.Instant;
+import java.util.Optional;
 
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
@@ -140,6 +143,12 @@ public class TCPServerInterface extends AbstractConnectionInterface implements H
 
     @Override
     public String toString() {
-        return getInterfaceName() + "/" + channelFuture.channel() + ":" + listenPort;
+        return getInterfaceName() + "/" +
+                Optional.ofNullable(channelFuture)
+                        .map(ChannelFuture::channel)
+                        .map(Channel::localAddress)
+                        .map(socketAddress -> ((InetSocketAddress) socketAddress).getHostString())
+                        .orElse("")
+                + ":" + listenPort;
     }
 }
