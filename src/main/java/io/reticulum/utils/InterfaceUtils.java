@@ -19,7 +19,7 @@ import static org.apache.commons.lang3.StringUtils.isNotBlank;
 @Slf4j
 public class InterfaceUtils {
 
-    public static void initIFac(AbstractConnectionInterface iface) {
+    public static boolean initIFac(AbstractConnectionInterface iface) {
         if (isNotBlank(iface.getIfacNetName()) || isNotBlank(iface.getIfacNetKey())) {
             var ifacOrigin = new byte[]{};
 
@@ -44,7 +44,14 @@ public class InterfaceUtils {
             iface.setIdentity(identity);
             if (nonNull(identity)) {
                 iface.setIfacSignature(identity.sign(fullHash(ifacKey)));
+            } else {
+                log.warn("Identity is null. Interface {} not initialised correctly!", iface);
+                return false;
             }
+
+            return true;
         }
+
+        return true;
     }
 }

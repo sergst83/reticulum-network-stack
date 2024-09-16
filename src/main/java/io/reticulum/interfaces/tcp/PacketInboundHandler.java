@@ -14,8 +14,8 @@ public class PacketInboundHandler extends SimpleChannelInboundHandler<byte[]> {
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, byte[] msg) throws Exception {
-        log.trace("channelRead0. context: {}, interface: {}, message: {}", ctx.name(), connectionInterface.getInterfaceName() , msg);
         if(ArrayUtils.isNotEmpty(msg)) {
+            log.trace("channelRead0. context: {}, interface: {}, message: {}", ctx, connectionInterface, msg);
             connectionInterface.processIncoming(msg);
         }
     }

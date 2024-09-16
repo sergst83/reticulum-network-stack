@@ -34,7 +34,6 @@ import static io.reticulum.identity.IdentityKnownDestination.loadKnownDestinatio
 import static io.reticulum.utils.CommonUtils.exit;
 import static io.reticulum.utils.CommonUtils.panic;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
-import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
@@ -203,10 +202,7 @@ public class Reticulum implements ExitHandler {
                     panic();
                 }
 
-                InterfaceUtils.initIFac(iface);
-
-                if (isNull(iface.getIdentity())) {
-                    log.warn("Identity is null. Interface {} not initialised correctly!", iface);
+                if (isFalse(InterfaceUtils.initIFac(iface))) {
                     continue;
                 }
 
