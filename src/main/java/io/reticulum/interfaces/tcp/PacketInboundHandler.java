@@ -2,6 +2,7 @@ package io.reticulum.interfaces.tcp;
 
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
+import io.reticulum.Transport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.ArrayUtils;
@@ -18,6 +19,16 @@ public class PacketInboundHandler extends SimpleChannelInboundHandler<byte[]> {
             log.trace("channelRead0. context: {}, interface: {}, message: {}", ctx, connectionInterface, msg);
             connectionInterface.processIncoming(msg);
         }
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        log.info("TCPClient Interface: {} is disconnected", connectionInterface.getInterfaceName());
+        connectionInterface.detach();
+        Transport.getInstance().getInterfaces().remove(connectionInterface);
+        connectionInterface.getParentInterface().getClients().decrementAndGet();
+
+        super.channelInactive(ctx);
     }
 
     @Override

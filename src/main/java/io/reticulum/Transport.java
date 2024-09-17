@@ -26,6 +26,7 @@ import io.reticulum.transport.ReversEntry;
 import io.reticulum.transport.TransportState;
 import io.reticulum.transport.Tunnel;
 import io.reticulum.utils.IdentityUtils;
+import io.reticulum.utils.Scheduler;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.SneakyThrows;
@@ -145,6 +146,7 @@ import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.utils.IdentityUtils.getRandomHash;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.apache.commons.codec.binary.Hex.decodeHex;
 import static org.apache.commons.codec.binary.Hex.encodeHexString;
 import static org.apache.commons.collections4.CollectionUtils.isNotEmpty;
@@ -399,9 +401,7 @@ public final class Transport implements ExitHandler {
             }
         }
 
-        Executors
-                .newSingleThreadScheduledExecutor()
-                .scheduleWithFixedDelay(transport::jobs, 10, JOB_INTERVAL, TimeUnit.MILLISECONDS);
+        Scheduler.scheduleWithFixedDelaySafe(transport::jobs, JOB_INTERVAL, MILLISECONDS);
 
         log.info("Transport instance {} started", transport.identity.getHexHash());
 
@@ -1568,7 +1568,7 @@ public final class Transport implements ExitHandler {
         while (isFalse(jobsLock.tryLock())) {
             //sleep
             try {
-                TimeUnit.MILLISECONDS.sleep(5);
+                MILLISECONDS.sleep(5);
             } catch (InterruptedException e) {
                 log.debug("sleep interrupted: {}", e);
             }

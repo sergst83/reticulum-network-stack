@@ -21,7 +21,7 @@ import static io.reticulum.constant.PacketConstant.EXPL_LENGTH;
 import static io.reticulum.constant.PacketConstant.IMPL_LENGTH;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
-import static java.util.concurrent.Executors.defaultThreadFactory;
+import static java.util.concurrent.CompletableFuture.runAsync;
 import static org.apache.commons.lang3.ArrayUtils.subarray;
 
 @Data
@@ -187,9 +187,7 @@ public class PacketReceipt {
             concludedAt = Instant.now();
 
             if (nonNull(callbacks.getTimeout())) {
-                defaultThreadFactory()
-                        .newThread(() -> callbacks.getTimeout().accept(this))
-                        .start();
+                runAsync(() -> callbacks.getTimeout().accept(this));
             }
         }
     }

@@ -56,7 +56,6 @@ import java.util.function.Function;
 import static io.reticulum.constant.IdentityConstant.HASHLENGTH;
 import static io.reticulum.constant.IdentityConstant.KEYSIZE;
 import static io.reticulum.constant.IdentityConstant.SIGLENGTH;
-//import static io.reticulum.constant.IdentityConstant.CURVE;
 import static io.reticulum.constant.LinkConstant.ECPUBSIZE;
 import static io.reticulum.constant.LinkConstant.ESTABLISHMENT_TIMEOUT_PER_HOP;
 import static io.reticulum.constant.LinkConstant.KEEPALIVE;
@@ -108,6 +107,7 @@ import static java.math.BigInteger.ONE;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
+import static java.util.concurrent.CompletableFuture.runAsync;
 import static java.util.concurrent.Executors.defaultThreadFactory;
 import static org.apache.commons.lang3.ArrayUtils.getLength;
 import static org.apache.commons.lang3.ArrayUtils.subarray;
@@ -906,9 +906,7 @@ public class Link extends AbstractDestination {
                         var plainText = decrypt(packet.getData());
                         if (nonNull(plainText)) {
                             if (nonNull(callbacks.getPacket())) {
-                                defaultThreadFactory()
-                                        .newThread(() -> callbacks.getPacket().accept(plainText, packet))
-                                        .start();
+                                runAsync(() -> callbacks.getPacket().accept(plainText, packet));
                             }
                             if (destination.getProofStrategy() == PROVE_ALL) {
                                 packet.prove(null);
