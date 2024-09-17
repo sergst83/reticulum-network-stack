@@ -20,7 +20,7 @@ import static io.reticulum.link.RequestReceiptStatus.READY;
 import static io.reticulum.link.RequestReceiptStatus.RECEIVING;
 import static io.reticulum.link.RequestReceiptStatus.SENT;
 import static java.util.Objects.nonNull;
-import static java.util.concurrent.Executors.defaultThreadFactory;
+import static java.util.concurrent.CompletableFuture.runAsync;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
 /**
@@ -106,7 +106,7 @@ public class RequestReceipt {
             startedAt = Instant.now();
             status = DELIVERED;
             resourceResponseTimeout = Instant.now().plusMillis(timeout);
-            defaultThreadFactory().newThread(this::responseTimeoutJob).start();
+            runAsync(this::responseTimeoutJob);
         } else {
             log.debug("Sending request {}  as resource failed with status: {}", Hex.encodeHexString(requestId), resource.getStatus());
             status = FAILED;

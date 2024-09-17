@@ -42,6 +42,7 @@ import static java.math.BigInteger.ZERO;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static java.util.Objects.requireNonNullElse;
+import static java.util.concurrent.CompletableFuture.runAsync;
 import static java.util.stream.Collectors.toList;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
@@ -300,9 +301,7 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
                         log.trace("Releasing held announce packet {} from {}", selectedAnnouncePacket, this);
                         icHeldRelease.set(Instant.now().plusSeconds(icHeldReleaseInterval));
                         heldAnnounces.remove(Hex.encodeHexString(selectedAnnouncePacket.getDestinationHash()));
-                        Executors.defaultThreadFactory()
-                                .newThread(() -> Transport.getInstance().inbound(announcePacket.getRaw(), announcePacket.getReceivingInterface()))
-                                .start();
+                        runAsync(() -> Transport.getInstance().inbound(announcePacket.getRaw(), announcePacket.getReceivingInterface()));
                     }
                 }
             }

@@ -7,7 +7,6 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Objects;
@@ -18,7 +17,7 @@ import static io.reticulum.channel.MessageState.MSGSTATE_SENT;
 import static java.util.Comparator.comparingInt;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
-import static java.util.concurrent.Executors.defaultThreadFactory;
+import static java.util.concurrent.CompletableFuture.runAsync;
 import static java.util.stream.Collectors.collectingAndThen;
 import static java.util.stream.Collectors.toList;
 import static org.apache.commons.lang3.ArrayUtils.getLength;
@@ -122,7 +121,7 @@ public class Channel {
                     return;
                 }
                 log.debug("Message received: {}", message);
-                defaultThreadFactory().newThread(() -> runCallbacks(message)).start();
+                runAsync(() -> runCallbacks(message));
             }
         } catch (Exception e) {
             log.error("Channel: Error receiving data.", e);

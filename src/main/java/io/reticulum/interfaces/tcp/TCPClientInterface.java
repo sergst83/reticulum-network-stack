@@ -12,7 +12,6 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.reticulum.Transport;
 import io.reticulum.interfaces.AbstractConnectionInterface;
-import io.reticulum.interfaces.ConnectionInterface;
 import io.reticulum.interfaces.HDLC;
 import io.reticulum.interfaces.InterfaceMode;
 import io.reticulum.interfaces.KISS;
@@ -55,7 +54,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
     private volatile boolean neverConnected = true;
     private volatile boolean detached = false;
 
-    private ConnectionInterface parentInterface;
+    private TCPServerInterface parentInterface;
     @JsonProperty("kiss_framing")
     private boolean kissFraming = false;
     @JsonProperty("i2p_tunneled")
@@ -273,7 +272,8 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
                 log.error("Error while shutting down channel for {}", this, e);
             }
 
-            channelFuture = null;
+            this.channelFuture = null;
+            this.channel = null;
         }
     }
 
@@ -297,7 +297,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
         IN = false;
 
         if (nonNull(parentInterface)) {
-            ((AbstractConnectionInterface) parentInterface).getClients().decrementAndGet();
+            parentInterface.getClients().decrementAndGet();
         }
 
         if (Transport.getInstance().getInterfaces().contains(this)) {

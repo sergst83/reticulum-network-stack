@@ -19,8 +19,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static io.reticulum.constant.ReticulumConstant.CLEAN_CONSUMER;
@@ -33,6 +31,7 @@ import static io.reticulum.constant.ReticulumConstant.RESOURCE_CACHE;
 import static io.reticulum.identity.IdentityKnownDestination.loadKnownDestinations;
 import static io.reticulum.utils.CommonUtils.exit;
 import static io.reticulum.utils.CommonUtils.panic;
+import static io.reticulum.utils.Scheduler.scheduler;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 import static java.util.Objects.nonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -99,8 +98,6 @@ public class Reticulum implements ExitHandler {
     private final byte[] ifacSalt = IFAC_SALT;
     private final AtomicLong lastDataPersist = new AtomicLong(System.currentTimeMillis());
     private final AtomicLong lastCacheClean = new AtomicLong(0);
-
-    private static final ScheduledExecutorService scheduledExecutorService = Executors.newScheduledThreadPool(2);
 
     /**
      * Initialises and starts a Reticulum instance. This must be
@@ -326,7 +323,7 @@ public class Reticulum implements ExitHandler {
 
     private void startJobs() {
         var defaultDelaySec = 5;
-        scheduledExecutorService.scheduleAtFixedRate(
+        scheduler.scheduleAtFixedRate(
                 () -> {
                     cleanCaches();
                     lastCacheClean.set(System.currentTimeMillis());
@@ -334,7 +331,7 @@ public class Reticulum implements ExitHandler {
                 CLEAN_INTERVAL,
                 SECONDS
         );
-        scheduledExecutorService.scheduleAtFixedRate(() -> {
+        scheduler.scheduleAtFixedRate(() -> {
                     persistData();
                     lastDataPersist.set(System.currentTimeMillis());
                 },

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import inet.ipaddr.ipv6.IPv6Address;
 import io.reticulum.Transport;
 import io.reticulum.interfaces.AbstractConnectionInterface;
+import io.reticulum.utils.Scheduler;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -132,13 +133,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     public void init() {
         //работа с анонсами
         defaultThreadFactory.newThread(this::discoveryHandler).start();
-        scheduledThreadPool
-                .scheduleWithFixedDelay(
-                        this::peerAnnounce,
-                        (long) (announceInterval * 1.2),
-                        announceInterval,
-                        MILLISECONDS
-                );
+        Scheduler.scheduleWithFixedDelaySafe(this::peerAnnounce, (long) (announceInterval * 1.2), MILLISECONDS);
 
         //обычные данные
         var peeringWait = announceInterval * 1.2;
@@ -148,13 +143,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
         defaultThreadFactory.newThread(this::initNetworkInterfaceServer).start();
 
         //запускаем peerJob, которая проверяет пиров, от которых давно не было анонсов
-        scheduledThreadPool
-                .scheduleWithFixedDelay(
-                        this::peerJob,
-                        peerJobInterval,
-                        peerJobInterval,
-                        MILLISECONDS
-                );
+        Scheduler.scheduleWithFixedDelaySafe(this::peerJob, peerJobInterval, MILLISECONDS);
 
         online.set(true);
     }
