@@ -7,18 +7,21 @@ import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
 import static io.reticulum.constant.LinkConstant.MDU;
 
 import lombok.Getter;
+import lombok.NoArgsConstructor;
 
 @Getter
+@NoArgsConstructor
 public class StreamDataMessage extends MessageBase {
-    public static final int STREAM_ID_MAX = 0x3fff; // 16383
-    public static final int MAX_DATA_LEN = MDU - 2 - 6; // 2 for stream data message header, 6 for channel envelope
 
+    public static final Integer STREAM_ID_MAX = 0x3fff; // 16383
+    public static final Integer MAX_DATA_LEN = MDU - 2 - 6; // 2 for stream data message header, 6 for channel envelope
+    
     private Integer streamId;
     private boolean compressed;
     private byte[] data;
     private boolean eof;
 
-    public StreamDataMessage(Integer streamId, byte[] data, boolean eof, boolean compressed) {
+    public StreamDataMessage(Integer streamId, byte[] data, Boolean eof, Boolean compressed) {
         super();
         if (streamId != null && streamId > STREAM_ID_MAX) {
             throw new IllegalArgumentException("stream_id must be 0-16383");

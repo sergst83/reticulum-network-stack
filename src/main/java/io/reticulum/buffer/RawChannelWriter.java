@@ -32,12 +32,12 @@ public class RawChannelWriter extends OutputStream {
         this.channel = channel;
     }
 
-    //// TODO: how do we satisfy implementing this in a meaningful way
-    //@Override
-    //public void write(int b) {
+    // TODO: how to satisfy implement this in a meaningful way
+    @Override
+    public void write(int b) {
     //    byte[] bytes = {b};
     //    write(bytes, 0, bytes.length);
-    //}
+    }
 
     @Override
     public void write(byte[] b, int off, int len) throws IOException {
