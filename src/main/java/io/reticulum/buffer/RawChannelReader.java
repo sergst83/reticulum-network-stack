@@ -60,9 +60,7 @@ public class RawChannelReader extends InputStream {
                         eof = true;
                     }
                     
-                    Consumer<Integer> consumer = (Integer i) -> {
-                        // TODO: what is the equivalent of the contents of the call method?
-                    };
+                    //Consumer<Integer> consumer = (Integer i) -> {}
                     for (Consumer<Integer> listener : listeners) {
                         //new Thread(() -> listener.call(buffer.length)).start();
                         new Thread(() -> listener.accept(buffer.length)).start();
