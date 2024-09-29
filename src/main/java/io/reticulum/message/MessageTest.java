@@ -3,7 +3,9 @@ package io.reticulum.message;
 public class MessageTest extends MessageBase{
     @Override
     public Integer msgType() {
-        return 0xabcd;
+        //return 0xabcd;
+        MessageType testType = MessageType.TEST;
+        return testType.getMsgType();
     }
 
     @Override

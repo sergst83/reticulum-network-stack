@@ -9,11 +9,16 @@ import java.util.Arrays;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.zip.BZip2CompressorInputStream;
-import java.util.zip.BZip2CompressorOutputStream;
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream;
+import lombok.extern.slf4j.Slf4j;
 
-import io.reticulum.channel.message.MessageBase;
+import io.netty.channel.ChannelException;
+import io.reticulum.channel.Channel;
+import io.reticulum.message.MessageBase;
+import io.reticulum.message.StreamDataMessage;
 
+@Slf4j
 public class RawChannelWriter extends OutputStream {
     private static final int MAX_CHUNK_LEN = 1024 * 16;
     private static final int COMPRESSION_TRIES = 4;
@@ -26,6 +31,13 @@ public class RawChannelWriter extends OutputStream {
         this.streamId = streamId;
         this.channel = channel;
     }
+
+    //// TODO: how do we satisfy implementing this in a meaningful way
+    //@Override
+    //public void write(int b) {
+    //    byte[] bytes = {b};
+    //    write(bytes, 0, bytes.length);
+    //}
 
     @Override
     public void write(byte[] b, int off, int len) throws IOException {
@@ -63,10 +75,8 @@ public class RawChannelWriter extends OutputStream {
 
             StreamDataMessage message = new StreamDataMessage(streamId, chunk, eof, compSuccess);
             channel.send(message);
-        } catch (ChannelException cex) {
-            if (cex.getType() != Channel.CEType.ME_LINK_NOT_READY) {
-                throw cex;
-            }
+        } catch (IOException e) {
+            log.error("Channel: Error writing buffer.", e);
         }
     }
 
