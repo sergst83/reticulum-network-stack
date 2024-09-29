@@ -1,21 +1,21 @@
 package io.reticulum.buffer;
 
 import java.io.IOException;
-import java.io.InputStream;
+//import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.ArrayList;
-import java.util.List;
+//import java.util.ArrayList;
+//import java.util.List;
 import java.util.Arrays;
-import java.io.ByteArrayInputStream;
+//import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.util.concurrent.locks.ReentrantLock;
-import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
+//import java.util.concurrent.locks.ReentrantLock;
+//import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream;
 import lombok.extern.slf4j.Slf4j;
 
-import io.netty.channel.ChannelException;
+//import io.netty.channel.ChannelException;
 import io.reticulum.channel.Channel;
-import io.reticulum.message.MessageBase;
+//import io.reticulum.message.MessageBase;
 import io.reticulum.message.StreamDataMessage;
 
 @Slf4j
