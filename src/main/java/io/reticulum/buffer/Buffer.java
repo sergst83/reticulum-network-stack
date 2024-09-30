@@ -38,13 +38,13 @@ public class Buffer {
     }
 
     //// Note: We need an implementation of BufferedRWPair
-    //public static BufferedRWPair createBidirectionalBuffer(int receiveStreamId, int sendStreamId, Channel channel, Consumer<Integer> readyCallback) {
-    //    RawChannelReader reader = new RawChannelReader(receiveStreamId, channel);
-    //    if (readyCallback != null) {
-    //        reader.addReadyCallback(readyCallback);
-    //    }
-    //    RawChannelWriter writer = new RawChannelWriter(sendStreamId, channel);
-    //    return new BufferedRWPair(reader, writer);
-    //}
+    public static BufferedRWPair createBidirectionalBuffer(int receiveStreamId, int sendStreamId, Channel channel, Consumer<Integer> readyCallback) {
+        RawChannelReader reader = new RawChannelReader(receiveStreamId, channel);
+        if (readyCallback != null) {
+            reader.addReadyCallback(readyCallback);
+        }
+        RawChannelWriter writer = new RawChannelWriter(sendStreamId, channel);
+        return new BufferedRWPair(reader, writer);
+    }
 }
 

@@ -2,6 +2,7 @@ package io.reticulum.channel;
 
 import io.reticulum.link.Link;
 import io.reticulum.message.MessageBase;
+//import io.reticulum.message.MessageType;
 import io.reticulum.packet.Packet;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
@@ -12,6 +13,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
+//import java.util.HashMap;
 
 import static io.reticulum.channel.MessageState.MSGSTATE_DELIVERED;
 import static io.reticulum.channel.MessageState.MSGSTATE_SENT;
@@ -55,6 +57,7 @@ public class Channel {
     private final LinkedList<Envelope> txRing;
     private final LinkedList<Envelope> rxRing;
     private final List<MessageCallbackType> messageCallbacks;
+    //private final HashMap<MessageType, MessageBase> messageFactories;
     private int nextSequence;
     private final int maxTries;
 
@@ -63,6 +66,7 @@ public class Channel {
         this.txRing = new LinkedList<>();
         this.rxRing = new LinkedList<>();
         this.messageCallbacks = new ArrayList<>();
+        //this.messageFactories = new HashMap<>();
         this.nextSequence = 0;
         this.maxTries = 5;
     }
