@@ -37,7 +37,6 @@ public class Buffer {
         return new BufferedWriter(osw);
     }
 
-    //// Note: We need an implementation of BufferedRWPair
     public static BufferedRWPair createBidirectionalBuffer(int receiveStreamId, int sendStreamId, Channel channel, Consumer<Integer> readyCallback) {
         RawChannelReader reader = new RawChannelReader(receiveStreamId, channel);
         if (readyCallback != null) {
