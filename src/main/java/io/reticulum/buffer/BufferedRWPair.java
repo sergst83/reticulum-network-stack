@@ -14,8 +14,8 @@ public class BufferedRWPair {
         this.writer = writer;
     }
 
-    public int read() {
-        int result = -1;
+    public Integer read() {
+        Integer result = -1;
 
         try {
             result = reader.read();
@@ -27,6 +27,19 @@ public class BufferedRWPair {
 
     public void write(byte[] b, int off, int len) throws IOException {
         writer.write(b, off, len);
+    }
+
+    public void write(byte[] b) throws IOException {
+        write(b, 0, b.length);
+    }
+
+    public void close() {
+        reader.close();
+        try {
+            writer.close();
+        } catch (IOException e) {
+            log.error("Failde to close writer ", e);
+        }
     }
 
 }
