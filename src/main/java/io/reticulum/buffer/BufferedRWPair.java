@@ -20,17 +20,37 @@ public class BufferedRWPair {
         try {
             result = reader.read();
         } catch (IOException e) {
-            log.error("Failed to read from channel");
+            log.error("Failed to read from channel {}", e);
         }
         return result;
     }
 
-    public void write(byte[] b, int off, int len) throws IOException {
-        writer.write(b, off, len);
+    public byte[] read(Integer readyBytes) {
+        byte[] result = "".getBytes();
+
+        try {
+            result = reader.read(readyBytes);
+            return result;
+        } catch (IOException e) {
+            log.error("Failed to read from channel, {}", e);
+        }
+        return result;
     }
 
-    public void write(byte[] b) throws IOException {
-        write(b, 0, b.length);
+    public void write(byte[] b, int off, int len) {
+        try {
+            writer.write(b, off, len);
+        } catch (IOException e) {
+            log.error("Failed to write to channel {}", e);
+        }
+    }
+
+    public void write(byte[] b) {
+        try {
+            writer.write(b, 0, b.length);
+        } catch (IOException e) {
+            log.error("Failed to write to channel {}", e);
+        }
     }
 
     public void close() {

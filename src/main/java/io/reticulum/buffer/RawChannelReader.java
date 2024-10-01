@@ -91,6 +91,24 @@ public class RawChannelReader extends InputStream {
         }
     }
 
+    /**
+     * @param readyBytes
+     * @return
+     * @throws IOException
+     * 
+     * Read a certain number of bytes from a callback alerting to
+     * a specific number of bytes being ready to be read.
+     */
+    public byte[] read(Integer readyBytes) throws IOException {
+        lock.lock();
+        try {
+            byte[] result = Arrays.copyOfRange(buffer, 0, readyBytes);
+            return result;
+        } finally {
+            lock.unlock();
+        }
+    }
+
     public void close() {
         lock.lock();
         try {

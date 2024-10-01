@@ -22,19 +22,21 @@ import io.reticulum.channel.Channel;
 
 
 public class Buffer {
-    public static BufferedReader createReader(int streamId, Channel channel, Consumer<Integer> readyCallback) {
-        RawChannelReader rcr = new RawChannelReader(streamId, channel);
+    public static RawChannelReader createReader(int streamId, Channel channel, Consumer<Integer> readyCallback) {
+        RawChannelReader rawChannelReader = new RawChannelReader(streamId, channel);
         if (readyCallback != null) {
-            rcr.addReadyCallback(readyCallback);
+            rawChannelReader.addReadyCallback(readyCallback);
         }
-        InputStreamReader isr = new InputStreamReader(rcr);
-        return new BufferedReader(isr);
+        //InputStreamReader isr = new InputStreamReader(rawChannelReader);
+        //return new BufferedReader(isr);
+        return rawChannelReader;
     }
 
-    public static BufferedWriter createWriter(int streamId, Channel channel) {
-        RawChannelWriter rcw = new RawChannelWriter(streamId, channel);
-        OutputStreamWriter osw = new OutputStreamWriter(rcw);
-        return new BufferedWriter(osw);
+    public static RawChannelWriter createWriter(int streamId, Channel channel) {
+        RawChannelWriter rawChannelWriter = new RawChannelWriter(streamId, channel);
+        //OutputStreamWriter osw = new OutputStreamWriter(rawChannelWriter);
+        //return new BufferedWriter(osw);
+        return rawChannelWriter;
     }
 
     public static BufferedRWPair createBidirectionalBuffer(int receiveStreamId, int sendStreamId, Channel channel, Consumer<Integer> readyCallback) {
