@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.io.ByteArrayInputStream;
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
 
-import io.reticulum.message.MessageType;
 import static io.reticulum.constant.LinkConstant.MDU;
 
 import lombok.Getter;
@@ -21,9 +20,9 @@ public class StreamDataMessage extends MessageBase {
     public static final Integer MAX_DATA_LEN = MDU - 2 - 6; // 2 for stream data message header, 6 for channel envelope
     
     private Integer streamId;
-    private boolean compressed;
+    private boolean compressed = false;
     private byte[] data;
-    private boolean eof;
+    private boolean eof = false;
 
     public StreamDataMessage(Integer streamId, byte[] data, Boolean eof, Boolean compressed) {
         super();
@@ -38,10 +37,9 @@ public class StreamDataMessage extends MessageBase {
 
     @Override
     public Integer msgType() {
-        MessageType messageType = MessageType.STREAM_DATA;
-        log.info("message type: {} - {}", MessageType.STREAM_DATA, messageType.getMsgType());
-        return messageType.getMsgType();
-        //return MSGTYPE;
+        //MessageType messageType = MessageType.STREAM_DATA;
+        log.info("message type: {}", MSGTYPE);
+        return MSGTYPE;
         //return 0xff00;
     }
 
@@ -51,7 +49,7 @@ public class StreamDataMessage extends MessageBase {
 
     public byte[] pack() {
         if (streamId == null) {
-            throw new IllegalArgumentException("stream_id");
+            throw new IllegalArgumentException("stream_id must be 0-16383");
         }
 
         int headerVal = (0x3fff & streamId) | (eof ? 0x8000 : 0x0000) | (compressed ? 0x4000 : 0x0000);
