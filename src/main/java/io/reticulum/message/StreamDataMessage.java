@@ -4,15 +4,19 @@ import java.io.IOException;
 import java.io.ByteArrayInputStream;
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
 
+import io.reticulum.message.MessageType;
 import static io.reticulum.constant.LinkConstant.MDU;
 
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @Getter
 @NoArgsConstructor
 public class StreamDataMessage extends MessageBase {
 
+    public static final Integer MSGTYPE = MessageType.STREAM_DATA.getMsgType();
     public static final Integer STREAM_ID_MAX = 0x3fff; // 16383
     public static final Integer MAX_DATA_LEN = MDU - 2 - 6; // 2 for stream data message header, 6 for channel envelope
     
@@ -34,8 +38,11 @@ public class StreamDataMessage extends MessageBase {
 
     @Override
     public Integer msgType() {
-        MessageType streamType = MessageType.STREAM_DATA;
-        return streamType.getMsgType();
+        MessageType messageType = MessageType.STREAM_DATA;
+        log.info("message type: {} - {}", MessageType.STREAM_DATA, messageType.getMsgType());
+        return messageType.getMsgType();
+        //return MSGTYPE;
+        //return 0xff00;
     }
 
     public Boolean getEof() {

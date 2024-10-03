@@ -2,6 +2,7 @@ package io.reticulum.channel;
 
 import io.reticulum.link.Link;
 import io.reticulum.message.MessageBase;
+import io.reticulum.message.MessageType;
 import io.reticulum.packet.Packet;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
@@ -10,11 +11,13 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.HashMap;
 import java.util.Objects;
 import java.util.function.Function;
 
 import static io.reticulum.channel.MessageState.MSGSTATE_DELIVERED;
 import static io.reticulum.channel.MessageState.MSGSTATE_SENT;
+//import static io.reticulum.utils.IdentityUtils.truncatedHash;
 import static java.util.Comparator.comparingInt;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
@@ -55,6 +58,7 @@ public class Channel {
     private final LinkedList<Envelope> txRing;
     private final LinkedList<Envelope> rxRing;
     private final List<MessageCallbackType> messageCallbacks;
+    public final HashMap<Integer,MessageBase> messageFactories;
     private int nextSequence;
     private final int maxTries;
 
@@ -63,8 +67,25 @@ public class Channel {
         this.txRing = new LinkedList<>();
         this.rxRing = new LinkedList<>();
         this.messageCallbacks = new ArrayList<>();
+        this.messageFactories = new HashMap<>();
         this.nextSequence = 0;
         this.maxTries = 5;
+    }
+
+    /**
+     * Register a message class for reception over a Channel.
+     * Message classes must extend MessageBase.
+     * 
+     * @param messageClass
+     */
+    public void registerMessageType(MessageBase messageClass, Boolean isSystemType) throws RChannelException {
+        if (isNull(messageClass.msgType())) {
+            throw new RChannelException(RChannelExceptionType.ME_INVALID_MSG_TYPE, "{} has invalid msgType");
+        }
+        if ((messageClass.msgType() >= 0xf000) & isFalse(isSystemType)) {
+            throw new RChannelException(RChannelExceptionType.ME_INVALID_MSG_TYPE, "{} has system reserved message type"); 
+        }
+        this.messageFactories.putIfAbsent(messageClass.msgType(), messageClass);
     }
 
     /**
@@ -274,11 +295,18 @@ public class Channel {
             throw new RuntimeException("BlockingIOError");
         }
 
-        envelope.pack();
+        try {
+            envelope.pack();
+        } catch (RChannelException e) {
+            log.error("Error packing envelope", e);
+        }
         if (getLength(envelope.getRaw()) > outlet.getMdu()) {
             throw new IllegalStateException(
                     String.format("Packed message too big for packet %s > %s", getLength(envelope.getRaw()), outlet.getMdu())
             );
+            //throw new RChannelException(RChannelExceptionType.ME_TOO_BIG,
+            //    String.format("Packed message too big for packet %s > %s", getLength(envelope.getRaw()), outlet.getMdu())
+            //);
         }
         envelope.setPacket(outlet.send(envelope.getRaw()));
         envelope.setTries(envelope.getTries() + 1);

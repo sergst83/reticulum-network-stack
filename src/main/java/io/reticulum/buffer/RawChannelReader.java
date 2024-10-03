@@ -1,5 +1,6 @@
 package io.reticulum.buffer;
 
+//import java.io.CharConversionException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -8,17 +9,23 @@ import java.util.Arrays;
 import java.util.function.Consumer;
 import java.util.concurrent.locks.ReentrantLock;
 
+//import io.netty.channel.ChannelException;
 import io.reticulum.channel.Channel;
+//import io.reticulum.channel.RChannelException;
 import io.reticulum.message.MessageBase;
 import io.reticulum.message.StreamDataMessage;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 
+import lombok.extern.slf4j.Slf4j;;
+
+@Slf4j
 public class RawChannelReader extends InputStream {
     private final int streamId;
     private final Channel channel;
     private final ReentrantLock lock = new ReentrantLock();
     //private final List<Callable<Integer>> listeners = new ArrayList<>();
     private final List<Consumer<Integer>> listeners = new ArrayList<>();
+    private StreamDataMessage sdm = new StreamDataMessage();
     private byte[] buffer = new byte[0];
     private boolean eof = false;
 
@@ -26,6 +33,11 @@ public class RawChannelReader extends InputStream {
         this.streamId = streamId;
         this.channel = channel;
         //this.channel.register_message_type(StreamDataMessage.class, true);
+        try {
+            this.channel.registerMessageType(sdm, true);
+        } catch (Exception e) {
+            log.error("Failed to register message type: {}", e);
+        }
         this.channel.addMessageHandler(this::handleMessage);
     }
 
@@ -60,7 +72,7 @@ public class RawChannelReader extends InputStream {
                         eof = true;
                     }
                     
-                    //Consumer<Integer> consumer = (Integer i) -> {}
+                    //Consumer<Integer> consumer = (Integer i) -> {};
                     for (Consumer<Integer> listener : listeners) {
                         //new Thread(() -> listener.call(buffer.length)).start();
                         new Thread(() -> listener.accept(buffer.length)).start();

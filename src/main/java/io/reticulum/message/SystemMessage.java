@@ -3,9 +3,9 @@ package io.reticulum.message;
 public class SystemMessage extends MessageBase{
     @Override
     public Integer msgType() {
-        //return 0xf000;
-        MessageType systemType = MessageType.SYSTEM;
-        return systemType.getMsgType();
+        return 0xf000;
+        //MessageType systemType = MessageType.SYSTEM;
+        //return systemType.getMsgType();
     }
 
     @Override

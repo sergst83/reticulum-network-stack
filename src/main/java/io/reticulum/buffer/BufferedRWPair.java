@@ -58,7 +58,7 @@ public class BufferedRWPair {
         try {
             writer.close();
         } catch (IOException e) {
-            log.error("Failde to close writer ", e);
+            log.error("Failed to close writer ", e);
         }
     }
 

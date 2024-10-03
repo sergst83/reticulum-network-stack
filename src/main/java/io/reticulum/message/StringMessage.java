@@ -32,9 +32,9 @@ public class StringMessage extends MessageBase{
 
     @Override
     public Integer msgType() {
-        //return 0x0101;
-        MessageType stringType = MessageType.STRING;
-        return stringType.getMsgType();
+        return 0x0101;
+        //MessageType stringType = MessageType.STRING;
+        //return stringType.getMsgType();
     }
 
     @Override
