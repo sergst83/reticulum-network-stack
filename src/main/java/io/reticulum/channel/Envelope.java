@@ -10,7 +10,8 @@ import org.apache.commons.lang3.ArrayUtils;
 import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.util.UUID;
-import java.util.HashMap;
+//import java.util.HashMap;
+import java.util.Map;
 //import java.util.concurrent.CancellationException;
 
 import static io.reticulum.utils.IdentityUtils.concatArrays;
@@ -57,7 +58,7 @@ public class Envelope {
         this(outlet, message, null, sequence);
     }
 
-    public MessageBase unpack(HashMap<Integer,MessageBase> messageFactories) throws RChannelException {
+    public MessageBase unpack(Map<Integer,MessageBase> messageFactories) throws RChannelException {
         var buffer = ByteBuffer.wrap(ArrayUtils.subarray(this.raw, 0, 6));
         var msgType = (int) buffer.getShort(0);
         this.sequence = (int) buffer.getShort(2);

@@ -12,6 +12,7 @@ import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
 
@@ -74,7 +75,8 @@ public class Channel {
     private final LinkedList<Envelope> txRing;
     private final LinkedList<Envelope> rxRing;
     private final List<MessageCallbackType> messageCallbacks;
-    public final HashMap<Integer,MessageBase> messageFactories;
+    //public final HashMap<Integer,MessageBase> messageFactories;
+    public Map<Integer,MessageBase> messageFactories;
     private int nextSequence;
     private int nextRxSequence;
     private final int maxTries;
