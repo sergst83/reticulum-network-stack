@@ -20,9 +20,12 @@ import static java.util.Objects.nonNull;
  * An implementation of ChannelOutletBase for {@link Link}.
  * Allows {@link Channel} to send packets over an {@link Link} with
  * Packets.
+ * 
+ * Note: ChannelOutletBase in Python is marked as deprecated.
+ *       Therefore this class explicitly implements all methods.
  */
-@Slf4j
 @RequiredArgsConstructor
+@Slf4j
 public class LinkChannelOutlet {
 
     private final Link link;

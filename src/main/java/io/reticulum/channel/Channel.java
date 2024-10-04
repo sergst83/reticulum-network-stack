@@ -18,14 +18,30 @@ import java.util.function.Function;
 import static io.reticulum.channel.MessageState.MSGSTATE_DELIVERED;
 import static io.reticulum.channel.MessageState.MSGSTATE_SENT;
 //import static io.reticulum.utils.IdentityUtils.truncatedHash;
-import static java.util.Comparator.comparingInt;
+//import static java.util.Comparator.comparingInt;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static java.util.concurrent.Executors.defaultThreadFactory;
-import static java.util.stream.Collectors.collectingAndThen;
-import static java.util.stream.Collectors.toList;
+//import static java.util.stream.Collectors.collectingAndThen;
+//import static java.util.stream.Collectors.toList;
 import static org.apache.commons.lang3.ArrayUtils.getLength;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
+
+import static io.reticulum.constant.ChannelConstant.WINDOW_MIN;
+import static io.reticulum.constant.ChannelConstant.WINDOW_MIN_LIMIT_MEDIUM;
+import static io.reticulum.constant.ChannelConstant.WINDOW_MIN_LIMIT_FAST;
+import static io.reticulum.constant.ResourceConstant.FAST_RATE_THRESHOLD;
+import static io.reticulum.constant.ChannelConstant.WINDOW_MAX;
+import static io.reticulum.constant.ChannelConstant.WINDOW_MAX_FAST;
+import static io.reticulum.constant.ChannelConstant.WINDOW_MAX_MEDIUM;
+import static io.reticulum.constant.ChannelConstant.WINDOW_MAX_SLOW;
+import static io.reticulum.constant.ChannelConstant.RTT_FAST;
+import static io.reticulum.constant.ChannelConstant.RTT_MEDIUM;
+import static io.reticulum.constant.ChannelConstant.RTT_SLOW;
+//import static io.reticulum.constant.ChannelConstant.SEQ_MAX;
+import static io.reticulum.constant.ChannelConstant.SEQ_MODULUS;
+import static io.reticulum.constant.ChannelConstant.WINDOW;
+import static io.reticulum.constant.ChannelConstant.WINDOW_FLEXIBILITY;
 
 /**
  * Provides reliable delivery of messages over a link.
@@ -60,7 +76,14 @@ public class Channel {
     private final List<MessageCallbackType> messageCallbacks;
     public final HashMap<Integer,MessageBase> messageFactories;
     private int nextSequence;
+    private int nextRxSequence;
     private final int maxTries;
+    private int fastRateRounds;
+    private int mediumRateRounds;
+    private int window;
+    private int windowMax;
+    private int windowMin;
+    private final int windowFlexibility;
 
     public Channel(final LinkChannelOutlet linkChannelOutlet) {
         this.outlet = linkChannelOutlet;
@@ -69,7 +92,22 @@ public class Channel {
         this.messageCallbacks = new ArrayList<>();
         this.messageFactories = new HashMap<>();
         this.nextSequence = 0;
+        this.nextRxSequence = 0;
         this.maxTries = 5;
+        this.fastRateRounds = 0;
+        this.mediumRateRounds = 0;
+
+        if (linkChannelOutlet.rtt() > RTT_SLOW) {
+            this.window            = 1;
+            this.windowMax         = 1;
+            this.windowMin         = 1;
+            this.windowFlexibility = 1;
+        } else {
+            this.window = WINDOW;
+            this.windowMax = WINDOW_MAX_SLOW;
+            this.windowMin = WINDOW_MIN;
+            this.windowFlexibility = WINDOW_FLEXIBILITY;
+        }
     }
 
     /**
@@ -127,19 +165,20 @@ public class Channel {
     private synchronized boolean emplaceEnvelope(@NonNull final Envelope envelope, @NonNull final LinkedList<Envelope> ring) {
         var i = 0;
         for (Envelope existing : ring) {
+
+            if (existing.getSequence() == envelope.getSequence()) {
+                log.trace("Envelope: Emplacement of duplicate envelope sequence");
+                return false;
+            }
+            
             if (
                     existing.getSequence() > envelope.getSequence()
                             && isFalse(existing.getSequence() / 2 > envelope.getSequence()) //account for overflow
             ) {
                 ring.set(i, envelope);
 
+                envelope.setTracked(true);
                 return true;
-            }
-
-            if (existing.getSequence() == envelope.getSequence()) {
-                log.trace("Envelope: Emplacement of duplicate envelope sequence");
-
-                return false;
             }
             i++;
         }
@@ -147,44 +186,6 @@ public class Channel {
         ring.add(envelope);
 
         return true;
-    }
-
-    public void receive(byte[] raw) {
-        try {
-            var envelop = new Envelope(outlet, raw);
-            synchronized (this) {
-                var message = envelop.unpack();
-                var prevEnv = rxRing.getFirst();
-                if (nonNull(prevEnv) && envelop.getSequence() != (prevEnv.getSequence() + 1) % 0x10000) {
-                    log.debug("Channel: Out of order packet received");
-
-                    return;
-                }
-                var isNew = emplaceEnvelope(envelop, rxRing);
-                pruneRxRing();
-                if (isFalse(isNew)) {
-                    log.debug("Channel: Duplicate message received");
-
-                    return;
-                }
-                log.debug("Message received: {}", message);
-                defaultThreadFactory().newThread(() -> runCallbacks(message)).start();
-            }
-        } catch (Exception e) {
-            log.error("Channel: Error receiving data.", e);
-        }
-    }
-
-    private void pruneRxRing() {
-        // Implementation for fixed window = 1
-        var state = rxRing.stream()
-                .sorted(comparingInt(Envelope::getSequence).reversed())
-                .collect(collectingAndThen(toList(), list -> list.subList(1, list.size())));
-
-        for (Envelope env : state) {
-            env.setTracked(true);
-            rxRing.remove(env);
-        }
     }
 
     private synchronized void runCallbacks(MessageBase message) {
@@ -198,6 +199,78 @@ public class Channel {
             }
         }
     }
+
+    public void receive(byte[] raw) {
+        try {
+            var envelope = new Envelope(outlet, raw);
+            synchronized (this) {
+                var message = envelope.unpack(this.messageFactories);
+
+                //var prevEnv = rxRing.getFirst();
+                //if (nonNull(prevEnv) && envelope.getSequence() != (prevEnv.getSequence() + WINDOW_MAX) % SEQ_MODULUS) {
+                //    log.debug("Channel: Out of order packet received");
+                //    return;
+                //}
+                if (envelope.getSequence() < this.nextRxSequence) {
+                    var windowOverflow = (this.nextRxSequence + WINDOW_MAX) % SEQ_MODULUS;
+                    if (windowOverflow < this.nextRxSequence) {
+                        if (envelope.getSequence() > windowOverflow) {log.debug("Channel: Out of order packet received");
+                        return;
+                        }
+                    }
+                }
+
+                var isNew = emplaceEnvelope(envelope, rxRing);
+                //pruneRxRing();
+                if (isFalse(isNew)) {
+                    log.debug("Channel: Duplicate message received");
+                    return;
+                } else {
+                    var contiguous = new ArrayList<Envelope>();
+                    for (Envelope e : rxRing) {
+                        if (e.getSequence() == nextRxSequence) {
+                            contiguous.add(e);
+                            this.nextRxSequence = (nextRxSequence +1 ) % SEQ_MODULUS;
+                            if (this.nextRxSequence == 0) {
+                                for (Envelope rxEnvelope: this.rxRing) {
+                                    if (rxEnvelope.getSequence() == this.nextSequence) {
+                                        contiguous.add(rxEnvelope);
+                                        this.nextRxSequence = (this.nextRxSequence + 1) % SEQ_MODULUS;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    MessageBase m;
+                    for (Envelope e: contiguous) {
+                        if (isFalse(e.isUnpacked())) {
+                            m = e.unpack(this.messageFactories);
+                        } else {
+                            m = e.getMessage();
+                        }
+                        this.rxRing.remove(e);
+                        this.runCallbacks(m);
+                    }
+                }
+                log.debug("Message received: {}", message);
+                defaultThreadFactory().newThread(() -> runCallbacks(message)).start();
+            }
+        } catch (Exception e) {
+            log.error("Channel: Error receiving data.", e);
+        }
+    }
+
+    //private void pruneRxRing() {
+    //    // Implementation for fixed window = 1
+    //    var state = rxRing.stream()
+    //            .sorted(comparingInt(Envelope::getSequence).reversed())
+    //            .collect(collectingAndThen(toList(), list -> list.subList(1, list.size())));
+    //
+    //    for (Envelope env : state) {
+    //        env.setTracked(true);
+    //        rxRing.remove(env);
+    //    }
+    //}
 
     /**
      * Check if {@link Channel} is ready to send.
@@ -228,25 +301,71 @@ public class Channel {
     }
 
     private void packetTxOp(Packet packet, Function<Envelope, Boolean> op) {
-        var envelop = txRing.stream()
+        var envelope = txRing.stream()
                 .filter(e -> Arrays.equals(outlet.getPacketId(e.getPacket()), outlet.getPacketId(packet)))
                 .findFirst()
                 .orElse(null);
 
-        if (nonNull(envelop) && op.apply(envelop)) {
-            envelop.setTracked(true);
-            if (isFalse(txRing.remove(envelop))) {
-                log.debug("Channel: Envelope not found in TX ring");
+        synchronized(this) {
+            if (nonNull(envelope) && op.apply(envelope)) {
+                envelope.setTracked(false);
+
+                if (isFalse(txRing.remove(envelope))) {
+                    log.debug("Channel: Envelope not found in TX ring");
+                } else {
+                    if (this.window < this.windowMax) {
+                        this.window += 1;
+                        // TODO: Remove at some point
+                        //log.debug("Increased {} window to {}", this, this.window);
+                    }
+                    if (this.outlet.rtt() != 0) {
+                        if (this.outlet.rtt() > RTT_FAST) {
+                            this.fastRateRounds = 0;
+                            if (this.outlet.rtt() > RTT_MEDIUM) {
+                                this.mediumRateRounds = 0;
+                            } else {
+                                this.mediumRateRounds += 1;
+                                if ((this.windowMax < WINDOW_MAX_MEDIUM) && (this.mediumRateRounds == FAST_RATE_THRESHOLD)) {
+                                    this.windowMax = WINDOW_MAX_MEDIUM;
+                                    this.windowMin = WINDOW_MIN_LIMIT_MEDIUM;
+                                }
+                            }
+                        }
+                        else {
+                            this.fastRateRounds += 1;
+                            if ((this.windowMax < WINDOW_MAX_FAST) && (this.fastRateRounds == FAST_RATE_THRESHOLD)){
+                                this.windowMax = WINDOW_MAX_FAST;
+                                this.windowMin = WINDOW_MIN_LIMIT_FAST;
+                            }
+                        }
+                    } else {
+                        log.trace("Envelope not found in TX ring for {}", this);
+                    }
+                }
             }
         }
 
-        if (isNull(envelop)) {
-            log.trace("Channel: Spurious message received");
+        if (isNull(envelope)) {
+            log.trace("Channel: Spurious message received on {}", this);
         }
     }
 
     private void packetDelivered(Packet packet) {
         packetTxOp(packet, envelope -> true);
+    }
+
+    private void updatePacketTimeouts() {
+        for (Envelope e: this.txRing) {
+            var updatedTimeout = getPacketTimeoutTime(e.getTries());
+            var ep = e.getPacket();
+            var epr = ep.getReceipt();
+
+            if (nonNull(e.getPacket()) && (nonNull(epr) && nonNull(epr.getTimeout()))) {
+                if (updatedTimeout > epr.getTimeout()) {
+                    epr.setTimeout(updatedTimeout);
+                }
+            }
+        }
     }
 
     private long getPacketTimeoutTime(int tries) {
@@ -264,7 +383,17 @@ public class Channel {
             }
             envelope.setTries(envelope.getTries() + 1);
             outlet.resend(envelope.getPacket());
+            outlet.setPacketDeliveredCallback(envelope.getPacket(), this::packetDelivered);
             outlet.setPacketTimeoutCallback(envelope.getPacket(), this::packetTimeout, getPacketTimeoutTime(envelope.getTries()));
+            updatePacketTimeouts();
+
+            if (this.window > this.windowMin) {
+                this.window = this.window - 1;
+
+                if (this.windowMax > (this.windowMin + this.windowFlexibility)) {
+                    this.windowMax = this.windowMax - 1;
+                }
+            }
 
             return false;
         };
@@ -284,10 +413,11 @@ public class Channel {
         Envelope envelope;
         synchronized (this) {
             if (isFalse(isReadyToSend())) {
-                throw new IllegalStateException("Link is not ready");
+                //throw new IllegalStateException("Link is not ready");
+                //throw new RChannelException(RChannelExceptionType.ME_LINK_NOT_READY, "Link is not ready");
             }
             envelope = new Envelope(outlet, message, nextSequence);
-            nextSequence = (nextSequence + 1) % 0x10000;
+            nextSequence = (nextSequence + 1) % SEQ_MODULUS;
             emplaceEnvelope(envelope, txRing);
         }
 

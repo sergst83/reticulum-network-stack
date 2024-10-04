@@ -10,6 +10,7 @@ import org.apache.commons.lang3.ArrayUtils;
 import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.HashMap;
 //import java.util.concurrent.CancellationException;
 
 import static io.reticulum.utils.IdentityUtils.concatArrays;
@@ -56,19 +57,22 @@ public class Envelope {
         this(outlet, message, null, sequence);
     }
 
-    public MessageBase unpack() throws RChannelException {
+    public MessageBase unpack(HashMap<Integer,MessageBase> messageFactories) throws RChannelException {
         var buffer = ByteBuffer.wrap(ArrayUtils.subarray(this.raw, 0, 6));
         var msgType = (int) buffer.getShort(0);
-        log.info("buffer - {}, raw: {}, msgType: {}", buffer, ArrayUtils.subarray(this.raw,0,6), msgType );
-        if (isNull(message.msgType())) {
-            throw new RChannelException(RChannelExceptionType.ME_NOT_REGISTERED, "message lacks MSGTYPE");
-        }
         this.sequence = (int) buffer.getShort(2);
         var length = (int) buffer.getShort(4);
         var raw = ArrayUtils.subarray(this.raw, 6, this.raw.length);
+        MessageBase ctor = messageFactories.get(msgType);
+        log.info("buffer - {}, raw: {}, msgType: {}, ctor: {}", 
+            buffer, ArrayUtils.subarray(this.raw,0,6),
+            msgType, ctor );
+        if (isNull(ctor)) {
+            throw new RChannelException(RChannelExceptionType.ME_NOT_REGISTERED, "message lacks MSGTYPE");
+        }
         message = MessageFactory.getInstance(msgType);
         message.unpack(raw);
-        unpacked = true;
+        this.unpacked = true;
 
         return message;
     }
@@ -83,8 +87,8 @@ public class Envelope {
                 .putShort(message.msgType().shortValue())
                 .putShort(sequence.shortValue())
                 .putShort(Integer.valueOf(data.length).shortValue());
-        raw = concatArrays(buffer.array(), data);
-        packed = true;
+        this.raw = concatArrays(buffer.array(), data);
+        this.packed = true;
 
         return this.raw;
     }
