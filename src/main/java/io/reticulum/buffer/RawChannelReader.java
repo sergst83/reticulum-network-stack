@@ -15,6 +15,8 @@ import io.reticulum.channel.Channel;
 import io.reticulum.message.MessageBase;
 import io.reticulum.message.StreamDataMessage;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
+//import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream;
+//import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
 
 import lombok.extern.slf4j.Slf4j;;
 
