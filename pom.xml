@@ -141,6 +141,12 @@
             <version>5.10.0</version>
             <scope>test</scope>
         </dependency>
+        <!-- https://mvnrepository.com/artifact/com.clickhouse/org.apache.commons.compress -->
+        <dependency>
+            <groupId>com.clickhouse</groupId>
+            <artifactId>org.apache.commons.compress</artifactId>
+            <version>1.9.2</version>
+        </dependency>
     </dependencies>
 
     <build>
