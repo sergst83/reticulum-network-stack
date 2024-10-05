@@ -60,18 +60,19 @@ public class Envelope {
 
     public MessageBase unpack(Map<Integer,MessageBase> messageFactories) throws RChannelException {
         var buffer = ByteBuffer.wrap(ArrayUtils.subarray(this.raw, 0, 6));
-        var msgType = (int) buffer.getShort(0);
+        var msgType = (int) buffer.getShort(0);    // signed int
+        var msgTypeUnsigned = msgType & 0xffff;    // unsigned int
         this.sequence = (int) buffer.getShort(2);
         var length = (int) buffer.getShort(4);
         var raw = ArrayUtils.subarray(this.raw, 6, this.raw.length);
-        MessageBase ctor = messageFactories.get(msgType);
-        log.info("buffer - {}, raw: {}, msgType: {}, ctor: {}", 
+        MessageBase ctor = messageFactories.get(msgTypeUnsigned);
+        log.info("buffer - {}, raw: {}, msgType: {}, msgType (unsiged): {}, ctor: {}", 
             buffer, ArrayUtils.subarray(this.raw,0,6),
-            msgType, ctor );
+            msgType, msgTypeUnsigned, ctor );
         if (isNull(ctor)) {
             throw new RChannelException(RChannelExceptionType.ME_NOT_REGISTERED, "message lacks MSGTYPE");
         }
-        message = MessageFactory.getInstance(msgType);
+        message = MessageFactory.getInstance(msgTypeUnsigned);
         message.unpack(raw);
         this.unpacked = true;
 
@@ -83,6 +84,7 @@ public class Envelope {
             //throw new IllegalStateException("message has no type");
             throw new RChannelException(RChannelExceptionType.ME_NO_MSG_Type, "message has no type");
         }
+        log.info("epack - msgType: {}, shortValue: {}", message.msgType(), message.msgType().shortValue());
         var data = message.pack();
         var buffer = ByteBuffer.allocate(6)
                 .putShort(message.msgType().shortValue())

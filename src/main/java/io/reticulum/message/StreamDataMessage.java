@@ -3,6 +3,7 @@ package io.reticulum.message;
 import java.io.IOException;
 import java.io.ByteArrayInputStream;
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
+//import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream;
 
 import static io.reticulum.constant.LinkConstant.MDU;
 
@@ -37,8 +38,6 @@ public class StreamDataMessage extends MessageBase {
 
     @Override
     public Integer msgType() {
-        //MessageType messageType = MessageType.STREAM_DATA;
-        log.info("message type: {}", MSGTYPE);
         return MSGTYPE;
         //return 0xff00;
     }
@@ -70,10 +69,10 @@ public class StreamDataMessage extends MessageBase {
         data = new byte[raw.length - 2];
         System.arraycopy(raw, 2, data, 0, data.length);
 
-        if (compressed) {
+        if (this.compressed) {
             try {
                 BZip2CompressorInputStream bzip2InputStream = new BZip2CompressorInputStream(new ByteArrayInputStream(data));
-                data = bzip2InputStream.readAllBytes();
+                this.data = bzip2InputStream.readAllBytes();
                 bzip2InputStream.close();
             } catch (IOException e) {
                 e.printStackTrace();
