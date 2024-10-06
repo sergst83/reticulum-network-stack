@@ -15,6 +15,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
+import java.util.concurrent.locks.ReentrantLock;
 
 import static io.reticulum.channel.MessageState.MSGSTATE_DELIVERED;
 import static io.reticulum.channel.MessageState.MSGSTATE_SENT;
@@ -86,6 +87,7 @@ public class Channel {
     private int windowMax;
     private int windowMin;
     private final int windowFlexibility;
+    private final ReentrantLock lock = new ReentrantLock();
 
     public Channel(final LinkChannelOutlet linkChannelOutlet) {
         this.outlet = linkChannelOutlet;
@@ -119,13 +121,18 @@ public class Channel {
      * @param messageClass
      */
     public void registerMessageType(MessageBase messageClass, Boolean isSystemType) throws RChannelException {
-        if (isNull(messageClass.msgType())) {
-            throw new RChannelException(RChannelExceptionType.ME_INVALID_MSG_TYPE, "{} has invalid msgType");
+        lock.lock();
+        try {
+            if (isNull(messageClass.msgType())) {
+                throw new RChannelException(RChannelExceptionType.ME_INVALID_MSG_TYPE, "{} has invalid msgType");
+            }
+            if ((messageClass.msgType() >= 0xf000) & isFalse(isSystemType)) {
+                throw new RChannelException(RChannelExceptionType.ME_INVALID_MSG_TYPE, "{} has system reserved message type"); 
+            }
+            this.messageFactories.putIfAbsent(messageClass.msgType(), messageClass);
+        } finally {
+            lock.unlock();
         }
-        if ((messageClass.msgType() >= 0xf000) & isFalse(isSystemType)) {
-            throw new RChannelException(RChannelExceptionType.ME_INVALID_MSG_TYPE, "{} has system reserved message type"); 
-        }
-        this.messageFactories.putIfAbsent(messageClass.msgType(), messageClass);
     }
 
     /**
@@ -139,55 +146,80 @@ public class Channel {
      * @param callback Function to call
      */
     public synchronized void addMessageHandler(MessageCallbackType callback) {
-        if (isFalse(messageCallbacks.contains(callback))) {
-            messageCallbacks.add(callback);
+        lock.lock();
+        try {
+            if (isFalse(messageCallbacks.contains(callback))) {
+                messageCallbacks.add(callback);
+            }
+        } finally {
+            lock.unlock();
         }
     }
 
     public synchronized void removeMessageHandler(MessageCallbackType callback) {
-        messageCallbacks.remove(callback);
+        lock.lock();
+        try {
+            messageCallbacks.remove(callback);
+        } finally {
+            lock.unlock();
+        }
     }
 
     public synchronized void shutdown() {
-        messageCallbacks.clear();
-        clearRings();
+        lock.lock();
+        try {
+            messageCallbacks.clear();
+            clearRings();
+        } finally {
+            lock.unlock();
+        }
     }
 
     private void clearRings() {
-        for (Envelope envelope : txRing) {
-            if (nonNull(envelope.getPacket())) {
-                outlet.setPacketTimeoutCallback(envelope.getPacket(), null, null);
-                outlet.setPacketDeliveredCallback(envelope.getPacket(), null);
+        lock.lock();
+        try {
+            for (Envelope envelope : txRing) {
+                if (nonNull(envelope.getPacket())) {
+                    outlet.setPacketTimeoutCallback(envelope.getPacket(), null, null);
+                    outlet.setPacketDeliveredCallback(envelope.getPacket(), null);
+                }
+                txRing.clear();
+                rxRing.clear();
             }
-            txRing.clear();
-            rxRing.clear();
+        } finally {
+            lock.unlock();
         }
     }
 
     private synchronized boolean emplaceEnvelope(@NonNull final Envelope envelope, @NonNull final LinkedList<Envelope> ring) {
-        var i = 0;
-        for (Envelope existing : ring) {
+        lock.lock();
+        try {
+            var i = 0;
+            for (Envelope existing : ring) {
 
-            if (existing.getSequence() == envelope.getSequence()) {
-                log.trace("Envelope: Emplacement of duplicate envelope sequence");
-                return false;
-            }
+                if (existing.getSequence() == envelope.getSequence()) {
+                    log.trace("Envelope: Emplacement of duplicate envelope sequence");
+                    return false;
+                }
+
+                if (
+                        existing.getSequence() > envelope.getSequence()
+                                && isFalse(existing.getSequence() / 2 > envelope.getSequence()) //account for overflow
+                ) {
+                    ring.set(i, envelope);
             
-            if (
-                    existing.getSequence() > envelope.getSequence()
-                            && isFalse(existing.getSequence() / 2 > envelope.getSequence()) //account for overflow
-            ) {
-                ring.set(i, envelope);
-
-                envelope.setTracked(true);
-                return true;
+                    envelope.setTracked(true);
+                    return true;
+                }
+                i++;
             }
-            i++;
-        }
-        envelope.setTracked(true);
-        ring.add(envelope);
+            envelope.setTracked(true);
+            ring.add(envelope);
 
-        return true;
+            return true;
+        } finally {
+            lock.unlock();
+        }
     }
 
     private synchronized void runCallbacks(MessageBase message) {
@@ -239,13 +271,17 @@ public class Channel {
                     }
                     MessageBase m;
                     for (Envelope e: contiguous) {
+                        //log.info("envelope: {}, tries: {}", e, e.getTries());
                         if (isFalse(e.isUnpacked())) {
                             m = e.unpack(this.messageFactories);
                         } else {
                             m = e.getMessage();
                         }
                         this.rxRing.remove(e);
-                        this.runCallbacks(m);
+                        if (e.getRaw()[8] != 0) { // hack to avoid empty message callback
+                            this.runCallbacks(m);
+                        }
+                        //log.info("run callback for m: {}, msgType: {}", m.getClass(), m.msgType());
                     }
                 }
                 log.debug("Message received: {}", message);
@@ -267,7 +303,8 @@ public class Channel {
             return false;
         }
 
-        synchronized (this) {
+        lock.lock();
+        try {
             for (Envelope envelope : txRing) {
                 if (
                         Objects.equals(envelope.getOutlet(), outlet)
@@ -279,6 +316,8 @@ public class Channel {
                     return false;
                 }
             }
+        } finally {
+            lock.unlock();
         }
 
         return true;
@@ -290,7 +329,8 @@ public class Channel {
                 .findFirst()
                 .orElse(null);
 
-        synchronized(this) {
+        lock.lock();
+        try {
             if (nonNull(envelope) && op.apply(envelope)) {
                 envelope.setTracked(false);
 
@@ -325,6 +365,8 @@ public class Channel {
                     }
                 }
             }
+        } finally {
+            lock.unlock();
         }
 
         if (isNull(envelope)) {
@@ -393,7 +435,8 @@ public class Channel {
      */
     public Envelope send(MessageBase message) {
         Envelope envelope;
-        synchronized (this) {
+        lock.lock();
+        try {
             if (isFalse(isReadyToSend())) {
                 throw new IllegalStateException("Link is not ready");
                 //throw new RChannelException(RChannelExceptionType.ME_LINK_NOT_READY, "Link is not ready");
@@ -401,6 +444,8 @@ public class Channel {
             envelope = new Envelope(outlet, message, nextSequence);
             nextSequence = (nextSequence + 1) % SEQ_MODULUS;
             emplaceEnvelope(envelope, txRing);
+        } finally {
+            lock.unlock();
         }
 
         if (isNull(envelope)) {
