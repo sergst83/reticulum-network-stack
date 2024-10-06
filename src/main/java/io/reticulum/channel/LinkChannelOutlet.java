@@ -57,7 +57,7 @@ public class LinkChannelOutlet {
     }
 
     public boolean isUsable() {
-        return true; //had issues looking at Link.status
+        return true; // had issues looking at Link.status
     }
 
     public MessageState getPacketState(TPacket packet) {

@@ -1,6 +1,6 @@
 package io.reticulum.constant;
 
-import static io.reticulum.constant.ResourceConstant.WINDOW_MAX_FAST;
+//import static io.reticulum.constant.ResourceConstant.WINDOW_MAX_FAST;
 
 public class ChannelConstant {
     /**

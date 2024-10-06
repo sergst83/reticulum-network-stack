@@ -38,6 +38,14 @@ public class RawChannelWriter extends OutputStream {
     //    write(bytes, 0, bytes.length);
     }
 
+    public void write(byte[] b) {
+        try {
+            write(b, 0, b.length);
+        } catch (IOException e) {
+            log.error("Channel: Error writing buffer.", e);
+        }
+    }
+
     @Override
     public void write(byte[] b, int off, int len) throws IOException {
         try {
@@ -64,6 +72,7 @@ public class RawChannelWriter extends OutputStream {
                 } else {
                     compTry++;
                 }
+                //log.info("*** write - compTry", compTry);
             }
 
             if (compSuccess) {
@@ -77,6 +86,22 @@ public class RawChannelWriter extends OutputStream {
         } catch (IOException e) {
             log.error("Channel: Error writing buffer.", e);
         }
+    }
+
+    public void flush() throws IOException {
+        write(new byte[0], 0, 0);
+    }
+
+    public Boolean seekable() {
+        return false;
+    }
+
+    public Boolean readable() { 
+        return false;
+    }
+
+    public Boolean writable() {
+        return true;
     }
 
     public void close() throws IOException {

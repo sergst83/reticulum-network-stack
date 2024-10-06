@@ -53,6 +53,14 @@ public class BufferedRWPair {
         }
     }
 
+    public void flush() {
+        try {
+            writer.flush();
+        } catch (IOException e) {
+            log.error("Failed to flush and writer ", e);
+        }
+    }
+
     public void close() {
         reader.close();
         try {

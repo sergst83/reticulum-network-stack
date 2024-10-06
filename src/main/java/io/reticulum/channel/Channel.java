@@ -2,7 +2,7 @@ package io.reticulum.channel;
 
 import io.reticulum.link.Link;
 import io.reticulum.message.MessageBase;
-import io.reticulum.message.MessageType;
+//import io.reticulum.message.MessageType;
 import io.reticulum.packet.Packet;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
@@ -208,11 +208,6 @@ public class Channel {
             synchronized (this) {
                 var message = envelope.unpack(this.messageFactories);
 
-                //var prevEnv = rxRing.getFirst();
-                //if (nonNull(prevEnv) && envelope.getSequence() != (prevEnv.getSequence() + WINDOW_MAX) % SEQ_MODULUS) {
-                //    log.debug("Channel: Out of order packet received");
-                //    return;
-                //}
                 if (envelope.getSequence() < this.nextRxSequence) {
                     var windowOverflow = (this.nextRxSequence + WINDOW_MAX) % SEQ_MODULUS;
                     if (windowOverflow < this.nextRxSequence) {
@@ -223,7 +218,6 @@ public class Channel {
                 }
 
                 var isNew = emplaceEnvelope(envelope, rxRing);
-                //pruneRxRing();
                 if (isFalse(isNew)) {
                     log.debug("Channel: Duplicate message received");
                     return;
@@ -255,24 +249,12 @@ public class Channel {
                     }
                 }
                 log.debug("Message received: {}", message);
-                defaultThreadFactory().newThread(() -> runCallbacks(message)).start();
+                //defaultThreadFactory().newThread(() -> runCallbacks(message)).start();
             }
         } catch (Exception e) {
             log.error("Channel: Error receiving data.", e);
         }
     }
-
-    //private void pruneRxRing() {
-    //    // Implementation for fixed window = 1
-    //    var state = rxRing.stream()
-    //            .sorted(comparingInt(Envelope::getSequence).reversed())
-    //            .collect(collectingAndThen(toList(), list -> list.subList(1, list.size())));
-    //
-    //    for (Envelope env : state) {
-    //        env.setTracked(true);
-    //        rxRing.remove(env);
-    //    }
-    //}
 
     /**
      * Check if {@link Channel} is ready to send.
@@ -317,8 +299,6 @@ public class Channel {
                 } else {
                     if (this.window < this.windowMax) {
                         this.window += 1;
-                        // TODO: Remove at some point
-                        //log.debug("Increased {} window to {}", this, this.window);
                     }
                     if (this.outlet.rtt() != 0) {
                         if (this.outlet.rtt() > RTT_FAST) {
@@ -415,7 +395,7 @@ public class Channel {
         Envelope envelope;
         synchronized (this) {
             if (isFalse(isReadyToSend())) {
-                //throw new IllegalStateException("Link is not ready");
+                throw new IllegalStateException("Link is not ready");
                 //throw new RChannelException(RChannelExceptionType.ME_LINK_NOT_READY, "Link is not ready");
             }
             envelope = new Envelope(outlet, message, nextSequence);
