@@ -72,8 +72,8 @@ public class Envelope {
         if (isNull(ctor)) {
             throw new RChannelException(RChannelExceptionType.ME_NOT_REGISTERED, "message lacks MSGTYPE");
         }
-        //message = MessageFactory.getInstance(msgTypeUnsigned);
-        message = ctor;
+        message = MessageFactory.getInstance(msgTypeUnsigned);
+        //message = ctor;
         message.unpack(raw);
         this.unpacked = true;
 
