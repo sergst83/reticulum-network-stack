@@ -1,5 +1,7 @@
 package io.reticulum.buffer;
 
+import static java.util.Objects.nonNull;
+
 //import java.io.IOException;
 //import java.io.InputStream;
 //import java.io.InputStreamReader;
@@ -26,7 +28,7 @@ import lombok.extern.slf4j.Slf4j;
 public class Buffer {
     public static RawChannelReader createReader(int streamId, Channel channel, Consumer<Integer> readyCallback) {
         RawChannelReader rawChannelReader = new RawChannelReader(streamId, channel);
-        if (readyCallback != null) {
+        if (nonNull(readyCallback)) {
             rawChannelReader.addReadyCallback(readyCallback);
         }
         //InputStreamReader isr = new InputStreamReader(rawChannelReader);
@@ -43,7 +45,7 @@ public class Buffer {
 
     public static BufferedRWPair createBidirectionalBuffer(int receiveStreamId, int sendStreamId, Channel channel, Consumer<Integer> readyCallback) {
         RawChannelReader reader = new RawChannelReader(receiveStreamId, channel);
-        if (readyCallback != null) {
+        if (nonNull(readyCallback)) {
             log.info("adding reader readyCallback; {}", readyCallback);
             reader.addReadyCallback(readyCallback);
         }
