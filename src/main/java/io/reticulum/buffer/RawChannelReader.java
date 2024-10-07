@@ -43,7 +43,7 @@ public class RawChannelReader extends InputStream {
         } catch (Exception e) {
             log.error("Failed to register message type: {}", e);
         }
-        //this.channel.addMessageHandler(this::handleMessage);
+        this.channel.addMessageHandler(this::handleMessage);
     }
 
     public void addReadyCallback(Consumer<Integer> cb) {
