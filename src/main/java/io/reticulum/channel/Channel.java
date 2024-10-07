@@ -278,9 +278,9 @@ public class Channel {
                             m = e.getMessage();
                         }
                         this.rxRing.remove(e);
-                        if (e.getRaw()[8] != 0) { // hack to avoid empty message callback
-                            this.runCallbacks(m);
-                        }
+                        //if (e.getRaw()[8] != 0) { // hack to avoid empty message callback
+                        this.runCallbacks(m);
+                        //}
                         //log.info("run callback for m: {}, msgType: {}", m.getClass(), m.msgType());
                     }
                 }
