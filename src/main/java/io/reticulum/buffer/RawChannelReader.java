@@ -101,7 +101,7 @@ public class RawChannelReader extends InputStream {
             if (buffer.length > 0) {
                 int result = buffer[0];
                 buffer = Arrays.copyOfRange(buffer, 1, buffer.length);
-                flush();
+                //flush();
                 return result;
             }
             return -1;
@@ -122,7 +122,7 @@ public class RawChannelReader extends InputStream {
         lock.lock();
         try {
             byte[] result = Arrays.copyOfRange(buffer, 0, readyBytes);
-            flush();
+            //flush();
             return result;
         } finally {
             lock.unlock();
