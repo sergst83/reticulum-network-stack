@@ -20,7 +20,9 @@ import java.util.function.Consumer;
 //import io.reticulum.message.MessageBase;
 import io.reticulum.channel.Channel;
 
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 public class Buffer {
     public static RawChannelReader createReader(int streamId, Channel channel, Consumer<Integer> readyCallback) {
         RawChannelReader rawChannelReader = new RawChannelReader(streamId, channel);
@@ -41,9 +43,10 @@ public class Buffer {
 
     public static BufferedRWPair createBidirectionalBuffer(int receiveStreamId, int sendStreamId, Channel channel, Consumer<Integer> readyCallback) {
         RawChannelReader reader = new RawChannelReader(receiveStreamId, channel);
-        if (readyCallback != null) {
-            reader.addReadyCallback(readyCallback);
-        }
+        //if (readyCallback != null) {
+        //    log.info("adding reader readyCallback; {}", readyCallback);
+        //    reader.addReadyCallback(readyCallback);
+        //}
         RawChannelWriter writer = new RawChannelWriter(sendStreamId, channel);
         return new BufferedRWPair(reader, writer);
     }
