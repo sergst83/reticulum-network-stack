@@ -26,15 +26,18 @@ public class RawChannelReader extends InputStream {
     private final Channel channel;
     private final ReentrantLock lock = new ReentrantLock();
     //private final List<Callable<Integer>> listeners = new ArrayList<>();
-    private final List<Consumer<Integer>> listeners = new ArrayList<>();
+    private List<Consumer<Integer>> listeners;
     private StreamDataMessage sdm = new StreamDataMessage();
-    private byte[] buffer = new byte[0];
-    private boolean eof = false;
+    private byte[] buffer;
+    private boolean eof;
 
     public RawChannelReader(int streamId, Channel channel) {
         this.streamId = streamId;
         this.channel = channel;
-        //this.channel.register_message_type(StreamDataMessage.class, true);
+        this.buffer = new byte[0];
+        this.eof = false;
+        this.listeners = new ArrayList<>();
+        //this.channel.registerMessageType(StreamDataMessage, true);
         try {
             this.channel.registerMessageType(sdm, true);
         } catch (Exception e) {
@@ -46,6 +49,7 @@ public class RawChannelReader extends InputStream {
     public void addReadyCallback(Consumer<Integer> cb) {
         lock.lock();
         try {
+            log.info("adding readyCallback: {}", cb);
             listeners.add(cb);
         } finally {
             lock.unlock();
