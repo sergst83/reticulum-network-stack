@@ -54,6 +54,7 @@ public class BufferedRWPair {
     }
 
     public void flush() {
+        reader.flush();
         try {
             writer.flush();
         } catch (IOException e) {
