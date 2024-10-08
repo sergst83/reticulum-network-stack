@@ -129,9 +129,9 @@ public class RawChannelReader extends InputStream {
         }
     }
 
-    public void flush() {
-        this.buffer = new byte[0];
-    }
+    //public void flush() {
+    //    this.buffer = "".getBytes();
+    //}
 
     public Boolean seekable() {
         return false;
