@@ -89,7 +89,7 @@ public class RawChannelWriter extends OutputStream {
     }
 
     public void flush() throws IOException {
-        log.info("writer - flushing buffer");
+        log.debug("writer - flushing buffer");
         //write(new byte[0], 0, 0);
     }
 
