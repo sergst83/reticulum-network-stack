@@ -130,6 +130,7 @@ public class RawChannelReader extends InputStream {
     }
 
     public void flush() {
+        log.debug("reater - flushing buffer");
         this.buffer = new byte[0];
     }
 
