@@ -38,16 +38,19 @@ public class RawChannelWriter extends OutputStream {
     //    write(bytes, 0, bytes.length);
     }
 
-    public void write(byte[] b) {
-        try {
-            write(b, 0, b.length);
-        } catch (IOException e) {
-            log.error("Channel: Error writing buffer.", e);
-        }
+    public void write(byte[] b) throws IOException {
+        log.info("TRACE-1 - writing buffer: {}", b);
+        write(b, 0, b.length);
+        //try {
+        //    write(b, 0, b.length);
+        //} catch (IOException e) {
+        //    log.error("Channel: Error writing buffer.", e);
+        //}
     }
 
     @Override
     public void write(byte[] b, int off, int len) throws IOException {
+        log.info("TRACE-2 - writing buffer: {}", b);
         try {
             int compTries = COMPRESSION_TRIES;
             int compTry = 1;
@@ -74,6 +77,7 @@ public class RawChannelWriter extends OutputStream {
                 }
                 //log.info("*** write - compTry", compTry);
             }
+            log.info("*** write - compTry {}, compressedChunk: {}", compTry, compressedChunk);
 
             if (compSuccess) {
                 chunk = compressedChunk;
@@ -82,6 +86,7 @@ public class RawChannelWriter extends OutputStream {
             }
 
             StreamDataMessage message = new StreamDataMessage(streamId, chunk, eof, compSuccess);
+            //log.info("StreamDataMessage: {}", message);
             channel.send(message);
         } catch (IOException e) {
             log.error("Channel: Error writing buffer.", e);
@@ -89,7 +94,7 @@ public class RawChannelWriter extends OutputStream {
     }
 
     public void flush() throws IOException {
-        log.debug("writer - flushing buffer");
+        log.debug("writer - flushing buffer (currenty doesn't do anything)");
         //write(new byte[0], 0, 0);
     }
 
