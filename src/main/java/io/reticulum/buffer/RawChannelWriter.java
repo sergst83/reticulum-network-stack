@@ -39,7 +39,7 @@ public class RawChannelWriter extends OutputStream {
     }
 
     public void write(byte[] b) throws IOException {
-        log.info("TRACE-1 - writing buffer: {}", b);
+        //log.info("TRACE-1 - writing buffer: {}", b);
         write(b, 0, b.length);
         //try {
         //    write(b, 0, b.length);
@@ -50,7 +50,7 @@ public class RawChannelWriter extends OutputStream {
 
     @Override
     public void write(byte[] b, int off, int len) throws IOException {
-        log.info("TRACE-2 - writing buffer: {}", b);
+        //log.info("TRACE-2 - writing buffer: {}", b);
         try {
             int compTries = COMPRESSION_TRIES;
             int compTry = 1;
@@ -77,7 +77,7 @@ public class RawChannelWriter extends OutputStream {
                 }
                 //log.info("*** write - compTry", compTry);
             }
-            log.info("*** write - compTry {}, compressedChunk: {}", compTry, compressedChunk);
+            //log.info("*** write - compTry {}, compressedChunk: {}", compTry, compressedChunk);
 
             if (compSuccess) {
                 chunk = compressedChunk;
