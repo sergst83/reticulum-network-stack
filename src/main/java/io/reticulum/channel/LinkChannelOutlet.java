@@ -30,8 +30,15 @@ public class LinkChannelOutlet {
 
     private final Link link;
 
+    //public LinkChannelOutlet (Link link) {
+    //    this.link = link;
+    //}
+
     public Packet send(byte[] raw) {
         var packet = new Packet(link, raw, CHANNEL);
+        log.info("xxx - outlet - packet: {}", packet);
+        log.info("yyy - outlet - link: {}", link);
+        log.info("zzz - outlet - link status: {}", link.getStatus());
         if (link.getStatus() == LinkStatus.ACTIVE) {
             packet.send();
         }
