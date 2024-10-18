@@ -46,7 +46,7 @@ public class Buffer {
     public static BufferedRWPair createBidirectionalBuffer(int receiveStreamId, int sendStreamId, Channel channel, Consumer<Integer> readyCallback) {
         RawChannelReader reader = new RawChannelReader(receiveStreamId, channel);
         if (nonNull(readyCallback)) {
-            log.info("adding reader readyCallback; {}", readyCallback);
+            log.debug("adding reader readyCallback; {}", readyCallback);
             reader.addReadyCallback(readyCallback);
         }
         RawChannelWriter writer = new RawChannelWriter(sendStreamId, channel);

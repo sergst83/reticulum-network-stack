@@ -270,19 +270,14 @@ public class Channel {
                         }
                     }
                     MessageBase m;
-                    //log.info("envelopes (num: {}): {}", contiguous.size(), contiguous);
                     for (Envelope e: contiguous) {
-                        //log.info("envelope: {}, tries: {}", e, e.getTries());
                         if (isFalse(e.isUnpacked())) {
                             m = e.unpack(this.messageFactories);
                         } else {
                             m = e.getMessage();
                         }
                         this.rxRing.remove(e);
-                        //if (e.getRaw()[8] != 0) { // hack to avoid empty message callback
                         this.runCallbacks(m);
-                        //}
-                        //log.info("run callback for m: {}, msgType: {}", m.getClass(), m.msgType());
                     }
                 }
                 log.debug("Message received: {}", message);
@@ -466,7 +461,6 @@ public class Channel {
             //    String.format("Packed message too big for packet %s > %s", getLength(envelope.getRaw()), outlet.getMdu())
             //);
         }
-        //log.info("send - envelope: {}, outlet: {}", envelope, outlet);
         envelope.setPacket(outlet.send(envelope.getRaw()));
         envelope.setTries(envelope.getTries() + 1);
         outlet.setPacketDeliveredCallback(envelope.getPacket(), this::packetDelivered);

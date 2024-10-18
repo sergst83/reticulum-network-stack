@@ -1,6 +1,5 @@
 package io.reticulum.buffer;
 
-//import java.io.CharConversionException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -15,8 +14,6 @@ import io.reticulum.channel.Channel;
 import io.reticulum.message.MessageBase;
 import io.reticulum.message.StreamDataMessage;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
-//import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream;
-//import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
 
 import lombok.extern.slf4j.Slf4j;;
 
@@ -25,7 +22,6 @@ public class RawChannelReader extends InputStream {
     private final int streamId;
     private final Channel channel;
     private final ReentrantLock lock = new ReentrantLock();
-    //private final List<Callable<Integer>> listeners = new ArrayList<>();
     private List<Consumer<Integer>> listeners;
     private StreamDataMessage sdm = new StreamDataMessage();
     private byte[] buffer;
@@ -37,7 +33,6 @@ public class RawChannelReader extends InputStream {
         this.buffer = new byte[0];
         this.eof = false;
         this.listeners = new ArrayList<>();
-        //this.channel.registerMessageType(StreamDataMessage, true);
         try {
             this.channel.registerMessageType(sdm, true);
         } catch (Exception e) {
@@ -49,7 +44,7 @@ public class RawChannelReader extends InputStream {
     public void addReadyCallback(Consumer<Integer> cb) {
         lock.lock();
         try {
-            log.info("adding readyCallback: {}", cb);
+            log.debug("adding readyCallback: {}", cb);
             listeners.add(cb);
         } finally {
             lock.unlock();
@@ -78,7 +73,6 @@ public class RawChannelReader extends InputStream {
                         eof = true;
                     }
                     
-                    //Consumer<Integer> consumer = (Integer i) -> {};
                     for (Consumer<Integer> listener : listeners) {
                         //new Thread(() -> listener.call(buffer.length)).start();
                         new Thread(() -> listener.accept(buffer.length)).start();
@@ -101,7 +95,6 @@ public class RawChannelReader extends InputStream {
             if (buffer.length > 0) {
                 int result = buffer[0];
                 buffer = Arrays.copyOfRange(buffer, 1, buffer.length);
-                //flush();
                 return result;
             }
             return -1;
@@ -122,7 +115,6 @@ public class RawChannelReader extends InputStream {
         lock.lock();
         try {
             byte[] result = Arrays.copyOfRange(buffer, 0, readyBytes);
-            //flush();
             return result;
         } finally {
             lock.unlock();

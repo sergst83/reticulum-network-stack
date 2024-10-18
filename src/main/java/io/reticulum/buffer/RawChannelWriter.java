@@ -75,9 +75,7 @@ public class RawChannelWriter extends OutputStream {
                 } else {
                     compTry++;
                 }
-                //log.info("*** write - compTry", compTry);
             }
-            //log.info("*** write - compTry {}, compressedChunk: {}", compTry, compressedChunk);
 
             if (compSuccess) {
                 chunk = compressedChunk;
@@ -86,7 +84,6 @@ public class RawChannelWriter extends OutputStream {
             }
 
             StreamDataMessage message = new StreamDataMessage(streamId, chunk, eof, compSuccess);
-            //log.info("StreamDataMessage: {}", message);
             channel.send(message);
         } catch (IOException e) {
             log.error("Channel: Error writing buffer.", e);

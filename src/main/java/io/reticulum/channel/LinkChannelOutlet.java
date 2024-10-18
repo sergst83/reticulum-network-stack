@@ -36,10 +36,11 @@ public class LinkChannelOutlet {
 
     public Packet send(byte[] raw) {
         var packet = new Packet(link, raw, CHANNEL);
-        log.info("xxx - outlet - packet: {}", packet);
-        log.info("yyy - outlet - link: {}", link);
-        log.info("zzz - outlet - link status: {}", link.getStatus());
-        if (link.getStatus() == LinkStatus.ACTIVE) {
+        // TODO: activate status check once non-initiator is ACTIVE
+        //       Link bug: status is HANDSHAKE, should be ACTIVE
+        //log.info("zzz - outlet - link status: {}", link.getStatus());
+        //if (link.getStatus() == LinkStatus.ACTIVE) {
+        if (link.getStatus() != LinkStatus.CLOSED) {
             packet.send();
         }
 
