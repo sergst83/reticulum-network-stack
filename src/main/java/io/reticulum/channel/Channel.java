@@ -2,48 +2,41 @@ package io.reticulum.channel;
 
 import io.reticulum.link.Link;
 import io.reticulum.message.MessageBase;
-//import io.reticulum.message.MessageType;
 import io.reticulum.packet.Packet;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedList;
 import java.util.List;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.function.Function;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Function;
 
 import static io.reticulum.channel.MessageState.MSGSTATE_DELIVERED;
 import static io.reticulum.channel.MessageState.MSGSTATE_SENT;
-//import static io.reticulum.utils.IdentityUtils.truncatedHash;
-//import static java.util.Comparator.comparingInt;
-import static java.util.Objects.isNull;
-import static java.util.Objects.nonNull;
-import static java.util.concurrent.Executors.defaultThreadFactory;
-//import static java.util.stream.Collectors.collectingAndThen;
-//import static java.util.stream.Collectors.toList;
-import static org.apache.commons.lang3.ArrayUtils.getLength;
-import static org.apache.commons.lang3.BooleanUtils.isFalse;
-
-import static io.reticulum.constant.ChannelConstant.WINDOW_MIN;
-import static io.reticulum.constant.ChannelConstant.WINDOW_MIN_LIMIT_MEDIUM;
-import static io.reticulum.constant.ChannelConstant.WINDOW_MIN_LIMIT_FAST;
-import static io.reticulum.constant.ResourceConstant.FAST_RATE_THRESHOLD;
+import static io.reticulum.constant.ChannelConstant.RTT_FAST;
+import static io.reticulum.constant.ChannelConstant.RTT_MEDIUM;
+import static io.reticulum.constant.ChannelConstant.RTT_SLOW;
+import static io.reticulum.constant.ChannelConstant.SEQ_MODULUS;
+import static io.reticulum.constant.ChannelConstant.WINDOW;
+import static io.reticulum.constant.ChannelConstant.WINDOW_FLEXIBILITY;
 import static io.reticulum.constant.ChannelConstant.WINDOW_MAX;
 import static io.reticulum.constant.ChannelConstant.WINDOW_MAX_FAST;
 import static io.reticulum.constant.ChannelConstant.WINDOW_MAX_MEDIUM;
 import static io.reticulum.constant.ChannelConstant.WINDOW_MAX_SLOW;
-import static io.reticulum.constant.ChannelConstant.RTT_FAST;
-import static io.reticulum.constant.ChannelConstant.RTT_MEDIUM;
-import static io.reticulum.constant.ChannelConstant.RTT_SLOW;
-//import static io.reticulum.constant.ChannelConstant.SEQ_MAX;
-import static io.reticulum.constant.ChannelConstant.SEQ_MODULUS;
-import static io.reticulum.constant.ChannelConstant.WINDOW;
-import static io.reticulum.constant.ChannelConstant.WINDOW_FLEXIBILITY;
+import static io.reticulum.constant.ChannelConstant.WINDOW_MIN;
+import static io.reticulum.constant.ChannelConstant.WINDOW_MIN_LIMIT_FAST;
+import static io.reticulum.constant.ChannelConstant.WINDOW_MIN_LIMIT_MEDIUM;
+import static io.reticulum.constant.ResourceConstant.FAST_RATE_THRESHOLD;
+import static java.util.Objects.isNull;
+import static java.util.Objects.nonNull;
+import static org.apache.commons.lang3.ArrayUtils.getLength;
+import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
 /**
  * Provides reliable delivery of messages over a link.
@@ -72,44 +65,46 @@ import static io.reticulum.constant.ChannelConstant.WINDOW_FLEXIBILITY;
  */
 @Slf4j
 public class Channel {
+    private final ReentrantLock lock = new ReentrantLock();
+
     private final LinkChannelOutlet outlet;
-    private final LinkedList<Envelope> txRing;
-    private final LinkedList<Envelope> rxRing;
+    private final List<Envelope> txRing;
+    private final List<Envelope> rxRing;
     private final List<MessageCallbackType> messageCallbacks;
     //public final HashMap<Integer,MessageBase> messageFactories;
-    public Map<Integer,MessageBase> messageFactories;
-    private int nextSequence;
-    private int nextRxSequence;
-    private final int maxTries;
-    private int fastRateRounds;
-    private int mediumRateRounds;
-    private int window;
-    private int windowMax;
-    private int windowMin;
+    public final Map<Integer, MessageBase> messageFactories;
     private final int windowFlexibility;
-    private final ReentrantLock lock = new ReentrantLock();
+    private final int maxTries;
+
+    private final AtomicInteger nextSequence;
+    private final AtomicInteger nextRxSequence;
+    private final AtomicInteger fastRateRounds;
+    private final AtomicInteger mediumRateRounds;
+    private final AtomicInteger window;
+    private final AtomicInteger windowMax;
+    private final AtomicInteger windowMin;
 
     public Channel(final LinkChannelOutlet linkChannelOutlet) {
         this.outlet = linkChannelOutlet;
-        this.txRing = new LinkedList<>();
-        this.rxRing = new LinkedList<>();
-        this.messageCallbacks = new ArrayList<>();
-        this.messageFactories = new HashMap<>();
-        this.nextSequence = 0;
-        this.nextRxSequence = 0;
+        this.txRing = new CopyOnWriteArrayList<>();
+        this.rxRing = new CopyOnWriteArrayList<>();
+        this.messageCallbacks = new CopyOnWriteArrayList<>();
+        this.messageFactories = new ConcurrentHashMap<>();
+        this.nextSequence = new AtomicInteger(0);
+        this.nextRxSequence = new AtomicInteger(0);
         this.maxTries = 5;
-        this.fastRateRounds = 0;
-        this.mediumRateRounds = 0;
+        this.fastRateRounds = new AtomicInteger(0);
+        this.mediumRateRounds = new AtomicInteger(0);
 
         if (linkChannelOutlet.rtt() > RTT_SLOW) {
-            this.window            = 1;
-            this.windowMax         = 1;
-            this.windowMin         = 1;
+            this.window = new AtomicInteger(1);
+            this.windowMax = new AtomicInteger(1);
+            this.windowMin = new AtomicInteger(1);
             this.windowFlexibility = 1;
         } else {
-            this.window = WINDOW;
-            this.windowMax = WINDOW_MAX_SLOW;
-            this.windowMin = WINDOW_MIN;
+            this.window = new AtomicInteger(WINDOW);
+            this.windowMax = new AtomicInteger(WINDOW_MAX_SLOW);
+            this.windowMin = new AtomicInteger(WINDOW_MIN);
             this.windowFlexibility = WINDOW_FLEXIBILITY;
         }
     }
@@ -117,7 +112,7 @@ public class Channel {
     /**
      * Register a message class for reception over a Channel.
      * Message classes must extend MessageBase.
-     * 
+     *
      * @param messageClass
      */
     public void registerMessageType(MessageBase messageClass, Boolean isSystemType) throws RChannelException {
@@ -127,7 +122,7 @@ public class Channel {
                 throw new RChannelException(RChannelExceptionType.ME_INVALID_MSG_TYPE, "{} has invalid msgType");
             }
             if ((messageClass.msgType() >= 0xf000) & isFalse(isSystemType)) {
-                throw new RChannelException(RChannelExceptionType.ME_INVALID_MSG_TYPE, "{} has system reserved message type"); 
+                throw new RChannelException(RChannelExceptionType.ME_INVALID_MSG_TYPE, "{} has system reserved message type");
             }
             this.messageFactories.putIfAbsent(messageClass.msgType(), messageClass);
         } finally {
@@ -191,13 +186,13 @@ public class Channel {
         }
     }
 
-    private synchronized boolean emplaceEnvelope(@NonNull final Envelope envelope, @NonNull final LinkedList<Envelope> ring) {
+    private boolean emplaceEnvelope(@NonNull final Envelope envelope, @NonNull final List<Envelope> ring) {
         lock.lock();
         try {
             var i = 0;
             for (Envelope existing : ring) {
 
-                if (existing.getSequence() == envelope.getSequence()) {
+                if (Objects.equals(existing.getSequence(), envelope.getSequence())) {
                     log.trace("Envelope: Emplacement of duplicate envelope sequence");
                     return false;
                 }
@@ -207,7 +202,7 @@ public class Channel {
                                 && isFalse(existing.getSequence() / 2 > envelope.getSequence()) //account for overflow
                 ) {
                     ring.set(i, envelope);
-            
+
                     envelope.setTracked(true);
                     return true;
                 }
@@ -235,56 +230,58 @@ public class Channel {
     }
 
     public void receive(byte[] raw) {
+        lock.lock();
         try {
             var envelope = new Envelope(outlet, raw);
-            synchronized (this) {
-                var message = envelope.unpack(this.messageFactories);
+            var message = envelope.unpack(this.messageFactories);
 
-                if (envelope.getSequence() < this.nextRxSequence) {
-                    var windowOverflow = (this.nextRxSequence + WINDOW_MAX) % SEQ_MODULUS;
-                    if (windowOverflow < this.nextRxSequence) {
-                        if (envelope.getSequence() > windowOverflow) {log.debug("Channel: Out of order packet received");
+            if (envelope.getSequence() < nextRxSequence.get()) {
+                var windowOverflow = (nextRxSequence.get() + WINDOW_MAX) % SEQ_MODULUS;
+                if (windowOverflow < nextRxSequence.get()) {
+                    if (envelope.getSequence() > windowOverflow) {
+                        log.debug("Channel: Out of order packet received");
                         return;
-                        }
                     }
                 }
+            }
 
-                var isNew = emplaceEnvelope(envelope, rxRing);
-                if (isFalse(isNew)) {
-                    log.debug("Channel: Duplicate message received");
-                    return;
-                } else {
-                    var contiguous = new ArrayList<Envelope>();
-                    for (Envelope e : rxRing) {
-                        if (e.getSequence() == nextRxSequence) {
-                            contiguous.add(e);
-                            this.nextRxSequence = (nextRxSequence +1 ) % SEQ_MODULUS;
-                            if (this.nextRxSequence == 0) {
-                                for (Envelope rxEnvelope: this.rxRing) {
-                                    if (rxEnvelope.getSequence() == this.nextSequence) {
-                                        contiguous.add(rxEnvelope);
-                                        this.nextRxSequence = (this.nextRxSequence + 1) % SEQ_MODULUS;
-                                    }
+            var isNew = emplaceEnvelope(envelope, rxRing);
+            if (isFalse(isNew)) {
+                log.debug("Channel: Duplicate message received");
+                return;
+            } else {
+                var contiguous = new ArrayList<Envelope>();
+                for (Envelope e : rxRing) {
+                    if (e.getSequence() == nextRxSequence.get()) {
+                        contiguous.add(e);
+                        nextRxSequence.set(nextRxSequence.incrementAndGet() % SEQ_MODULUS);
+                        if (nextRxSequence.get() == 0) {
+                            for (Envelope rxEnvelope : rxRing) {
+                                if (rxEnvelope.getSequence() == nextSequence.get()) {
+                                    contiguous.add(rxEnvelope);
+                                    nextRxSequence.set(nextRxSequence.incrementAndGet() % SEQ_MODULUS);
                                 }
                             }
                         }
                     }
-                    MessageBase m;
-                    for (Envelope e: contiguous) {
-                        if (isFalse(e.isUnpacked())) {
-                            m = e.unpack(this.messageFactories);
-                        } else {
-                            m = e.getMessage();
-                        }
-                        this.rxRing.remove(e);
-                        this.runCallbacks(m);
-                    }
                 }
-                log.debug("Message received: {}", message);
-                //defaultThreadFactory().newThread(() -> runCallbacks(message)).start();
+                MessageBase m;
+                for (Envelope e : contiguous) {
+                    if (isFalse(e.isUnpacked())) {
+                        m = e.unpack(this.messageFactories);
+                    } else {
+                        m = e.getMessage();
+                    }
+                    this.rxRing.remove(e);
+                    this.runCallbacks(m);
+                }
             }
+            log.debug("Message received: {}", message);
+            //defaultThreadFactory().newThread(() -> runCallbacks(message)).start();
         } catch (Exception e) {
             log.error("Channel: Error receiving data.", e);
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -304,10 +301,7 @@ public class Channel {
             for (Envelope envelope : txRing) {
                 if (
                         Objects.equals(envelope.getOutlet(), outlet)
-                                && isFalse(
-                                nonNull(envelope.getPacket())
-                                        || outlet.getPacketState(envelope.getPacket()) == MSGSTATE_SENT
-                        )
+                                && isFalse(isNull(envelope.getPacket()) || outlet.getPacketState(envelope.getPacket()) == MSGSTATE_SENT)
                 ) {
                     return false;
                 }
@@ -333,27 +327,26 @@ public class Channel {
                 if (isFalse(txRing.remove(envelope))) {
                     log.debug("Channel: Envelope not found in TX ring");
                 } else {
-                    if (this.window < this.windowMax) {
-                        this.window += 1;
+                    if (window.get() < this.windowMax.get()) {
+                        window.incrementAndGet();
                     }
-                    if (this.outlet.rtt() != 0) {
-                        if (this.outlet.rtt() > RTT_FAST) {
-                            this.fastRateRounds = 0;
-                            if (this.outlet.rtt() > RTT_MEDIUM) {
-                                this.mediumRateRounds = 0;
+                    if (outlet.rtt() != 0) {
+                        if (outlet.rtt() > RTT_FAST) {
+                            fastRateRounds.set(0);
+                            if (outlet.rtt() > RTT_MEDIUM) {
+                                mediumRateRounds.set(0);
                             } else {
-                                this.mediumRateRounds += 1;
-                                if ((this.windowMax < WINDOW_MAX_MEDIUM) && (this.mediumRateRounds == FAST_RATE_THRESHOLD)) {
-                                    this.windowMax = WINDOW_MAX_MEDIUM;
-                                    this.windowMin = WINDOW_MIN_LIMIT_MEDIUM;
+                                mediumRateRounds.incrementAndGet();
+                                if ((windowMax.get() < WINDOW_MAX_MEDIUM) && (mediumRateRounds.get() == FAST_RATE_THRESHOLD)) {
+                                    windowMax.set(WINDOW_MAX_MEDIUM);
+                                    windowMin.set(WINDOW_MIN_LIMIT_MEDIUM);
                                 }
                             }
-                        }
-                        else {
-                            this.fastRateRounds += 1;
-                            if ((this.windowMax < WINDOW_MAX_FAST) && (this.fastRateRounds == FAST_RATE_THRESHOLD)){
-                                this.windowMax = WINDOW_MAX_FAST;
-                                this.windowMin = WINDOW_MIN_LIMIT_FAST;
+                        } else {
+                            fastRateRounds.incrementAndGet();
+                            if ((windowMax.get() < WINDOW_MAX_FAST) && (fastRateRounds.get() == FAST_RATE_THRESHOLD)) {
+                                windowMax.set(WINDOW_MAX_FAST);
+                                windowMin.set(WINDOW_MIN_LIMIT_FAST);
                             }
                         }
                     } else {
@@ -375,14 +368,15 @@ public class Channel {
     }
 
     private void updatePacketTimeouts() {
-        for (Envelope e: this.txRing) {
+        for (Envelope e : this.txRing) {
             var updatedTimeout = getPacketTimeoutTime(e.getTries());
             var ep = e.getPacket();
-            var epr = ep.getReceipt();
-
-            if (nonNull(e.getPacket()) && (nonNull(epr) && nonNull(epr.getTimeout()))) {
-                if (updatedTimeout > epr.getTimeout()) {
-                    epr.setTimeout(updatedTimeout);
+            if (nonNull(ep)) {
+                var epr = ep.getReceipt();
+                if ((nonNull(epr) && epr.getTimeout() > 0)) {
+                    if (updatedTimeout > epr.getTimeout()) {
+                        epr.setTimeout(updatedTimeout);
+                    }
                 }
             }
         }
@@ -407,11 +401,11 @@ public class Channel {
             outlet.setPacketTimeoutCallback(envelope.getPacket(), this::packetTimeout, getPacketTimeoutTime(envelope.getTries()));
             updatePacketTimeouts();
 
-            if (this.window > this.windowMin) {
-                this.window = this.window - 1;
+            if (window.get() > this.windowMin.get()) {
+                window.decrementAndGet();
 
-                if (this.windowMax > (this.windowMin + this.windowFlexibility)) {
-                    this.windowMax = this.windowMax - 1;
+                if (windowMax.get() > (windowMin.get() + windowFlexibility)) {
+                    windowMax.decrementAndGet();
                 }
             }
 
@@ -437,36 +431,36 @@ public class Channel {
                 throw new IllegalStateException("Link is not ready");
                 //throw new RChannelException(RChannelExceptionType.ME_LINK_NOT_READY, "Link is not ready");
             }
-            envelope = new Envelope(outlet, message, nextSequence);
-            nextSequence = (nextSequence + 1) % SEQ_MODULUS;
+            envelope = new Envelope(outlet, message, nextSequence.get());
+            nextSequence.set(nextSequence.incrementAndGet() % SEQ_MODULUS);
             emplaceEnvelope(envelope, txRing);
+
+//            if (isNull(envelope)) {
+//                throw new RuntimeException("BlockingIOError");
+//            }
+
+            try {
+                envelope.pack();
+            } catch (RChannelException e) {
+                log.error("Error packing envelope", e);
+            }
+            if (getLength(envelope.getRaw()) > outlet.getMdu()) {
+                throw new IllegalStateException(
+                        String.format("Packed message too big for packet %s > %s", getLength(envelope.getRaw()), outlet.getMdu())
+                );
+                //throw new RChannelException(RChannelExceptionType.ME_TOO_BIG,
+                //    String.format("Packed message too big for packet %s > %s", getLength(envelope.getRaw()), outlet.getMdu())
+                //);
+            }
+            envelope.setPacket(outlet.send(envelope.getRaw()));
+            envelope.setTries(envelope.getTries() + 1);
+            outlet.setPacketDeliveredCallback(envelope.getPacket(), this::packetDelivered);
+            outlet.setPacketTimeoutCallback(envelope.getPacket(), this::packetTimeout, getPacketTimeoutTime(envelope.getTries()));
+
+            return envelope;
         } finally {
             lock.unlock();
         }
-
-        if (isNull(envelope)) {
-            throw new RuntimeException("BlockingIOError");
-        }
-
-        try {
-            envelope.pack();
-        } catch (RChannelException e) {
-            log.error("Error packing envelope", e);
-        }
-        if (getLength(envelope.getRaw()) > outlet.getMdu()) {
-            throw new IllegalStateException(
-                    String.format("Packed message too big for packet %s > %s", getLength(envelope.getRaw()), outlet.getMdu())
-            );
-            //throw new RChannelException(RChannelExceptionType.ME_TOO_BIG,
-            //    String.format("Packed message too big for packet %s > %s", getLength(envelope.getRaw()), outlet.getMdu())
-            //);
-        }
-        envelope.setPacket(outlet.send(envelope.getRaw()));
-        envelope.setTries(envelope.getTries() + 1);
-        outlet.setPacketDeliveredCallback(envelope.getPacket(), this::packetDelivered);
-        outlet.setPacketTimeoutCallback(envelope.getPacket(), this::packetTimeout, getPacketTimeoutTime(envelope.getTries()));
-
-        return envelope;
     }
 
     /**

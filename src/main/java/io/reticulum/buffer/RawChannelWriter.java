@@ -1,21 +1,14 @@
 package io.reticulum.buffer;
 
-import java.io.IOException;
-//import java.io.InputStream;
-import java.io.OutputStream;
-//import java.util.ArrayList;
-//import java.util.List;
-import java.util.Arrays;
-//import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-//import java.util.concurrent.locks.ReentrantLock;
-import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream;
-import lombok.extern.slf4j.Slf4j;
-//import io.netty.channel.ChannelException;
-//import io.reticulum.channel.RChannelException;
 import io.reticulum.channel.Channel;
-//import io.reticulum.message.MessageBase;
 import io.reticulum.message.StreamDataMessage;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.util.Arrays;
 
 @Slf4j
 public class RawChannelWriter extends OutputStream {
@@ -52,7 +45,6 @@ public class RawChannelWriter extends OutputStream {
     public void write(byte[] b, int off, int len) throws IOException {
         //log.info("TRACE-2 - writing buffer: {}", b);
         try {
-            int compTries = COMPRESSION_TRIES;
             int compTry = 1;
             boolean compSuccess = false;
             int chunkLen = len;
@@ -62,7 +54,7 @@ public class RawChannelWriter extends OutputStream {
                 chunk = Arrays.copyOfRange(b, off, off + MAX_CHUNK_LEN);
             }
             byte[] compressedChunk = null;
-            while (chunkLen > 32 && compTry < compTries) {
+            while (chunkLen > 32 && compTry < COMPRESSION_TRIES) {
                 int chunkSegmentLength = chunkLen / compTry;
                 ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
                 BZip2CompressorOutputStream bzip2OutputStream = new BZip2CompressorOutputStream(byteArrayOutputStream);

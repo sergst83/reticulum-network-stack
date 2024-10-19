@@ -1,21 +1,23 @@
 package io.reticulum.buffer;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Arrays;
-import java.util.function.Consumer;
-import java.util.concurrent.locks.ReentrantLock;
-
-//import io.netty.channel.ChannelException;
 import io.reticulum.channel.Channel;
-//import io.reticulum.channel.RChannelException;
 import io.reticulum.message.MessageBase;
 import io.reticulum.message.StreamDataMessage;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
+
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 
-import lombok.extern.slf4j.Slf4j;;
+//import io.netty.channel.ChannelException;
+//import io.reticulum.channel.RChannelException;
+;
 
 @Slf4j
 public class RawChannelReader extends InputStream {
@@ -32,11 +34,11 @@ public class RawChannelReader extends InputStream {
         this.channel = channel;
         this.buffer = new byte[0];
         this.eof = false;
-        this.listeners = new ArrayList<>();
+        this.listeners = new CopyOnWriteArrayList<>();
         try {
             this.channel.registerMessageType(sdm, true);
         } catch (Exception e) {
-            log.error("Failed to register message type: {}", e);
+            log.error("Failed to register message type: {}", sdm.msgType(), e);
         }
         this.channel.addMessageHandler(this::handleMessage);
     }
@@ -114,8 +116,7 @@ public class RawChannelReader extends InputStream {
     public byte[] read(Integer readyBytes) throws IOException {
         lock.lock();
         try {
-            byte[] result = Arrays.copyOfRange(buffer, 0, readyBytes);
-            return result;
+            return Arrays.copyOfRange(buffer, 0, readyBytes);
         } finally {
             lock.unlock();
         }
