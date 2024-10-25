@@ -329,12 +329,12 @@ public class Link extends AbstractDestination {
 
         var proof = new Packet(this, proofData, PROOF);
         proof.send();
-        hadOutbound();
+        this.hadOutbound();
     }
 
     public synchronized void validateProof(Packet packet) {
         try {
-            if (status == PENDING) {
+            if (this.status == PENDING) {
                 if (this.initiator && packet.getData().length == (SIGLENGTH / 8 + ECPUBSIZE / 2)) {
                     var peerPubBytes = subarray(packet.getData(), SIGLENGTH / 8, SIGLENGTH / 8 + ECPUBSIZE / 2);
                     var peerSigPubBytes = subarray(destination.getIdentity().getPublicKey(), ECPUBSIZE / 2, ECPUBSIZE);
@@ -354,6 +354,7 @@ public class Link extends AbstractDestination {
                         this.remoteIdentity = this.destination.getIdentity();
                         this.status = ACTIVE;
                         this.activatedAt = Instant.now();
+                        this.lastProof = this.activatedAt;
                         Transport.getInstance().activateLink(this);
 
                         log.info("Link {} established with {}, RTT is {} ms", this, destination, rtt);
@@ -369,7 +370,7 @@ public class Link extends AbstractDestination {
                             var rttPacket = new Packet(this, rttData, LRRTT);
                             rttPacket.send();
 
-                            hadOutbound();
+                            this.hadOutbound();
                         }
 
                         if (nonNull(callbacks.getLinkEstablished())) {
@@ -487,6 +488,7 @@ public class Link extends AbstractDestination {
                     rtt = Math.max(measuredRtt, (long) unpacker.unpackFloat());
                 }
 
+                this.status = ACTIVE;
                 activatedAt = Instant.now();
 
                 if (rtt > 0 && establishmentCost.get() > 0) {
@@ -534,6 +536,17 @@ public class Link extends AbstractDestination {
     }
 
     /**
+     * @return The tim in miliseconds since this link was established.
+     */
+    public long getAge() {
+        if (nonNull(this.activatedAt)) {
+            return Duration.between(Instant.now(), this.activatedAt).toMillis();
+        } else {
+            return 0;
+        }
+    }
+
+    /**
      * @return The time in milliseconds since last inbound packet on the link.
      */
     public long noInboundFor() {
@@ -573,7 +586,7 @@ public class Link extends AbstractDestination {
         if (status != PENDING && status != CLOSED) {
             var teardownPacket = new Packet(this, this.linkId, LINKCLOSE);
             teardownPacket.send();
-            hadOutbound();
+            this.hadOutbound();
         }
         this.status = CLOSED;
         if (this.initiator) {
@@ -651,6 +664,8 @@ public class Link extends AbstractDestination {
 
     private Runnable watchdogJob() {
         return () -> {
+            var sleepTime = 0L;
+            var nextCheck = Instant.now();
             while (status != CLOSED) {
                 while (watchdogLock.isLocked()) {
                     try {
@@ -660,11 +675,11 @@ public class Link extends AbstractDestination {
                     }
                 }
 
-                var sleepTime = 0L;
-                var nextCheck = Instant.now();
-                if (status != CLOSED) {
+                //var sleepTime = 0L;
+                //var nextCheck = Instant.now();
+                if (this.status != CLOSED) {
                     // Link was initiated, but no response from destination yet
-                    switch (status) {
+                    switch (this.status) {
                         case PENDING:
                             nextCheck = this.requestTime.plusSeconds(this.establishmentTimeout);
                             sleepTime = Duration.between(Instant.now(), nextCheck).toMillis();
@@ -693,19 +708,21 @@ public class Link extends AbstractDestination {
                             break;
                         case ACTIVE:
                             Instant time;
-                            if (nonNull(activatedAt) && activatedAt.compareTo(lastInbound) < 0) {
-                                time = activatedAt;
+                            log.info("activatedAt: {}, lastInbound: {}, lastProof: {}", this.activatedAt, this.lastInbound, this.lastProof);
+                            if (nonNull(this.activatedAt) && this.activatedAt.compareTo(this.lastInbound) < 0) {
+                                time = this.activatedAt;
                             } else {
-                                time = lastInbound;
+                                time = this.lastInbound;
                             }
+
                             var now = Instant.now();
-                            if (now.compareTo(time.plusSeconds(keepalive)) <= 0) {
+                            if (now.compareTo(time.plusSeconds(this.keepalive)) >= 0) {
                                 if (initiator) {
                                     sendKeepalive();
                                 }
 
-                                if (now.compareTo(time.plusSeconds(staleTime)) <= 0) {
-                                    sleepTime =  + Duration.ofSeconds(STALE_GRACE).plusMillis(rtt * keepaliveTimeoutFactor).toMillis();
+                                if (now.compareTo(time.plusSeconds(staleTime)) >= 0) {
+                                    sleepTime =  + Duration.ofSeconds(STALE_GRACE).plusMillis(this.rtt * this.keepaliveTimeoutFactor).toMillis();
                                     status = STALE;
                                 } else {
                                     sleepTime = Duration.ofSeconds(keepalive).toMillis();
@@ -713,12 +730,15 @@ public class Link extends AbstractDestination {
                             } else {
                                 sleepTime = Duration.between(now, time.plusSeconds(keepalive)).toMillis();
                             }
+                            log.info("link status: {}", this.status);
                             break;
                         case STALE:
                             sleepTime = 1;
                             status = CLOSED;
                             teardownReason = TIMEOUT;
                             linkClosed();
+                            break;
+                        case CLOSED:
                             break;
                     }
 
@@ -743,7 +763,7 @@ public class Link extends AbstractDestination {
     private void sendKeepalive() {
         var keepalivePacket = new Packet(this, new byte[]{(byte) 0xFF}, PacketContextType.KEEPALIVE);
         keepalivePacket.send();
-        hadOutbound();
+        this.hadOutbound();
     }
 
     private void handleRequest(byte[] requestId, @NonNull UnpackedRequest uppackedRequest) throws IOException {
@@ -1061,7 +1081,7 @@ public class Link extends AbstractDestination {
                         if (isFalse(initiator) && Arrays.equals(packet.getData(), new byte[] {(byte) 0xFF})) {
                             var keepalivePacket = new Packet(this, new byte[] {(byte) 0xFF}, PacketContextType.KEEPALIVE);
                             keepalivePacket.send();
-                            hadOutbound();
+                            this.hadOutbound();
                         }
                     }
                     // TODO: find the most efficient way to allow multiple
@@ -1079,6 +1099,8 @@ public class Link extends AbstractDestination {
                         } else {
                             packet.prove(null);
                             var plaintext = decrypt(packet.getData());
+                            //log.info("link - channel packet plaintext[8,9]: {}, {}", plaintext[8], plaintext[9]);
+                            //if (plaintext[8] != 0) { // hack to avoid empty message callback
                             if (nonNull(plaintext)) {
                                 updatePhyStats(packet);
                                 channel.receive(plaintext);

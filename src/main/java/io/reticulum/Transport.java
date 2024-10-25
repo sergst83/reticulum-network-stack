@@ -1,5 +1,6 @@
 package io.reticulum;
 
+import io.reticulum.constant.TransportConstant;
 import io.reticulum.destination.Destination;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.ConnectionInterface;
@@ -1458,7 +1459,15 @@ public final class Transport implements ExitHandler {
                         //Check if we can deliver it to a local pending link
                         for (Link link : pendingLinks) {
                             if (Arrays.equals(link.getLinkId(), packet.getDestinationHash())) {
-                                if (packet.getHops() == link.getExpectedHops()) {
+                                // We need to also allow an expected hops value of
+                                // PATHFINDER_M, since in some cases, the number of hops
+                                // to the destination will be unknown at link creation
+                                // time. The real chance of this occuring is likely to be
+                                // extremely small, and this allowance could probably
+                                // be discarded without major issues, but it is kept
+                                // for now to ensure backwards compatibility.
+
+                                if ((packet.getHops() == link.getExpectedHops()) || (link.getExpectedHops() == TransportConstant.PATHFINDER_M )) {
                                     // Add this packet to the filter hashlist if we
                                     // have determined that it's actually destined
                                     // for this system, and then validate the proof
