@@ -116,7 +116,10 @@ public class RawChannelReader extends InputStream {
     public byte[] read(Integer readyBytes) throws IOException {
         lock.lock();
         try {
-            return Arrays.copyOfRange(buffer, 0, readyBytes);
+            //return Arrays.copyOfRange(buffer, 0, readyBytes);
+            var result = Arrays.copyOfRange(buffer, 0, readyBytes);
+            buffer = Arrays.copyOfRange(buffer, readyBytes, buffer.length);
+            return result;
         } finally {
             lock.unlock();
         }
