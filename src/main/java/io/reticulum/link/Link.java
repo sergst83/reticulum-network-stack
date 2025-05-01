@@ -183,6 +183,7 @@ public class Link extends AbstractDestination {
 
     @SneakyThrows
     private void init() {
+        this.lastInbound = Instant.now();
         if (nonNull(destination) && destination.getType() != SINGLE) {
             throw new IllegalArgumentException("Links can only be established to the SINGLE destination type");
         }
