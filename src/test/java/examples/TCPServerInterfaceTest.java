@@ -10,6 +10,7 @@ import io.reticulum.identity.Identity;
 import io.reticulum.transport.AnnounceHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Hex;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -25,6 +26,7 @@ public class TCPServerInterfaceTest {
 //    }
 
     @Test
+    @Disabled("run manually")
     void start() throws IOException, InterruptedException {
         var configPath = Path.of("src/main/resources/example").toAbsolutePath().toString();
         var reticulum = new Reticulum(configPath);

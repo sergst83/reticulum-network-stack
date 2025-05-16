@@ -390,7 +390,7 @@ public final class Transport implements ExitHandler {
     }
 
     public static Transport start(@NonNull final Reticulum reticulum) {
-        Transport transport = INSTANCE;
+        var transport = INSTANCE;
         if (transport == null) {
             synchronized (Transport.class) {
                 transport = INSTANCE;
@@ -401,7 +401,12 @@ public final class Transport implements ExitHandler {
             }
         }
 
-        Scheduler.scheduleWithFixedDelaySafe(transport::jobs, JOB_INTERVAL, MILLISECONDS);
+        var finalTransport = transport;
+        Scheduler.scheduleWithFixedDelaySafe(() -> {
+            synchronized (finalTransport) {
+                finalTransport.jobs();
+            }
+        }, JOB_INTERVAL, MILLISECONDS);
 
         log.info("Transport instance {} started", transport.identity.getHexHash());
 
