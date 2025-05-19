@@ -158,7 +158,7 @@ import static org.apache.commons.lang3.BooleanUtils.isFalse;
 public final class Transport implements ExitHandler {
     private final ReentrantLock savingPathTableLock = new ReentrantLock();
     private final ReentrantLock savingTunnelTableLock = new ReentrantLock();
-    private final ReentrantLock jobsLock = new ReentrantLock();
+    private final ReentrantLock jobsLock = new ReentrantLock(true);
 
     private final AtomicReference<Instant> linksLastChecked = new AtomicReference<>(Instant.EPOCH);
     private final AtomicReference<Instant> announcesLastChecked = new AtomicReference<>(Instant.EPOCH);
@@ -401,12 +401,7 @@ public final class Transport implements ExitHandler {
             }
         }
 
-        var finalTransport = transport;
-        Scheduler.scheduleWithFixedDelaySafe(() -> {
-            synchronized (finalTransport) {
-                finalTransport.jobs();
-            }
-        }, JOB_INTERVAL, MILLISECONDS);
+        Scheduler.scheduleWithFixedDelaySafe(() -> INSTANCE.jobs(), JOB_INTERVAL, MILLISECONDS);
 
         log.info("Transport instance {} started", transport.identity.getHexHash());
 
