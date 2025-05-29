@@ -26,7 +26,8 @@ public class PacketInboundHandler extends SimpleChannelInboundHandler<byte[]> {
         log.info("TCPClient Interface: {} is disconnected", connectionInterface.getInterfaceName());
         connectionInterface.detach();
         Transport.getInstance().getInterfaces().remove(connectionInterface);
-        connectionInterface.getParentInterface().getClients().decrementAndGet();
+        TCPServerInterface parentInterface = connectionInterface.getParentInterface();
+        if (parentInterface != null) parentInterface.getClients().decrementAndGet();
 
         super.channelInactive(ctx);
     }

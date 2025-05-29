@@ -50,15 +50,21 @@ public class TCPChannelInitializer extends ChannelInitializer<SocketChannel> imp
             spownedInterface.setIN(serverInterface.isIN());
             spownedInterface.setOUT(serverInterface.isOUT());
             spownedInterface.setBitrate(serverInterface.getBitrate());
-            spownedInterface.setIfacSize(serverInterface.getIfacSize());
-            spownedInterface.setIfacNetName(serverInterface.getIfacNetName());
-            spownedInterface.setIfacKey(serverInterface.getIfacKey());
-            InterfaceUtils.initIFac(serverInterface);
             spownedInterface.setAnnounceRateTarget(serverInterface.getAnnounceRateTarget());
             spownedInterface.setAnnounceRateGrace(serverInterface.getAnnounceRateGrace());
             spownedInterface.setAnnounceRatePenalty(serverInterface.getAnnounceRatePenalty());
             spownedInterface.setInterfaceMode(serverInterface.getInterfaceMode());
             spownedInterface.getOnline().set(true);
+
+            //Ifac
+            InterfaceUtils.initIFac(serverInterface);
+            spownedInterface.setIfacNetName(serverInterface.getIfacNetName());
+            spownedInterface.setIfacNetKey(serverInterface.getIfacNetKey());
+            spownedInterface.setIfacKey(serverInterface.getIfacKey());
+            spownedInterface.setIfacSize(serverInterface.getIfacSize());
+            spownedInterface.setIdentity(serverInterface.getIdentity());
+            spownedInterface.setIfacSignature(serverInterface.getIfacSignature());
+
 
             log.info("Spawned new TCPClient Interface: {}", spownedInterface.getInterfaceName());
             Transport.getInstance().getInterfaces().add(spownedInterface);

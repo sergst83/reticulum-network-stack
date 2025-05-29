@@ -22,6 +22,7 @@ import org.bouncycastle.crypto.params.HKDFParameters;
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters;
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
+import org.bouncycastle.util.Arrays;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -33,6 +34,8 @@ import static io.reticulum.constant.IdentityConstant.KEYSIZE;
 import static io.reticulum.packet.PacketType.PROOF;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.truncatedHash;
+import static java.nio.file.StandardOpenOption.CREATE;
+import static java.nio.file.StandardOpenOption.WRITE;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static org.apache.commons.lang3.ArrayUtils.subarray;
@@ -289,6 +292,15 @@ public class Identity {
 
             return null;
         }
+    }
+
+    /**
+     * Save identity to file
+     * @param path The full path to the file
+     */
+    public boolean toFile(Path path) throws IOException {
+        var privateKeyBytes = Arrays.concatenate(prvBytes, sigPrvBytes);
+        return Files.write(path, privateKeyBytes, WRITE, CREATE).toFile().exists();
     }
 
     @SneakyThrows

@@ -47,7 +47,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
     private ChannelFuture channelFuture;
     private Channel channel;
 
-    private Integer maxReconnectTries;
+    private Integer maxReconnectTries = 20;
 
     private boolean initiator;
     private volatile boolean reconnecting = false;
@@ -139,6 +139,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
 
     @Override
     public synchronized void processOutgoing(byte[] data) {
+        log.trace("Send packet data. interface: {}, message: {}", this, data);
         if (online.get()) {
             try(var os = new ByteArrayOutputStream()) {
                 if (kissFraming) {
@@ -199,8 +200,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
 
     private synchronized void reconnect(final int currentAttempt) {
         try {
-            connect(null);
-            reconnecting = false;
+            reconnecting = !connect(null);
             if (isFalse(neverConnected)) {
                 log.info("Reconnected socket for {}", this);
             }
@@ -212,7 +212,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
         }
     }
 
-    private synchronized boolean connect(Boolean initial) throws InterruptedException {
+    private synchronized boolean connect(final Boolean initial) throws InterruptedException {
         var init = BooleanUtils.isTrue(initial);
         var self = this;
         EventLoopGroup workerGroup = new NioEventLoopGroup();

@@ -106,6 +106,12 @@ public class TCPServerInterface extends AbstractConnectionInterface implements H
         Transport.getInstance().inbound(processingData, this);
     }
 
+    /**
+     * server processees only incoming packets <br/>
+     * outgoung packets processes attached client interfaces see {@link io.reticulum.interfaces.tcp.TCPChannelInitializer}
+     *
+     * @param data ignored
+     */
     @Override
     public synchronized void processOutgoing(byte[] data) {
         //pass

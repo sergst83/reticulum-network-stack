@@ -706,12 +706,14 @@ public final class Transport implements ExitHandler {
                     }
                 } else {
                     //If the IFAC flag is not set, but should be, drop the packet.
+                    log.trace("The IFAC flag is not set, but should be, drop the packet: {}, iface: {}", raw, iface);
                     return;
                 }
             } else {
                 //If the interface does not have IFAC enabled, check the received packet IFAC flag.
                 if ((raw[0] & 0x80) == 0x80) {
                     //If the flag is set, drop the packet
+                    log.trace("Interface does not have IFAC enabled, but the flag is set. Drop the packet: {}, iface: {}", raw, iface);
                     return;
                 }
 
@@ -2125,7 +2127,7 @@ public final class Transport implements ExitHandler {
         announceHandlers.remove(announceHandler);
     }
 
-    private void transmit(ConnectionInterface iface, byte[] raw) {
+    private void transmit(final ConnectionInterface iface, final byte[] raw) {
         try {
             if (nonNull(iface.getIdentity())) {
                 //Calculate packet access code
@@ -2144,17 +2146,17 @@ public final class Transport implements ExitHandler {
                 dataPacket.setIfac(ifac);
 
                 var newRaw = DataPacketConverter.toBytes(dataPacket);
-                var maskedRaw = new byte[0];
+                var maskedRaw = new byte[newRaw.length];
                 for (int i = 0; i < newRaw.length; i++) {
                     if (i == 0) {
                         //Mask first header byte, but make sure the IFAC flag is still set
-                        maskedRaw = ArrayUtils.add(maskedRaw, (byte) (newRaw[i] ^ mask[i] | 0x80));
+                        maskedRaw[i] = (byte) (newRaw[i] ^ mask[i] | 0x80);
                     } else if (i == 1 || i > iface.getIfacSize() + 1) {
                         //Mask second header byte and payload
-                        maskedRaw = ArrayUtils.add(maskedRaw, (byte) (newRaw[i] ^ mask[i]));
+                        maskedRaw[i] = (byte) (newRaw[i] ^ mask[i]);
                     } else {
                         //Don't mask the IFAC itself
-                        maskedRaw = ArrayUtils.add(maskedRaw, newRaw[i]);
+                        maskedRaw[i] = newRaw[i];
                     }
                 }
 
@@ -2895,7 +2897,11 @@ public final class Transport implements ExitHandler {
         } catch (Exception e) {
             log.error("An exception occurred while running Transport jobs.", e);
         } finally {
-            jobsLock.unlock();
+            try {
+                jobsLock.unlock();
+            } catch (IllegalStateException e) {
+                log.warn("Error while jobsLock unlock", e);
+            }
         }
 
         outgoing.forEach(Packet::send);
