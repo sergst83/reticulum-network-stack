@@ -1,0 +1,16 @@
+reticulum:
+  enable_transport: false
+  share_instance: false
+  panic_on_interface_error: false
+interfaces:
+  "Default Interface":
+    type: AutoInterface
+    enabled: false
+  "Client Interface":
+    type: TCPClientInterface
+    enabled: true
+    target_port: 3232
+    target_host: 127.0.0.1
+    network_name: net
+    pass_phrase: net
+
