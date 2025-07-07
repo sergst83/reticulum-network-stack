@@ -1453,8 +1453,8 @@ public final class Transport implements ExitHandler {
                 if (packet.getContext() == LRPROOF) {
                     // This is a link request proof, check if it needs to be transported
                     if (
-                            (owner.isTransportEnabled() || forLocalClientLink || fromLocalClient)
-                                    && linkTable.containsKey(encodeHexString(packet.getDestinationHash()))
+                        (owner.isTransportEnabled() || forLocalClientLink || fromLocalClient)
+                            && linkTable.containsKey(encodeHexString(packet.getDestinationHash()))
                     ) {
                         var linkEntry = linkTable.get(encodeHexString(packet.getDestinationHash()));
                         if (packet.getHops() == linkEntry.getRemainingHops()) {
@@ -1462,9 +1462,9 @@ public final class Transport implements ExitHandler {
                                 try {
                                     //if (getLength(packet.getData()) == (SIGLENGTH / 8 + ECPUBSIZE / 2)) {
                                     if (
-                                            (getLength(packet.getData()) == (SIGLENGTH / 8 + ECPUBSIZE / 2)
+                                        (getLength(packet.getData()) == (SIGLENGTH / 8 + ECPUBSIZE / 2)
                                             || getLength(packet.getData()) == SIGLENGTH / 8 + ECPUBSIZE / 2 + LINK_MTU_SIZE)
-                                    ) {
+                                        ) {
                                         var peerPubBytes = subarray(
                                                 packet.getData(),
                                                 SIGLENGTH / 8,
