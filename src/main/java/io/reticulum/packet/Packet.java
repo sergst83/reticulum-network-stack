@@ -552,7 +552,7 @@ public class Packet implements TPacket {
     }
 
     @SneakyThrows
-    private byte[] getHashablePart() {
+    public byte[] getHashablePart() {
         var hashablePart = new byte[]{(byte) (raw[0] & 0b00001111)};
         if (this.headerType == HEADER_2) {
             hashablePart = concatArrays(hashablePart, subarray(raw, TRUNCATED_HASHLENGTH / 8 + 2, raw.length));

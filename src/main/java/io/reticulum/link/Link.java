@@ -347,6 +347,8 @@ public class Link extends AbstractDestination {
                     var signedData = concatArrays(linkId, this.peerPubBytes, this.peerSigPubBytes);
                     var signature = subarray(packet.getData(), 0, SIGLENGTH / 8);
 
+                    log.debug("Link *** validateProof - initiator validating proof");
+
                     if (destination.getIdentity().validate(signature, signedData)) {
                         if (status != HANDSHAKE) {
                             throw new IllegalStateException("Invalid link state for proof validation");
@@ -371,6 +373,8 @@ public class Link extends AbstractDestination {
                             var rttData = packer.toByteArray();
                             var rttPacket = new Packet(this, rttData, LRRTT);
                             rttPacket.send();
+
+                            log.debug("Link *** validateProof - sending rtt");
 
                             this.hadOutbound();
                         }

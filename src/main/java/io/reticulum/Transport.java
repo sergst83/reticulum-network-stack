@@ -26,6 +26,7 @@ import io.reticulum.transport.ReversEntry;
 import io.reticulum.transport.TransportState;
 import io.reticulum.transport.Tunnel;
 import io.reticulum.utils.IdentityUtils;
+import io.reticulum.utils.LinkUtils;
 import io.reticulum.utils.Scheduler;
 import lombok.Getter;
 import lombok.NonNull;
@@ -920,7 +921,8 @@ public final class Transport implements ExitHandler {
 
 //                                linkTable.put(encodeHexString(packet.getTruncatedHash()), linkEntry);
                                 // I changed it to destination Hash, because in java we search by string representation and truncatedHash can be != destinationHash
-                                linkTable.put(encodeHexString(packet.getDestinationHash()), linkEntry);
+                                //linkTable.put(encodeHexString(packet.getDestinationHash()), linkEntry);
+                                linkTable.put(encodeHexString(LinkUtils.linkIdFromLrPacket(packet)), linkEntry);
                             } else {
                                 //Entry format is
                                 var reserveEntry = ReversEntry.builder()
@@ -929,7 +931,8 @@ public final class Transport implements ExitHandler {
                                         .timestamp(Instant.now())
                                         .build();
 
-                                reverseTable.put(encodeHexString(packet.getDestinationHash()), reserveEntry);
+                                //reverseTable.put(encodeHexString(packet.getDestinationHash()), reserveEntry);
+                                reverseTable.put(encodeHexString(packet.getTruncatedHash()), reserveEntry);
                             }
 
                             transmit(outboundInterface, DataPacketConverter.toBytes(dataPacket));
