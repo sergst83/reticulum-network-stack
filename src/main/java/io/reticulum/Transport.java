@@ -901,6 +901,7 @@ public final class Transport implements ExitHandler {
                             var outboundInterface = destinationTable.get(encodeHexString(packet.getDestinationHash())).getInterface();
 
                             if (packet.getPacketType() == LINKREQUEST) {
+                                log.debug("Transport *** inbound - building linkTable entry");
                                 var now = Instant.now();
                                 var proofTimeout =  now
                                         .plusMillis((long) ESTABLISHMENT_TIMEOUT_PER_HOP * Math.max(1, remainingHops))
@@ -924,6 +925,7 @@ public final class Transport implements ExitHandler {
                                 //linkTable.put(encodeHexString(packet.getDestinationHash()), linkEntry);
                                 linkTable.put(encodeHexString(LinkUtils.linkIdFromLrPacket(packet)), linkEntry);
                             } else {
+                                log.debug("Transport *** inbound - building reverseTable entry");
                                 //Entry format is
                                 var reserveEntry = ReversEntry.builder()
                                         .receivingInterface(packet.getReceivingInterface())
@@ -1403,6 +1405,7 @@ public final class Transport implements ExitHandler {
 
             //Handling for link requests to local destinations
             else if (packet.getPacketType() == LINKREQUEST) {
+                log.debug("Transport *** inbound - before receiveing LNKREQUEST");
                 if (isNull(packet.getTransportId()) || Arrays.equals(packet.getTransportId(), identity.getHash())) {
                     for (Destination destination : destinations) {
                         if (
