@@ -319,6 +319,7 @@ public final class Transport implements ExitHandler {
                                             .expires(hopEntry.getExpires())
                                             .hops(hopEntry.getHops())
                                             .randomBlobs(hopEntry.getRandomBlobs())
+                                            .anInterface(receivingInterface)
                                             .packet(announcePacket)
                                             .build()
                             );
