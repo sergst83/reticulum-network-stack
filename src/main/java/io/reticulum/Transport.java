@@ -1405,7 +1405,7 @@ public final class Transport implements ExitHandler {
 
             //Handling for link requests to local destinations
             else if (packet.getPacketType() == LINKREQUEST) {
-                log.debug("Transport *** inbound - before receiveing LNKREQUEST");
+                log.debug("Transport *** inbound - before receiving LNKREQUEST");
                 if (isNull(packet.getTransportId()) || Arrays.equals(packet.getTransportId(), identity.getHash())) {
                     for (Destination destination : destinations) {
                         if (

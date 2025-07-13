@@ -21,7 +21,9 @@ import lombok.extern.slf4j.Slf4j;
 import java.math.BigInteger;
 import java.net.InetSocketAddress;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
@@ -42,12 +44,15 @@ public class TCPServerInterface extends AbstractConnectionInterface implements H
     @JsonProperty("listen_port")
     private int listenPort;
 
+    protected List<TCPClientInterface> spawnedInterfaces = new CopyOnWriteArrayList<>();
+
     public TCPServerInterface() {
         super();
         this.rxb.set(BigInteger.ZERO);
         this.txb.set(BigInteger.ZERO);
 
         this.IN = true;
+        this.OUT = false;
 
         this.interfaceMode = InterfaceMode.MODE_FULL;
         this.bitrate = BITRATE_GUESS;
@@ -98,6 +103,10 @@ public class TCPServerInterface extends AbstractConnectionInterface implements H
                 ).sync();
     }
 
+    public int clients() {
+        return spawnedInterfaces.size();
+    }
+
     @Override
     public synchronized void processIncoming(byte[] data) {
         var processingData = unmaskHdlc(data);
@@ -108,7 +117,7 @@ public class TCPServerInterface extends AbstractConnectionInterface implements H
 
     /**
      * server processees only incoming packets <br/>
-     * outgoung packets processes attached client interfaces see {@link io.reticulum.interfaces.tcp.TCPChannelInitializer}
+     * outgoing packets processed by attached client interfaces see {@link io.reticulum.interfaces.tcp.TCPChannelInitializer}
      *
      * @param data ignored
      */
