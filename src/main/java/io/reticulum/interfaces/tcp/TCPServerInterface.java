@@ -52,7 +52,7 @@ public class TCPServerInterface extends AbstractConnectionInterface implements H
         this.txb.set(BigInteger.ZERO);
 
         this.IN = true;
-        this.OUT = false;
+        //this.OUT = false;
 
         this.interfaceMode = InterfaceMode.MODE_FULL;
         this.bitrate = BITRATE_GUESS;
