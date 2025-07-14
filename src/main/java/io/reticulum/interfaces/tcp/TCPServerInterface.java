@@ -103,9 +103,9 @@ public class TCPServerInterface extends AbstractConnectionInterface implements H
                 ).sync();
     }
 
-    public int clients() {
-        return spawnedInterfaces.size();
-    }
+    //public int clients() {
+    //    return spawnedInterfaces.size();
+    //}
 
     @Override
     public synchronized void processIncoming(byte[] data) {
