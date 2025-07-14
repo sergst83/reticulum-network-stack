@@ -902,7 +902,7 @@ public final class Transport implements ExitHandler {
                             var outboundInterface = destinationTable.get(encodeHexString(packet.getDestinationHash())).getInterface();
 
                             if (packet.getPacketType() == LINKREQUEST) {
-                                log.debug("Transport *** inbound - building linkTable entry");
+                                log.debug("Transport *** inbound LINKREQUEST - building linkTable entry");
                                 var now = Instant.now();
                                 var proofTimeout =  now
                                         .plusMillis((long) ESTABLISHMENT_TIMEOUT_PER_HOP * Math.max(1, remainingHops))
@@ -1409,6 +1409,7 @@ public final class Transport implements ExitHandler {
                 log.debug("Transport *** inbound - before receiving LNKREQUEST");
                 if (isNull(packet.getTransportId()) || Arrays.equals(packet.getTransportId(), identity.getHash())) {
                     for (Destination destination : destinations) {
+                        // Note: TODO - implement python path_mtu, mode part
                         if (
                                 Arrays.equals(destination.getHash(), packet.getDestinationHash())
                                         && destination.getType() == packet.getDestinationType()
@@ -1505,6 +1506,8 @@ public final class Transport implements ExitHandler {
                     } else {
                         //Check if we can deliver it to a local pending link
                         for (Link link : pendingLinks) {
+                            log.debug("Transport ***-*** - pending link id: {}, packet dest hash: {}",
+                                    encodeHexString(link.getLinkId()), encodeHexString(packet.getDestinationHash()));
                             if (Arrays.equals(link.getLinkId(), packet.getDestinationHash())) {
                                 // We need to also allow an expected hops value of
                                 // PATHFINDER_M, since in some cases, the number of hops
@@ -1514,6 +1517,7 @@ public final class Transport implements ExitHandler {
                                 // be discarded without major issues, but it is kept
                                 // for now to ensure backwards compatibility.
 
+                                log.debug("Transport *** pendingLinks - same");
                                 if ((packet.getHops() == link.getExpectedHops()) || (link.getExpectedHops() == TransportConstant.PATHFINDER_M )) {
                                     // Add this packet to the filter hashlist if we
                                     // have determined that it's actually destined
