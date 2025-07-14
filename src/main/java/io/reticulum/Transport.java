@@ -922,8 +922,8 @@ public final class Transport implements ExitHandler {
 
 //                                linkTable.put(encodeHexString(packet.getTruncatedHash()), linkEntry);
                                 // I changed it to destination Hash, because in java we search by string representation and truncatedHash can be != destinationHash
-                                //linkTable.put(encodeHexString(packet.getDestinationHash()), linkEntry);
-                                linkTable.put(encodeHexString(LinkUtils.linkIdFromLrPacket(packet)), linkEntry);
+                                linkTable.put(encodeHexString(packet.getDestinationHash()), linkEntry);
+                                //linkTable.put(encodeHexString(LinkUtils.linkIdFromLrPacket(packet)), linkEntry);
                             } else {
                                 log.debug("Transport *** inbound - building reverseTable entry");
                                 //Entry format is
@@ -933,8 +933,8 @@ public final class Transport implements ExitHandler {
                                         .timestamp(Instant.now())
                                         .build();
 
-                                //reverseTable.put(encodeHexString(packet.getDestinationHash()), reserveEntry);
-                                reverseTable.put(encodeHexString(packet.getTruncatedHash()), reserveEntry);
+                                reverseTable.put(encodeHexString(packet.getDestinationHash()), reserveEntry);
+                                //reverseTable.put(encodeHexString(packet.getTruncatedHash()), reserveEntry);
                             }
 
                             transmit(outboundInterface, DataPacketConverter.toBytes(dataPacket));
