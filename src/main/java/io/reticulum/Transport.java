@@ -875,6 +875,7 @@ public final class Transport implements ExitHandler {
 
                 // If the packet is in transport, check whether we are the designated next hop, and process it accordingly if we are.
                 if (nonNull(packet.getTransportId()) && packet.getPacketType() != ANNOUNCE) {
+                    log.debug("Transport *** transportId: {}, packetType: {}", packet.getTransportId(), packet.getPacketType());
                     if (Arrays.equals(packet.getTransportId(), identity.getHash())) {
                         if (destinationTable.containsKey(encodeHexString(packet.getDestinationHash()))) {
                             var hopsEntry = destinationTable.get(encodeHexString(packet.getDestinationHash()));
