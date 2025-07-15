@@ -661,6 +661,7 @@ public final class Transport implements ExitHandler {
         byte[] localRaw;
         //If interface access codes are enabled, we must authenticate each packet.
         if (getLength(raw) > 2) {
+            log.debug("Transport *** inbound packet - IF: {}, IF identity: {}", iface, iface.getIdentity());
             if (nonNull(iface) && nonNull(iface.getIdentity())) {
                 //Check that IFAC flag is set
                 if ((raw[0] & 0x80) == 0x80) {
