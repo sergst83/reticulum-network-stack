@@ -1430,6 +1430,7 @@ public final class Transport implements ExitHandler {
 
             //Handling for local data packets
             else if (packet.getPacketType() == DATA) {
+                log.debug("Transport *** inbound - packet type: DATA, packet destinationType: {}", packet.getDestinationType());
                 if (packet.getDestinationType() == LINK) {
                     for (Link link : activeLinks) {
                         if (Arrays.equals(link.getLinkId(), packet.getDestinationHash())) {
@@ -1468,6 +1469,9 @@ public final class Transport implements ExitHandler {
             else if (packet.getPacketType() == PROOF) {
                 if (packet.getContext() == LRPROOF) {
                     // This is a link request proof, check if it needs to be transported
+                    log.debug("Transport *** inbound - use_transport: {}, link table contains dest hash: {}",
+                            owner.isTransportEnabled(),
+                            linkTable.containsKey(encodeHexString(packet.getDestinationHash())));
                     if (
                         (owner.isTransportEnabled() || forLocalClientLink || fromLocalClient)
                             && linkTable.containsKey(encodeHexString(packet.getDestinationHash()))
@@ -1481,6 +1485,7 @@ public final class Transport implements ExitHandler {
                                         (getLength(packet.getData()) == (SIGLENGTH / 8 + ECPUBSIZE / 2)
                                             || getLength(packet.getData()) == SIGLENGTH / 8 + ECPUBSIZE / 2 + LINK_MTU_SIZE)
                                         ) {
+                                        // TODO: implement signalling bytes (see Python)
                                         var peerPubBytes = subarray(
                                                 packet.getData(),
                                                 SIGLENGTH / 8,
@@ -1559,6 +1564,7 @@ public final class Transport implements ExitHandler {
                             (owner.isTransportEnabled() || fromLocalClient || proofForLocalClient)
                                     && reverseTable.containsKey(encodeHexString(packet.getDestinationHash()))
                     ) {
+                        log.debug("Transport *** incoming - proof needs to be transported (reverseTable check)");
                         var reverseEntry = reverseTable.remove(encodeHexString(packet.getDestinationHash()));
                         if (Objects.equals(packet.getReceivingInterface(), reverseEntry.getOutboundInterface())) {
                             log.debug("Proof received on correct interface, transporting it via {}",
