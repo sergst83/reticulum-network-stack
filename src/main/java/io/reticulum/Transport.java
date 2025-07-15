@@ -743,6 +743,7 @@ public final class Transport implements ExitHandler {
         }
 
         var packet = new Packet(localRaw);
+        log.debug("Transport *** inbound - paket type: {}", packet.getPacketType());
         if (isFalse(packet.unpack())) {
             jobsLock.unlock();
             return;
