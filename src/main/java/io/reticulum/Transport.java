@@ -835,6 +835,8 @@ public final class Transport implements ExitHandler {
             );
             var proofForLocalClient = reverseTable.containsKey(encodeHexString(packet.getDestinationHash()))
                     && localClientInterfaces.contains(reverseTable.get(encodeHexString(packet.getDestinationHash())).getReceivingInterface());
+            log.debug("Transport *** inbound - from_lc: {}, for_lc: {}, for_lcl: {}, proof_for_lc: {}",
+                    fromLocalClient, forLocalClient, forLocalClientLink, proofForLocalClient);
 
             //Plain broadcast packets from local clients are sent
             // directly on all attached interfaces, since they are
@@ -886,6 +888,7 @@ public final class Transport implements ExitHandler {
                             var remainingHops = hopsEntry.getHops();
 
                             DataPacket dataPacket = new DataPacket();
+                            log.debug("Transport *** inbound - remainingHops: {}", remainingHops);
                             if (remainingHops > 1) {
                                 //Just increase hop count and transmit
                                 dataPacket = DataPacketConverter.fromBytes(packet.getRaw());
@@ -903,6 +906,7 @@ public final class Transport implements ExitHandler {
                             }
 
                             var outboundInterface = destinationTable.get(encodeHexString(packet.getDestinationHash())).getInterface();
+                            log.debug("Transport *** inbound - outboundInterface: {}, packet type: {}", outboundInterface, packet.getPacketType());
 
                             if (packet.getPacketType() == LINKREQUEST) {
                                 log.debug("Transport *** inbound LINKREQUEST - building linkTable entry");
@@ -1951,6 +1955,7 @@ public final class Transport implements ExitHandler {
 
         // Filter packets intended for other transport instances
         if (nonNull(packet.getTransportId()) && (packet.getPacketType() != ANNOUNCE)) {
+            log.debug("Transport *** packetFilter - packet transport ID: {}, transport instance ID: {}", packet.getTransportId(), Transport.getInstance().getIdentity().getHash());
             if (packet.getTransportId() != Transport.getInstance().getIdentity().getHash()) {
                 return false;
             }
