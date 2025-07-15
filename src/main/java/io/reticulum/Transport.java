@@ -661,13 +661,13 @@ public final class Transport implements ExitHandler {
         byte[] localRaw;
         //If interface access codes are enabled, we must authenticate each packet.
         if (getLength(raw) > 2) {
-            log.debug("Transport *** inbound packet - IF: {}, IF identity: {}", iface, iface.getIdentity());
             if (nonNull(iface) && nonNull(iface.getIdentity())) {
                 //Check that IFAC flag is set
                 if ((raw[0] & 0x80) == 0x80) {
                     if (getLength(raw) > 2 + iface.getIfacSize()) {
                         //Extract IFAC
                         var ifac = subarray(raw, 2, 2 + iface.getIfacSize());
+                        log.debug("Transport *** inbound packet - IF: {}, ifac size: {}", iface, iface.getIfacSize());
 
                         //Generate mask
                         var hkdf = new HKDFBytesGenerator(new SHA256Digest());
@@ -701,6 +701,7 @@ public final class Transport implements ExitHandler {
 
                         //Check it
                         if (Arrays.equals(ifac, expectedIfac)) {
+                            log.debug("Transport *** inbound - ifac OK");
                             localRaw = newRaw;
                         } else {
                             return;
@@ -1636,6 +1637,7 @@ public final class Transport implements ExitHandler {
         ) {
             var hopsEntry = destinationTable.get(encodeHexString(packet.getDestinationHash()));
             var outboundInterface = hopsEntry.getInterface();
+            log.debug("Transport *** outbound - out IF: {}", hopsEntry.getInterface());
 
             //If there's more than one hop to the destination, and we know
             // a path, we insert the packet into transport by adding the next
