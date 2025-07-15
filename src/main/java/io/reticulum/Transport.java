@@ -1956,7 +1956,8 @@ public final class Transport implements ExitHandler {
         // Filter packets intended for other transport instances
         if (nonNull(packet.getTransportId()) && (packet.getPacketType() != ANNOUNCE)) {
             log.debug("Transport *** packetFilter - packet transport ID: {}, transport instance ID: {}", packet.getTransportId(), Transport.getInstance().getIdentity().getHash());
-            if (packet.getTransportId() != Transport.getInstance().getIdentity().getHash()) {
+            if (isFalse(Arrays.equals(packet.getTransportId(),Transport.getInstance().getIdentity().getHash()))) {
+            //if (packet.getTransportId() != Transport.getInstance().getIdentity().getHash()) {
                 return false;
             }
         }
