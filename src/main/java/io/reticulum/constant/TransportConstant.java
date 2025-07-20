@@ -41,6 +41,7 @@ public class TransportConstant {
      * milliseconds
      */
     public static final long PATH_REQUEST_GRACE = 350;     // Grace time before a path announcement is made, allows directly reachable peers to respond first
+    public static final long PATH_REQUEST_RG = 1500;     // Extra grace time [ms] for roaming-ode interfaces to allow more suitable peers to respond first
     public static final int PATH_REQUEST_RW = 2;         // Path request random window
     public static final int PATH_REQUEST_MI = 5;       // Minimum interval in seconds for automated path requests
 

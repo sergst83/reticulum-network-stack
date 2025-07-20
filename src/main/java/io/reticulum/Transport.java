@@ -4,10 +4,12 @@ import io.reticulum.constant.TransportConstant;
 import io.reticulum.destination.Destination;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.ConnectionInterface;
+import io.reticulum.interfaces.InterfaceMode;
 import io.reticulum.link.Link;
 import io.reticulum.packet.Packet;
 import io.reticulum.packet.PacketReceipt;
 import io.reticulum.packet.PacketReceiptStatus;
+import io.reticulum.packet.PacketType;
 import io.reticulum.packet.data.DataPacket;
 import io.reticulum.packet.data.DataPacketConverter;
 import io.reticulum.storage.Storage;
@@ -98,6 +100,7 @@ import static io.reticulum.constant.TransportConstant.PATHFINDER_M;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_R;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_RW;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_GRACE;
+import static io.reticulum.constant.TransportConstant.PATH_REQUEST_RG;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_MI;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_TIMEOUT;
 import static io.reticulum.constant.TransportConstant.RECEIPTS_CHECK_INTERVAL;
@@ -155,6 +158,7 @@ import static org.apache.commons.collections4.CollectionUtils.isNotEmpty;
 import static org.apache.commons.lang3.ArrayUtils.getLength;
 import static org.apache.commons.lang3.ArrayUtils.subarray;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
+import static org.apache.commons.lang3.BooleanUtils.isTrue;
 
 @Slf4j
 public final class Transport implements ExitHandler {
@@ -565,12 +569,23 @@ public final class Transport implements ExitHandler {
     }
 
     private Packet getCachedPacket(byte[] packetHash) {
+        return getCachedPacket(packetHash, null);
+    }
+
+    private Packet getCachedPacket(byte[] packetHash, PacketType packetType) {
         var paketCache = storage.getPacketCache(encodeHexString(packetHash));
-        if (isNull(paketCache)) {
+        if (isNull(paketCache) && (packetType != ANNOUNCE)) {
             return null;
         }
 
         var packet = new Packet(paketCache.getRaw());
+        if (packetType == ANNOUNCE) {
+            var announceEntry = announceTable.get(encodeHexString(packetHash));
+            if (nonNull(announceEntry)) {
+                packet = announceEntry.getPacket();
+            }
+        }
+
         interfaces.stream()
                 .filter(i -> StringUtils.equals(i.getInterfaceName(), paketCache.getInterfaceName()))
                 .findAny()
@@ -2303,12 +2318,19 @@ public final class Transport implements ExitHandler {
                 (getOwner().isTransportEnabled() || isFromLocalClient)
                         && destinationTable.containsKey(encodeHexString(destinationHash))
         ) {
-            var hopEntry = destinationTable.get(encodeHexString(destinationHash));
-            var packet = hopEntry.getPacket();
-            var nextHop = hopEntry.getVia();
-            var receivedFrom = hopEntry.getPacket().getTransportId(); //todo в питоне тут ошибка
+            var destinationEntry = destinationTable.get(encodeHexString(destinationHash));
+            //var packet = destinationEntry.getPacket();
+            var packet = getCachedPacket(destinationHash, ANNOUNCE);
+            var nextHop = destinationEntry.getVia();
+            var receivedFrom = destinationEntry.getPacket().getTransportId(); //todo в питоне тут ошибка (?)
+            // python version has "Transport.path_table[destination_hash][IDX_PT_RVCD_IF]".
+            // why does annouceTable use TransportId instead of interface as python version does (?)
+            //var receivedFrom = destinationEntry.getInterface();
 
-            if (attachedInterface.getMode() == MODE_ROAMING && Objects.equals(attachedInterface, receivedFrom)) {
+            if (isNull(packet)) {
+                log.debug("Could not retrieve announce packet from cache while answering path request for {}",
+                        encodeHexString(destinationHash));
+            } else if (attachedInterface.getMode() == MODE_ROAMING && Objects.equals(attachedInterface, receivedFrom)) {
                 log.debug("Not answering path request on roaming-mode interface, since next hop is on same roaming-mode interface");
             } else {
                 if (nonNull(requestorTransportId) && Arrays.equals(requestorTransportId, nextHop)) {
@@ -2320,14 +2342,34 @@ public final class Transport implements ExitHandler {
                     // convergence time. Maybe just drop it?
                     log.debug("Not answering path request for {}, since next hop is the requestor", encodeHexString(destinationHash));
                 } else {
-                    log.debug("Answering path request for {} on {}", encodeHexString(destinationHash), attachedInterface);
+                    log.debug("Answering path request for {} on {}, path is known",
+                            encodeHexString(destinationHash), attachedInterface);
 
                     var now = Instant.now();
                     var retries = PATHFINDER_R;
                     var localRebroadcasts = 0;
                     var blockRebroadcasts = true;
                     var announceHops = packet.getHops();
-                    var retransmitTimeout = isFromLocalClient ? now : now.plusMillis(PATH_REQUEST_GRACE);
+                    //var retransmitTimeout = isFromLocalClient ? now : now.plusMillis(PATH_REQUEST_GRACE);
+                    var retransmitTimeout = now;
+
+                    if (isFromLocalClient) {
+                        retransmitTimeout = now;
+                    } else {
+                        if (isLocalClientInterface(nextHopInterface(destinationHash))) {
+                            log.trace("Path request destination {} is on a local client interface, rebroadcasting immediately");
+                            retransmitTimeout = now;
+                        } else {
+                            retransmitTimeout = now.plusMillis(PATH_REQUEST_GRACE);
+
+                            // If we are answering on a roaming-mode interface, wait a
+                            // little longer, to allow potential more well-connected
+                            // peers to answer first.
+                            if (attachedInterface.getMode() == MODE_ROAMING) {
+                                retransmitTimeout = retransmitTimeout.plusMillis(PATH_REQUEST_RG);
+                            }
+                        }
+                    }
 
                     // This handles an edge case where a peer sends a past
                     // request for a destination just after an announce for
