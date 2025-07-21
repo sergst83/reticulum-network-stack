@@ -2410,6 +2410,7 @@ public final class Transport implements ExitHandler {
                 }
             }
         } else if (shouldSearchForUnknown) {
+            log.debug("Transport *** pathRequest - shouldSearchForUnknown: {}", shouldSearchForUnknown);
             if (discoveryPathRequests.containsKey(encodeHexString(destinationHash))) {
                 log.debug("There is already a waiting path request for {} on behalf of path request on {}",
                         encodeHexString(destinationHash), attachedInterface);

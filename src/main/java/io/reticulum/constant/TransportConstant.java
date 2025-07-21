@@ -7,10 +7,11 @@ import java.util.List;
 import static io.reticulum.constant.LinkConstant.STALE_TIME;
 import static io.reticulum.interfaces.InterfaceMode.MODE_ACCESS_POINT;
 import static io.reticulum.interfaces.InterfaceMode.MODE_GATEWAY;
+import static io.reticulum.interfaces.InterfaceMode.MODE_ROAMING;
 
 public class TransportConstant {
 
-    public static final List<InterfaceMode> DISCOVER_PATHS_FOR = List.of(MODE_ACCESS_POINT, MODE_GATEWAY);
+    public static final List<InterfaceMode> DISCOVER_PATHS_FOR = List.of(MODE_ACCESS_POINT, MODE_GATEWAY, MODE_ROAMING);
 
     public static final byte REACHABILITY_UNREACHABLE = 0x00;
     public static final byte REACHABILITY_DIRECT = 0x01;
