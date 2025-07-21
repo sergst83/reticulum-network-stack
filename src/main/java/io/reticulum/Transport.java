@@ -574,17 +574,18 @@ public final class Transport implements ExitHandler {
 
     private Packet getCachedPacket(byte[] packetHash, PacketType packetType) {
         var paketCache = storage.getPacketCache(encodeHexString(packetHash));
+        //if (isNull(paketCache) && (packetType != ANNOUNCE)) {
         if (isNull(paketCache) && (packetType != ANNOUNCE)) {
             return null;
         }
 
         var packet = new Packet(paketCache.getRaw());
-        if (packetType == ANNOUNCE) {
-            var announceEntry = announceTable.get(encodeHexString(packetHash));
-            if (nonNull(announceEntry)) {
-                packet = announceEntry.getPacket();
-            }
-        }
+        //if (packetType == ANNOUNCE) {
+        //    var announceEntry = announceTable.get(encodeHexString(packetHash));
+        //    if (nonNull(announceEntry)) {
+        //        packet = announceEntry.getPacket();
+        //    }
+        //}
 
         interfaces.stream()
                 .filter(i -> StringUtils.equals(i.getInterfaceName(), paketCache.getInterfaceName()))
