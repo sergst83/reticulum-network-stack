@@ -575,7 +575,7 @@ public final class Transport implements ExitHandler {
     private Packet getCachedPacket(byte[] packetHash, PacketType packetType) {
         var paketCache = storage.getPacketCache(encodeHexString(packetHash));
         //if (isNull(paketCache) && (packetType != ANNOUNCE)) {
-        if (isNull(paketCache) && (packetType != ANNOUNCE)) {
+        if (isNull(paketCache)) {
             return null;
         }
 
@@ -2324,8 +2324,7 @@ public final class Transport implements ExitHandler {
             var packet = getCachedPacket(destinationHash, ANNOUNCE);
             var nextHop = destinationEntry.getVia();
             var receivedFrom = destinationEntry.getPacket().getTransportId(); //todo в питоне тут ошибка (?)
-            // python version has "Transport.path_table[destination_hash][IDX_PT_RVCD_IF]".
-            // why does annouceTable use TransportId instead of interface as python version does (?)
+            // python version has "Transport.path_table[destination_hash][IDX_PT_RVCD_IF]" (?)
             //var receivedFrom = destinationEntry.getInterface();
 
             if (isNull(packet)) {
@@ -2334,6 +2333,8 @@ public final class Transport implements ExitHandler {
             } else if (attachedInterface.getMode() == MODE_ROAMING && Objects.equals(attachedInterface, receivedFrom)) {
                 log.debug("Not answering path request on roaming-mode interface, since next hop is on same roaming-mode interface");
             } else {
+                packet.setHops(destinationEntry.getHops());
+
                 if (nonNull(requestorTransportId) && Arrays.equals(requestorTransportId, nextHop)) {
                     // TODO: Find a bandwidth efficient way to invalidate our
                     // known path on this signal. The obvious way of signing
