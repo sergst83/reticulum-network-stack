@@ -683,7 +683,6 @@ public final class Transport implements ExitHandler {
                     if (getLength(raw) > 2 + iface.getIfacSize()) {
                         //Extract IFAC
                         var ifac = subarray(raw, 2, 2 + iface.getIfacSize());
-                        //log.debug("Transport *** inbound packet - IF: {}, ifac size: {}", iface, iface.getIfacSize());
 
                         //Generate mask
                         var hkdf = new HKDFBytesGenerator(new SHA256Digest());
@@ -717,7 +716,6 @@ public final class Transport implements ExitHandler {
 
                         //Check it
                         if (Arrays.equals(ifac, expectedIfac)) {
-                            //log.debug("Transport *** inbound - ifac OK");
                             localRaw = newRaw;
                         } else {
                             return;
@@ -759,7 +757,6 @@ public final class Transport implements ExitHandler {
         }
 
         var packet = new Packet(localRaw);
-        //log.debug("Transport *** inbound - paket type: {}, dest type: {}", packet.getPacketType(), packet.getDestinationType());
         if (isFalse(packet.unpack())) {
             jobsLock.unlock();
             return;
@@ -851,8 +848,6 @@ public final class Transport implements ExitHandler {
             );
             var proofForLocalClient = reverseTable.containsKey(encodeHexString(packet.getDestinationHash()))
                     && localClientInterfaces.contains(reverseTable.get(encodeHexString(packet.getDestinationHash())).getReceivingInterface());
-            //log.debug("Transport *** inbound - from_lc: {}, for_lc: {}, for_lcl: {}, proof_for_lc: {}",
-            //        fromLocalClient, forLocalClient, forLocalClientLink, proofForLocalClient);
 
             //Plain broadcast packets from local clients are sent
             // directly on all attached interfaces, since they are
@@ -896,7 +891,6 @@ public final class Transport implements ExitHandler {
 
                 // If the packet is in transport, check whether we are the designated next hop, and process it accordingly if we are.
                 if (nonNull(packet.getTransportId()) && packet.getPacketType() != ANNOUNCE) {
-                    //log.debug("Transport *** transportId: {}, packetType: {}", packet.getTransportId(), packet.getPacketType());
                     if (Arrays.equals(packet.getTransportId(), identity.getHash())) {
                         if (destinationTable.containsKey(encodeHexString(packet.getDestinationHash()))) {
                             var hopsEntry = destinationTable.get(encodeHexString(packet.getDestinationHash()));
@@ -904,7 +898,6 @@ public final class Transport implements ExitHandler {
                             var remainingHops = hopsEntry.getHops();
 
                             DataPacket dataPacket = new DataPacket();
-                            //log.debug("Transport *** inbound - remainingHops: {}", remainingHops);
                             if (remainingHops > 1) {
                                 //Just increase hop count and transmit
                                 dataPacket = DataPacketConverter.fromBytes(packet.getRaw());
@@ -922,10 +915,8 @@ public final class Transport implements ExitHandler {
                             }
 
                             var outboundInterface = destinationTable.get(encodeHexString(packet.getDestinationHash())).getInterface();
-                            //log.debug("Transport *** inbound - outboundInterface: {}, packet type: {}", outboundInterface, packet.getPacketType());
 
                             if (packet.getPacketType() == LINKREQUEST) {
-                                //log.debug("Transport *** inbound LINKREQUEST - building linkTable entry");
                                 var now = Instant.now();
                                 var proofTimeout =  now
                                         .plusMillis((long) ESTABLISHMENT_TIMEOUT_PER_HOP * Math.max(1, remainingHops))
@@ -949,7 +940,6 @@ public final class Transport implements ExitHandler {
                                 linkTable.put(encodeHexString(packet.getDestinationHash()), linkEntry);
                                 //linkTable.put(encodeHexString(LinkUtils.linkIdFromLrPacket(packet)), linkEntry);
                             } else {
-                                //log.debug("Transport *** inbound - building reverseTable entry");
                                 //Entry format is
                                 var reserveEntry = ReversEntry.builder()
                                         .receivingInterface(packet.getReceivingInterface())
@@ -1429,7 +1419,6 @@ public final class Transport implements ExitHandler {
 
             //Handling for link requests to local destinations
             else if (packet.getPacketType() == LINKREQUEST) {
-                //log.debug("Transport *** inbound - before receiving LNKREQUEST");
                 if (isNull(packet.getTransportId()) || Arrays.equals(packet.getTransportId(), identity.getHash())) {
                     for (Destination destination : destinations) {
                         // Note: TODO - implement python path_mtu, mode part
@@ -1446,7 +1435,6 @@ public final class Transport implements ExitHandler {
 
             //Handling for local data packets
             else if (packet.getPacketType() == DATA) {
-                //log.debug("Transport *** inbound - packet type: DATA, packet destinationType: {}", packet.getDestinationType());
                 if (packet.getDestinationType() == LINK) {
                     for (Link link : activeLinks) {
                         if (Arrays.equals(link.getLinkId(), packet.getDestinationHash())) {
@@ -1485,9 +1473,6 @@ public final class Transport implements ExitHandler {
             else if (packet.getPacketType() == PROOF) {
                 if (packet.getContext() == LRPROOF) {
                     // This is a link request proof, check if it needs to be transported
-                    //log.debug("Transport *** inbound - use_transport: {}, link table contains dest hash: {}",
-                    //        owner.isTransportEnabled(),
-                    //        linkTable.containsKey(encodeHexString(packet.getDestinationHash())));
                     if (
                         (owner.isTransportEnabled() || forLocalClientLink || fromLocalClient)
                             && linkTable.containsKey(encodeHexString(packet.getDestinationHash()))
@@ -1534,8 +1519,6 @@ public final class Transport implements ExitHandler {
                     } else {
                         //Check if we can deliver it to a local pending link
                         for (Link link : pendingLinks) {
-                            //log.debug("Transport ***-*** - pending link id: {}, packet dest hash: {}",
-                            //        encodeHexString(link.getLinkId()), encodeHexString(packet.getDestinationHash()));
                             if (Arrays.equals(link.getLinkId(), packet.getDestinationHash())) {
                                 // We need to also allow an expected hops value of
                                 // PATHFINDER_M, since in some cases, the number of hops
@@ -1545,9 +1528,7 @@ public final class Transport implements ExitHandler {
                                 // be discarded without major issues, but it is kept
                                 // for now to ensure backwards compatibility.
 
-                                //log.debug("Transport *** pendingLinks - same");
                                 if ((packet.getHops() == link.getExpectedHops()) || (link.getExpectedHops() == TransportConstant.PATHFINDER_M )) {
-                                    log.debug("Transport *** pendingLinks - for this node - do validateProof");
                                     // Add this packet to the filter hashlist if we
                                     // have determined that it's actually destined
                                     // for this system, and then validate the proof
@@ -1581,7 +1562,6 @@ public final class Transport implements ExitHandler {
                             (owner.isTransportEnabled() || fromLocalClient || proofForLocalClient)
                                     && reverseTable.containsKey(encodeHexString(packet.getDestinationHash()))
                     ) {
-                        //log.debug("Transport *** incoming - proof needs to be transported (reverseTable check)");
                         var reverseEntry = reverseTable.remove(encodeHexString(packet.getDestinationHash()));
                         if (Objects.equals(packet.getReceivingInterface(), reverseEntry.getOutboundInterface())) {
                             log.debug("Proof received on correct interface, transporting it via {}",
@@ -1665,7 +1645,6 @@ public final class Transport implements ExitHandler {
         ) {
             var hopsEntry = destinationTable.get(encodeHexString(packet.getDestinationHash()));
             var outboundInterface = hopsEntry.getInterface();
-            //log.debug("Transport *** outbound - out IF: {}", hopsEntry.getInterface());
 
             //If there's more than one hop to the destination, and we know
             // a path, we insert the packet into transport by adding the next
@@ -1978,7 +1957,6 @@ public final class Transport implements ExitHandler {
 
         // Filter packets intended for other transport instances
         if (nonNull(packet.getTransportId()) && (packet.getPacketType() != ANNOUNCE)) {
-            //log.debug("Transport *** packetFilter - packet transport ID: {}, transport instance ID: {}", packet.getTransportId(), Transport.getInstance().getIdentity().getHash());
             if (isFalse(Arrays.equals(packet.getTransportId(),Transport.getInstance().getIdentity().getHash()))) {
             //if (packet.getTransportId() != Transport.getInstance().getIdentity().getHash()) {
                 return false;
@@ -2412,7 +2390,6 @@ public final class Transport implements ExitHandler {
                 }
             }
         } else if (shouldSearchForUnknown) {
-            //log.debug("Transport *** pathRequest - shouldSearchForUnknown: {}", shouldSearchForUnknown);
             if (discoveryPathRequests.containsKey(encodeHexString(destinationHash))) {
                 log.debug("There is already a waiting path request for {} on behalf of path request on {}",
                         encodeHexString(destinationHash), attachedInterface);
