@@ -2909,9 +2909,13 @@ public final class Transport implements ExitHandler {
                         log.debug("Removed {} tunnel paths", ti);
                     }
 
-                    staleReverseEntries.forEach(reverseTable::remove);
-                    if (isFalse(staleReverseEntries.isEmpty())) {
-                        log.debug("Released {} reverse table entries", staleReverseEntries.size());
+                    try {
+                        staleReverseEntries.forEach(reverseTable::remove);
+                        if (isFalse(staleReverseEntries.isEmpty())) {
+                            log.debug("Released {} reverse table entries", staleReverseEntries.size());
+                        }
+                    } catch (IllegalMonitorStateException e) {
+                        log.error("IllegalMonitorStateException while removing staleLinks from reverseTable");
                     }
 
                     try {
@@ -2923,9 +2927,13 @@ public final class Transport implements ExitHandler {
                         log.error("IllegalMonitorStateException while removing staleLinks from linkTable");
                     }
 
-                    stalePaths.forEach(destinationTable::remove);
-                    if (isFalse(stalePaths.isEmpty())) {
-                        log.debug("Removed {} waiting path requests", stalePaths.size());
+                    try {
+                        stalePaths.forEach(destinationTable::remove);
+                        if (isFalse(stalePaths.isEmpty())) {
+                            log.debug("Removed {} waiting path requests", stalePaths.size());
+                        }
+                    } catch (IllegalMonitorStateException e) {
+                        log.error("IllegalMonitorStateException while removing staleLinks from destinationTable");
                     }
 
                     staleDiscoveryPathRequests.forEach(discoveryPathRequests::remove);
