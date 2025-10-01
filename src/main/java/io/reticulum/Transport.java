@@ -2600,9 +2600,9 @@ public final class Transport implements ExitHandler {
         Map<String, ConnectionInterface> pathRequestList = new HashMap<>();
         ConnectionInterface blockedIf = null;
 
-        try {
-            if (jobsLock.tryLock()) {
-
+        //if (jobsLock.tryLock()) {
+        if (jobsLock.tryLock(3, TimeUnit.SECONDS)) {
+            try {
                 //Process active and pending link lists
                 if (Instant.now().isAfter(linksLastChecked.get().plusMillis(LINKS_CHECK_INTERVAL))) {
                     for (Link link : pendingLinks) {
@@ -2763,6 +2763,10 @@ public final class Transport implements ExitHandler {
                         if (linkEntry.isValidated()) {
                             if (Instant.now().isAfter(linkEntry.getTimestamp().plusSeconds(LINK_TIMEOUT))) {
                                 staleLinks.add(linkIdHex);
+                            } else if (isFalse(interfaces.contains(linkEntry.getNextHopInterface()))) {
+                                staleLinks.add(linkIdHex);
+                            } else if (isFalse(interfaces.contains(linkEntry.getReceivingInterface()))) {
+                                staleLinks.add(linkIdHex);
                             }
                         } else {
                             if (Instant.now().isAfter(linkEntry.getProofTimestamp())) {
@@ -2773,7 +2777,7 @@ public final class Transport implements ExitHandler {
                                         Instant.EPOCH
                                 );
 
-                                var lrTokenHops = linkEntry.getHops();
+                                var lrTakenHops = linkEntry.getHops();
 
                                 var pathRequestThrottle = Duration.between(lastPathRequest, Instant.now()).toSeconds() < PATH_REQUEST_MI;
                                 var pathRequestConditions = false;
@@ -2789,7 +2793,7 @@ public final class Transport implements ExitHandler {
                                 // If this link request was originated from a local client
                                 // attempt to rediscover a path to the destination, if this
                                 // has not already happened recently.
-                                else if (isFalse(pathRequestThrottle && lrTokenHops == 0)) {
+                                else if (isFalse(pathRequestThrottle && lrTakenHops == 0)) {
                                     log.debug("Trying to rediscover path for {} since an attempted local client link was never established",
                                             encodeHexString(linkEntry.getDestinationHash()));
                                     pathRequestConditions = true;
@@ -2810,7 +2814,7 @@ public final class Transport implements ExitHandler {
                                 // this likely means that network topology has
                                 // changed. In that case, we try to discover a new path,
                                 // and mark the old one as potentially unresponsive.
-                                else if (isFalse(pathRequestThrottle && lrTokenHops == 1)) {
+                                else if (isFalse(pathRequestThrottle && lrTakenHops == 1)) {
                                     log.debug("Trying to rediscover path for {} since an attempted link was never established, and link initiator is local to an interface on this instance",
                                             encodeHexString(linkEntry.getDestinationHash()));
                                     pathRequestConditions = true;
@@ -2826,7 +2830,7 @@ public final class Transport implements ExitHandler {
                                 if (pathRequestConditions) {
                                     pathRequestList.putIfAbsent(encodeHexString(linkEntry.getDestinationHash()), blockedIf);
 
-                                    if (owner.isTransportEnabled()) {
+                                    if (isFalse(owner.isTransportEnabled())) {
                                         // Drop current path if we are not a transport instance, to
                                         // allow using higher-hop count paths or reused announces
                                         // from newly adjacent transport instances.
@@ -2910,9 +2914,13 @@ public final class Transport implements ExitHandler {
                         log.debug("Released {} reverse table entries", staleReverseEntries.size());
                     }
 
-                    staleLinks.forEach(linkTable::remove);
-                    if (isFalse(staleLinks.isEmpty())) {
-                        log.debug("Released {} links", staleLinks.size());
+                    try {
+                        staleLinks.forEach(linkTable::remove);
+                        if (isFalse(staleLinks.isEmpty())) {
+                            log.debug("Released {} links", staleLinks.size());
+                        }
+                    } catch (IllegalMonitorStateException e) {
+                        log.error("IllegalMonitorStateException while removing staleLinks from linkTable");
                     }
 
                     stalePaths.forEach(destinationTable::remove);
@@ -2954,17 +2962,17 @@ public final class Transport implements ExitHandler {
                     interfaceLastJobs.set(Instant.now());
                 }
 
-            } else {
-                //Transport jobs were locked, do nothing
+            } catch (Exception e) {
+                log.error("An exception occurred while running Transport jobs.", e);
+            } finally {
+                try {
+                    jobsLock.unlock();
+                } catch (IllegalStateException e) {
+                    log.warn("Error while jobsLock unlock", e);
+                }
             }
-        } catch (Exception e) {
-            log.error("An exception occurred while running Transport jobs.", e);
-        } finally {
-            try {
-                jobsLock.unlock();
-            } catch (IllegalStateException e) {
-                log.warn("Error while jobsLock unlock", e);
-            }
+        } else {
+            //Transport jobs were locked, do nothing
         }
 
         outgoing.forEach(Packet::send);
