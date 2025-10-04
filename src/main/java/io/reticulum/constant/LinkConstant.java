@@ -33,11 +33,15 @@ public class LinkConstant {
      */
     public static final int ESTABLISHMENT_TIMEOUT_PER_HOP = DEFAULT_PER_HOP_TIMEOUT;
 
+    public static final int LINK_MTU_SIZE = 3;
+    //public static final double KEEPALIVE_MAX_RTT = 1.75;
     public static final int TRAFFIC_TIMEOUT_FACTOR = 6;
+
     /**
      * RTT timeout factor used in link timeout calculation.
      */
     public static final int KEEPALIVE_TIMEOUT_FACTOR = 4;
+
     /**
      * Grace period in seconds used in link timeout calculation.
      */

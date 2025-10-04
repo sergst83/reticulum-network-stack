@@ -274,7 +274,7 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
         var hash = Hex.encodeHexString(announcePacket.getDestinationHash());
         if (heldAnnounces.containsKey(hash)) {
             heldAnnounces.put(hash, announcePacket);
-        } else if (MapUtils.size(heldAnnounces) <= icMaxHeldAnnounces) {
+        } else if (MapUtils.size(heldAnnounces) >= icMaxHeldAnnounces) {
             heldAnnounces.put(hash, announcePacket);
         }
     }
@@ -287,7 +287,7 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
                 var iaFreq = incomingAnnounceFrequency();
                 if (iaFreq < freqThreshold) {
                     var selectedAnnouncePacket = (Packet) null;
-                    var minHops = TransportConstant.PATHFINDER_R;
+                    var minHops = TransportConstant.PATHFINDER_M;
                     for (String destinationHash : heldAnnounces.keySet()) {
                         var announcePacket = heldAnnounces.get(destinationHash);
                         if (announcePacket.getHops() < minHops) {
