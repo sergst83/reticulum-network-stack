@@ -7,7 +7,6 @@ import io.reticulum.cryptography.Fernet;
 import io.reticulum.destination.AbstractDestination;
 import io.reticulum.destination.Destination;
 import io.reticulum.destination.DestinationType;
-import io.reticulum.link.PackedResponse;
 import io.reticulum.destination.Request;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.ConnectionInterface;
