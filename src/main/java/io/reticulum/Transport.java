@@ -35,6 +35,7 @@ import lombok.NonNull;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.collections4.MapUtils;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
@@ -153,6 +154,7 @@ import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.apache.commons.codec.binary.Hex.decodeHex;
+
 import static org.apache.commons.codec.binary.Hex.encodeHexString;
 import static org.apache.commons.collections4.CollectionUtils.isNotEmpty;
 import static org.apache.commons.lang3.ArrayUtils.getLength;
@@ -348,7 +350,7 @@ public final class Transport implements ExitHandler {
             if (isNotEmpty(tunnelList) && isFalse(owner.isConnectedToSharedInstance())) {
                 for (TunnelEntity tunnelEntity : tunnelList) {
                     var tunnelPaths = new HashMap<String, Hops>();
-                    tunnelEntity.getTunnelPaths().forEach((destinationHash, hopEntry) -> {
+                    MapUtils.emptyIfNull(tunnelEntity.getTunnelPaths()).forEach((destinationHash, hopEntry) -> {
                         var receivingInterface = findInterfaceFromHash(hopEntry.getInterfaceHash());
                         var announcePacket = getCachedPacket(hopEntry.getPacketHash());
                         if (nonNull(announcePacket)) {
@@ -1474,8 +1476,8 @@ public final class Transport implements ExitHandler {
                 if (packet.getContext() == LRPROOF) {
                     // This is a link request proof, check if it needs to be transported
                     if (
-                        (owner.isTransportEnabled() || forLocalClientLink || fromLocalClient)
-                            && linkTable.containsKey(encodeHexString(packet.getDestinationHash()))
+                            (owner.isTransportEnabled() || forLocalClientLink || fromLocalClient)
+                                    && linkTable.containsKey(encodeHexString(packet.getDestinationHash()))
                     ) {
                         var linkEntry = linkTable.get(encodeHexString(packet.getDestinationHash()));
                         if (packet.getHops() == linkEntry.getRemainingHops()) {
@@ -1483,10 +1485,9 @@ public final class Transport implements ExitHandler {
                                 try {
                                     //if (getLength(packet.getData()) == (SIGLENGTH / 8 + ECPUBSIZE / 2)) {
                                     if (
-                                        (getLength(packet.getData()) == (SIGLENGTH / 8 + ECPUBSIZE / 2)
+                                            (getLength(packet.getData()) == (SIGLENGTH / 8 + ECPUBSIZE / 2)
                                             || getLength(packet.getData()) == SIGLENGTH / 8 + ECPUBSIZE / 2 + LINK_MTU_SIZE)
-                                        ) {
-                                        // TODO: implement signalling bytes (see Python)
+                                    ) {
                                         var peerPubBytes = subarray(
                                                 packet.getData(),
                                                 SIGLENGTH / 8,
