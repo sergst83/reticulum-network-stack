@@ -10,7 +10,9 @@ import java.util.Arrays;
 public enum TransportType {
 
     BROADCAST((byte) 0x00),
-    TRANSPORT((byte) 0x01);
+    TRANSPORT((byte) 0x01),
+    RELAY((byte) 0x02),
+    TUNNEL((byte) 0x03);
 
     private final byte value;
 
