@@ -1,4 +1,4 @@
-package io.reticulum.destination;
+package io.reticulum.link;
 
 import lombok.Value;
 import org.msgpack.value.ImmutableArrayValue;
