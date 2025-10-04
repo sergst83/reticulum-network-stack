@@ -16,6 +16,8 @@ import java.nio.file.Files;
 import java.util.Objects;
 
 import static io.reticulum.destination.ProofStrategy.PROVE_ALL;
+import static java.util.concurrent.Executors.newSingleThreadScheduledExecutor;
+import static java.util.concurrent.TimeUnit.SECONDS;
 
 @Slf4j
 public class ReticulumClient {
@@ -27,9 +29,9 @@ public class ReticulumClient {
     Identity appIdentity;
     Destination addDestination;
     public static void main(String[] args) {
-        var reticulumServer = getInstance();
-        reticulumServer.setup();
-        reticulumServer.run();
+        var reticulumClient = getInstance();
+        reticulumClient.setup();
+        reticulumClient.run();
     }
 
     static ReticulumClient getInstance () {
@@ -60,13 +62,13 @@ public class ReticulumClient {
                 }
             }
         });
-//        newSingleThreadScheduledExecutor()
-//                        .scheduleWithFixedDelay(
-//                                () -> addDestination.announce(APP_NAME.getBytes(UTF_8)),
-//                                5,
-//                                300,
-//                                TimeUnit.SECONDS
-//                        );
+        newSingleThreadScheduledExecutor()
+                        .scheduleWithFixedDelay(
+                                () -> addDestination.announce(APP_NAME.getBytes()),
+                                5,
+                                60,
+                                SECONDS
+                        );
     }
 
     private Identity getIdentity(Reticulum reticulum) throws IOException {

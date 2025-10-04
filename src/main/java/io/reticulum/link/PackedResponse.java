@@ -1,4 +1,4 @@
-package io.reticulum.destination;
+package io.reticulum.link;
 
 import lombok.Value;
 import org.msgpack.value.ImmutableArrayValue;
@@ -6,8 +6,8 @@ import org.msgpack.value.ValueFactory;
 
 @Value
 public class PackedResponse {
-    byte[] response;
     byte[] requestId;
+    byte[] response;
 
     public ImmutableArrayValue toValue() {
         return ValueFactory.newArray(

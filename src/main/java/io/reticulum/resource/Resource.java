@@ -13,7 +13,6 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.collections4.CollectionUtils;
-import org.apache.commons.compress.compressors.CompressorException;
 import org.apache.commons.compress.compressors.CompressorStreamFactory;
 import org.apache.commons.lang3.ArrayUtils;
 import org.msgpack.core.MessagePack;
@@ -238,7 +237,7 @@ public class Resource {
                     var compressor = new CompressorStreamFactory().createCompressorOutputStream(BZIP2, baos);
                     compressor.write(uncompressedData);
                     this.compressedData = baos.toByteArray();
-                } catch (IOException | CompressorException e) {
+                } catch (IOException e) {
                     throw new RuntimeException(e);
                 }
                 log.debug("Compression completed in {} milliseconds", Duration.between(compressionBegan, Instant.now()).toMillis());

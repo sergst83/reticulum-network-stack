@@ -32,6 +32,7 @@ import lombok.NonNull;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.collections4.MapUtils;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
@@ -341,7 +342,7 @@ public final class Transport implements ExitHandler {
             if (isNotEmpty(tunnelList) && isFalse(owner.isConnectedToSharedInstance())) {
                 for (TunnelEntity tunnelEntity : tunnelList) {
                     var tunnelPaths = new HashMap<String, Hops>();
-                    tunnelEntity.getTunnelPaths().forEach((destinationHash, hopEntry) -> {
+                    MapUtils.emptyIfNull(tunnelEntity.getTunnelPaths()).forEach((destinationHash, hopEntry) -> {
                         var receivingInterface = findInterfaceFromHash(hopEntry.getInterfaceHash());
                         var announcePacket = getCachedPacket(hopEntry.getPacketHash());
                         if (nonNull(announcePacket)) {

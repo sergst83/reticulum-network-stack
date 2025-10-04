@@ -6,15 +6,11 @@ interfaces:
   "Default Interface":
     type: AutoInterface
     enabled: false
-  "Local Client Interface":
+  "Client Interface":
     type: TCPClientInterface
     enabled: true
     target_port: 3232
     target_host: 127.0.0.1
     network_name: net
     pass_phrase: net
-  "Remote Clint Interface":
-    type: TCPClientInterface
-    enabled: true
-    target_port: 4242
-    target_host: 192.168.3.28
+

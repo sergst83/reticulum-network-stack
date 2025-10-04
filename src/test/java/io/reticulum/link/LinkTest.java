@@ -5,11 +5,14 @@ package io.reticulum.link;
 
 import examples.LinkApp;
 import io.reticulum.Reticulum;
+import lombok.Cleanup;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
+import org.msgpack.core.MessagePack;
+import org.msgpack.value.ValueFactory;
 
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
@@ -72,6 +75,30 @@ class LinkTest {
         // clean up
         node1.shutdown();
         node2.shutdown();
+    }
+
+    @Test
+    void packUnpackTest() throws IOException {
+        var responseData = "responseData".getBytes();
+        var requestId = "requestId".getBytes();
+
+        @Cleanup var packer = MessagePack.newDefaultBufferPacker();
+        var packedResp = new PackedResponse(requestId, responseData);
+        var value = packedResp.toValue();
+        packer.packValue(value);
+        var packedResponse = packer.toByteArray();
+        packer.clear();
+
+        @Cleanup var unpacker = MessagePack.newDefaultUnpacker(packedResponse);
+        var unpackedResponseValue = unpacker.unpackValue().asArrayValue();
+        var unpackedResponse = UnpackedResponse.fromValue(unpackedResponseValue);
+        packer.packValue(ValueFactory.newBinary(unpackedResponse.getResponseData()));
+
+        var respData = packer.toByteArray();
+        packer.clear();
+
+        Assertions.assertArrayEquals(responseData, unpackedResponse.getResponseData());
+        Assertions.assertArrayEquals(requestId, unpackedResponse.getRequestId());
     }
 
 }
