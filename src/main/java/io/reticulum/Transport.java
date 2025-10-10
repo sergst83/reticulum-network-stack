@@ -4,10 +4,12 @@ import io.reticulum.constant.TransportConstant;
 import io.reticulum.destination.Destination;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.ConnectionInterface;
+import io.reticulum.interfaces.InterfaceMode;
 import io.reticulum.link.Link;
 import io.reticulum.packet.Packet;
 import io.reticulum.packet.PacketReceipt;
 import io.reticulum.packet.PacketReceiptStatus;
+import io.reticulum.packet.PacketType;
 import io.reticulum.packet.data.DataPacket;
 import io.reticulum.packet.data.DataPacketConverter;
 import io.reticulum.storage.Storage;
@@ -26,6 +28,7 @@ import io.reticulum.transport.ReversEntry;
 import io.reticulum.transport.TransportState;
 import io.reticulum.transport.Tunnel;
 import io.reticulum.utils.IdentityUtils;
+import io.reticulum.utils.LinkUtils;
 import io.reticulum.utils.Scheduler;
 import lombok.Getter;
 import lombok.NonNull;
@@ -98,6 +101,7 @@ import static io.reticulum.constant.TransportConstant.PATHFINDER_M;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_R;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_RW;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_GRACE;
+import static io.reticulum.constant.TransportConstant.PATH_REQUEST_RG;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_MI;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_TIMEOUT;
 import static io.reticulum.constant.TransportConstant.RECEIPTS_CHECK_INTERVAL;
@@ -150,11 +154,13 @@ import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.apache.commons.codec.binary.Hex.decodeHex;
+
 import static org.apache.commons.codec.binary.Hex.encodeHexString;
 import static org.apache.commons.collections4.CollectionUtils.isNotEmpty;
 import static org.apache.commons.lang3.ArrayUtils.getLength;
 import static org.apache.commons.lang3.ArrayUtils.subarray;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
+import static org.apache.commons.lang3.BooleanUtils.isTrue;
 
 @Slf4j
 public final class Transport implements ExitHandler {
@@ -320,6 +326,7 @@ public final class Transport implements ExitHandler {
                                             .expires(hopEntry.getExpires())
                                             .hops(hopEntry.getHops())
                                             .randomBlobs(hopEntry.getRandomBlobs())
+                                            .anInterface(receivingInterface)
                                             .packet(announcePacket)
                                             .build()
                             );
@@ -564,12 +571,24 @@ public final class Transport implements ExitHandler {
     }
 
     private Packet getCachedPacket(byte[] packetHash) {
+        return getCachedPacket(packetHash, null);
+    }
+
+    private Packet getCachedPacket(byte[] packetHash, PacketType packetType) {
         var paketCache = storage.getPacketCache(encodeHexString(packetHash));
+        //if (isNull(paketCache) && (packetType != ANNOUNCE)) {
         if (isNull(paketCache)) {
             return null;
         }
 
         var packet = new Packet(paketCache.getRaw());
+        //if (packetType == ANNOUNCE) {
+        //    var announceEntry = announceTable.get(encodeHexString(packetHash));
+        //    if (nonNull(announceEntry)) {
+        //        packet = announceEntry.getPacket();
+        //    }
+        //}
+
         interfaces.stream()
                 .filter(i -> StringUtils.equals(i.getInterfaceName(), paketCache.getInterfaceName()))
                 .findAny()
@@ -921,6 +940,7 @@ public final class Transport implements ExitHandler {
 //                                linkTable.put(encodeHexString(packet.getTruncatedHash()), linkEntry);
                                 // I changed it to destination Hash, because in java we search by string representation and truncatedHash can be != destinationHash
                                 linkTable.put(encodeHexString(packet.getDestinationHash()), linkEntry);
+                                //linkTable.put(encodeHexString(LinkUtils.linkIdFromLrPacket(packet)), linkEntry);
                             } else {
                                 //Entry format is
                                 var reserveEntry = ReversEntry.builder()
@@ -930,6 +950,7 @@ public final class Transport implements ExitHandler {
                                         .build();
 
                                 reverseTable.put(encodeHexString(packet.getDestinationHash()), reserveEntry);
+                                //reverseTable.put(encodeHexString(packet.getTruncatedHash()), reserveEntry);
                             }
 
                             transmit(outboundInterface, DataPacketConverter.toBytes(dataPacket));
@@ -1402,6 +1423,7 @@ public final class Transport implements ExitHandler {
             else if (packet.getPacketType() == LINKREQUEST) {
                 if (isNull(packet.getTransportId()) || Arrays.equals(packet.getTransportId(), identity.getHash())) {
                     for (Destination destination : destinations) {
+                        // Note: TODO - implement python path_mtu, mode part
                         if (
                                 Arrays.equals(destination.getHash(), packet.getDestinationHash())
                                         && destination.getType() == packet.getDestinationType()
@@ -1936,7 +1958,8 @@ public final class Transport implements ExitHandler {
 
         // Filter packets intended for other transport instances
         if (nonNull(packet.getTransportId()) && (packet.getPacketType() != ANNOUNCE)) {
-            if (packet.getTransportId() != Transport.getInstance().getIdentity().getHash()) {
+            if (isFalse(Arrays.equals(packet.getTransportId(),Transport.getInstance().getIdentity().getHash()))) {
+            //if (packet.getTransportId() != Transport.getInstance().getIdentity().getHash()) {
                 return false;
             }
         }
@@ -2276,14 +2299,22 @@ public final class Transport implements ExitHandler {
                 (getOwner().isTransportEnabled() || isFromLocalClient)
                         && destinationTable.containsKey(encodeHexString(destinationHash))
         ) {
-            var hopEntry = destinationTable.get(encodeHexString(destinationHash));
-            var packet = hopEntry.getPacket();
-            var nextHop = hopEntry.getVia();
-            var receivedFrom = hopEntry.getPacket().getTransportId(); //todo в питоне тут ошибка
+            var destinationEntry = destinationTable.get(encodeHexString(destinationHash));
+            //var packet = destinationEntry.getPacket();
+            var packet = getCachedPacket(destinationHash, ANNOUNCE);
+            var nextHop = destinationEntry.getVia();
+            var receivedFrom = destinationEntry.getPacket().getTransportId(); //todo в питоне тут ошибка (?)
+            // python version has "Transport.path_table[destination_hash][IDX_PT_RVCD_IF]" (?)
+            //var receivedFrom = destinationEntry.getInterface();
 
-            if (attachedInterface.getMode() == MODE_ROAMING && Objects.equals(attachedInterface, receivedFrom)) {
+            if (isNull(packet)) {
+                log.debug("Could not retrieve announce packet from cache while answering path request for {}",
+                        encodeHexString(destinationHash));
+            } else if (attachedInterface.getMode() == MODE_ROAMING && Objects.equals(attachedInterface, receivedFrom)) {
                 log.debug("Not answering path request on roaming-mode interface, since next hop is on same roaming-mode interface");
             } else {
+                packet.setHops(destinationEntry.getHops());
+
                 if (nonNull(requestorTransportId) && Arrays.equals(requestorTransportId, nextHop)) {
                     // TODO: Find a bandwidth efficient way to invalidate our
                     // known path on this signal. The obvious way of signing
@@ -2293,14 +2324,34 @@ public final class Transport implements ExitHandler {
                     // convergence time. Maybe just drop it?
                     log.debug("Not answering path request for {}, since next hop is the requestor", encodeHexString(destinationHash));
                 } else {
-                    log.debug("Answering path request for {} on {}", encodeHexString(destinationHash), attachedInterface);
+                    log.debug("Answering path request for {} on {}, path is known",
+                            encodeHexString(destinationHash), attachedInterface);
 
                     var now = Instant.now();
                     var retries = PATHFINDER_R;
                     var localRebroadcasts = 0;
                     var blockRebroadcasts = true;
                     var announceHops = packet.getHops();
-                    var retransmitTimeout = isFromLocalClient ? now : now.plusMillis(PATH_REQUEST_GRACE);
+                    //var retransmitTimeout = isFromLocalClient ? now : now.plusMillis(PATH_REQUEST_GRACE);
+                    var retransmitTimeout = now;
+
+                    if (isFromLocalClient) {
+                        retransmitTimeout = now;
+                    } else {
+                        if (isLocalClientInterface(nextHopInterface(destinationHash))) {
+                            log.trace("Path request destination {} is on a local client interface, rebroadcasting immediately");
+                            retransmitTimeout = now;
+                        } else {
+                            retransmitTimeout = now.plusMillis(PATH_REQUEST_GRACE);
+
+                            // If we are answering on a roaming-mode interface, wait a
+                            // little longer, to allow potential more well-connected
+                            // peers to answer first.
+                            if (attachedInterface.getMode() == MODE_ROAMING) {
+                                retransmitTimeout = retransmitTimeout.plusMillis(PATH_REQUEST_RG);
+                            }
+                        }
+                    }
 
                     // This handles an edge case where a peer sends a past
                     // request for a destination just after an announce for
@@ -2550,9 +2601,9 @@ public final class Transport implements ExitHandler {
         Map<String, ConnectionInterface> pathRequestList = new HashMap<>();
         ConnectionInterface blockedIf = null;
 
-        try {
-            if (jobsLock.tryLock()) {
-
+        //if (jobsLock.tryLock()) {
+        if (jobsLock.tryLock(3, TimeUnit.SECONDS)) {
+            try {
                 //Process active and pending link lists
                 if (Instant.now().isAfter(linksLastChecked.get().plusMillis(LINKS_CHECK_INTERVAL))) {
                     for (Link link : pendingLinks) {
@@ -2713,6 +2764,10 @@ public final class Transport implements ExitHandler {
                         if (linkEntry.isValidated()) {
                             if (Instant.now().isAfter(linkEntry.getTimestamp().plusSeconds(LINK_TIMEOUT))) {
                                 staleLinks.add(linkIdHex);
+                            } else if (isFalse(interfaces.contains(linkEntry.getNextHopInterface()))) {
+                                staleLinks.add(linkIdHex);
+                            } else if (isFalse(interfaces.contains(linkEntry.getReceivingInterface()))) {
+                                staleLinks.add(linkIdHex);
                             }
                         } else {
                             if (Instant.now().isAfter(linkEntry.getProofTimestamp())) {
@@ -2723,7 +2778,7 @@ public final class Transport implements ExitHandler {
                                         Instant.EPOCH
                                 );
 
-                                var lrTokenHops = linkEntry.getHops();
+                                var lrTakenHops = linkEntry.getHops();
 
                                 var pathRequestThrottle = Duration.between(lastPathRequest, Instant.now()).toSeconds() < PATH_REQUEST_MI;
                                 var pathRequestConditions = false;
@@ -2739,7 +2794,7 @@ public final class Transport implements ExitHandler {
                                 // If this link request was originated from a local client
                                 // attempt to rediscover a path to the destination, if this
                                 // has not already happened recently.
-                                else if (isFalse(pathRequestThrottle && lrTokenHops == 0)) {
+                                else if (isFalse(pathRequestThrottle && lrTakenHops == 0)) {
                                     log.debug("Trying to rediscover path for {} since an attempted local client link was never established",
                                             encodeHexString(linkEntry.getDestinationHash()));
                                     pathRequestConditions = true;
@@ -2760,7 +2815,7 @@ public final class Transport implements ExitHandler {
                                 // this likely means that network topology has
                                 // changed. In that case, we try to discover a new path,
                                 // and mark the old one as potentially unresponsive.
-                                else if (isFalse(pathRequestThrottle && lrTokenHops == 1)) {
+                                else if (isFalse(pathRequestThrottle && lrTakenHops == 1)) {
                                     log.debug("Trying to rediscover path for {} since an attempted link was never established, and link initiator is local to an interface on this instance",
                                             encodeHexString(linkEntry.getDestinationHash()));
                                     pathRequestConditions = true;
@@ -2776,7 +2831,7 @@ public final class Transport implements ExitHandler {
                                 if (pathRequestConditions) {
                                     pathRequestList.putIfAbsent(encodeHexString(linkEntry.getDestinationHash()), blockedIf);
 
-                                    if (owner.isTransportEnabled()) {
+                                    if (isFalse(owner.isTransportEnabled())) {
                                         // Drop current path if we are not a transport instance, to
                                         // allow using higher-hop count paths or reused announces
                                         // from newly adjacent transport instances.
@@ -2855,19 +2910,31 @@ public final class Transport implements ExitHandler {
                         log.debug("Removed {} tunnel paths", ti);
                     }
 
-                    staleReverseEntries.forEach(reverseTable::remove);
-                    if (isFalse(staleReverseEntries.isEmpty())) {
-                        log.debug("Released {} reverse table entries", staleReverseEntries.size());
+                    try {
+                        staleReverseEntries.forEach(reverseTable::remove);
+                        if (isFalse(staleReverseEntries.isEmpty())) {
+                            log.debug("Released {} reverse table entries", staleReverseEntries.size());
+                        }
+                    } catch (IllegalMonitorStateException e) {
+                        log.error("IllegalMonitorStateException while removing staleLinks from reverseTable");
                     }
 
-                    staleLinks.forEach(linkTable::remove);
-                    if (isFalse(staleLinks.isEmpty())) {
-                        log.debug("Released {} links", staleLinks.size());
+                    try {
+                        staleLinks.forEach(linkTable::remove);
+                        if (isFalse(staleLinks.isEmpty())) {
+                            log.debug("Released {} links", staleLinks.size());
+                        }
+                    } catch (IllegalMonitorStateException e) {
+                        log.error("IllegalMonitorStateException while removing staleLinks from linkTable");
                     }
 
-                    stalePaths.forEach(destinationTable::remove);
-                    if (isFalse(stalePaths.isEmpty())) {
-                        log.debug("Removed {} waiting path requests", stalePaths.size());
+                    try {
+                        stalePaths.forEach(destinationTable::remove);
+                        if (isFalse(stalePaths.isEmpty())) {
+                            log.debug("Removed {} waiting path requests", stalePaths.size());
+                        }
+                    } catch (IllegalMonitorStateException e) {
+                        log.error("IllegalMonitorStateException while removing staleLinks from destinationTable");
                     }
 
                     staleDiscoveryPathRequests.forEach(discoveryPathRequests::remove);
@@ -2904,17 +2971,17 @@ public final class Transport implements ExitHandler {
                     interfaceLastJobs.set(Instant.now());
                 }
 
-            } else {
-                //Transport jobs were locked, do nothing
+            } catch (Exception e) {
+                log.error("An exception occurred while running Transport jobs.", e);
+            } finally {
+                try {
+                    jobsLock.unlock();
+                } catch (IllegalStateException e) {
+                    log.warn("Error while jobsLock unlock", e);
+                }
             }
-        } catch (Exception e) {
-            log.error("An exception occurred while running Transport jobs.", e);
-        } finally {
-            try {
-                jobsLock.unlock();
-            } catch (IllegalStateException e) {
-                log.warn("Error while jobsLock unlock", e);
-            }
+        } else {
+            //Transport jobs were locked, do nothing
         }
 
         outgoing.forEach(Packet::send);

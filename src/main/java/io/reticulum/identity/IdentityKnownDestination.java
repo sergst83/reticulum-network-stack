@@ -20,10 +20,12 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static io.reticulum.constant.IdentityConstant.KEYSIZE;
+import static io.reticulum.constant.IdentityConstant.RATCHETSIZE;
 import static io.reticulum.constant.IdentityConstant.NAME_HASH_LENGTH;
 import static io.reticulum.constant.IdentityConstant.SIGLENGTH;
 import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
 import static io.reticulum.packet.PacketType.ANNOUNCE;
+import static io.reticulum.packet.ContextType.FLAG_SET;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static java.util.Objects.isNull;
@@ -73,14 +75,26 @@ public class IdentityKnownDestination {
             var publicKey = subarray(packet.getData(), 0, KEYSIZE / 8);
             var nameHash = subarray(packet.getData(), KEYSIZE / 8, KEYSIZE / 8 + NAME_HASH_LENGTH / 8);
             var randomHash = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8, KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10);
-            var signature = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10, KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8);
-
+            byte[] ratchet = null;
+            byte[] signature = null;
             byte[] appData = null;
-            if (packet.getData().length > KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8) {
-                appData = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8, packet.getData().length);
+
+            if (packet.getContextFlag() == FLAG_SET) {
+                ratchet = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10, KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + RATCHETSIZE / 8 + 10);
+                signature = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + RATCHETSIZE / 8 + 10, KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + RATCHETSIZE / 8 + SIGLENGTH / 8 + 10);
+
+                if (packet.getData().length > KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + SIGLENGTH / 8 + RATCHETSIZE / 8 + 10) {
+                    appData = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + SIGLENGTH / 8 + RATCHETSIZE / 8 + 10, packet.getData().length);
+                }
+            } else {
+                signature = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10, KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + SIGLENGTH / 8 + 10);
+
+                if (packet.getData().length > KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8) {
+                    appData = subarray(packet.getData(), KEYSIZE / 8 + NAME_HASH_LENGTH / 8 + 10 + SIGLENGTH / 8, packet.getData().length);
+                }
             }
 
-            byte[] signedData = concatArrays(destinationHash, publicKey, nameHash, randomHash, requireNonNullElse(appData, new byte[0]));
+            byte[] signedData = concatArrays(destinationHash, publicKey, nameHash, randomHash, requireNonNullElse(ratchet, new byte[0]), requireNonNullElse(appData, new byte[0]));
 
             var announcedIdentity = new Identity(false);
             announcedIdentity.loadPublicKey(publicKey);

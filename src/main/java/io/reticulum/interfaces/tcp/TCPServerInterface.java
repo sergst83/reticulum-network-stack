@@ -21,7 +21,9 @@ import lombok.extern.slf4j.Slf4j;
 import java.math.BigInteger;
 import java.net.InetSocketAddress;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
@@ -41,6 +43,8 @@ public class TCPServerInterface extends AbstractConnectionInterface implements H
     private boolean i2pTunneled = false;
     @JsonProperty("listen_port")
     private int listenPort;
+
+    protected List<TCPClientInterface> spawnedInterfaces = new CopyOnWriteArrayList<>();
 
     public TCPServerInterface() {
         super();
@@ -108,7 +112,7 @@ public class TCPServerInterface extends AbstractConnectionInterface implements H
 
     /**
      * server processees only incoming packets <br/>
-     * outgoung packets processes attached client interfaces see {@link io.reticulum.interfaces.tcp.TCPChannelInitializer}
+     * outgoing packets processed by attached client interfaces see {@link io.reticulum.interfaces.tcp.TCPChannelInitializer}
      *
      * @param data ignored
      */

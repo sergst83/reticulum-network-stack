@@ -28,6 +28,8 @@ import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
 import static io.reticulum.destination.DestinationType.LINK;
 import static io.reticulum.packet.HeaderType.HEADER_1;
 import static io.reticulum.packet.HeaderType.HEADER_2;
+import static io.reticulum.packet.ContextType.FLAG_UNSET;
+import static io.reticulum.packet.ContextType.FLAG_SET;
 import static io.reticulum.packet.PacketContextType.NONE;
 import static io.reticulum.packet.PacketContextType.CACHE_REQUEST;
 import static io.reticulum.packet.PacketContextType.KEEPALIVE;
@@ -210,6 +212,7 @@ public class Packet implements TPacket {
     //дефолтные значения (default values)
     private TransportType transportType = TransportType.BROADCAST;
     private HeaderType headerType = HEADER_1;
+    private ContextType contextFlag = FLAG_UNSET;
     private PacketType packetType = DATA;
     private PacketContextType context = NONE;
     private byte[] transportId = null;
@@ -422,6 +425,7 @@ public class Packet implements TPacket {
             this.flags = header.getFlags();
             this.hops = header.getHops();
             this.headerType = flags.getHeaderType();
+            this.contextFlag = flags.getContextType();
             this.transportType = flags.getPropagationType();
             this.destinationType = flags.getDestinationType();
             this.packetType = flags.getPacketType();
@@ -552,7 +556,7 @@ public class Packet implements TPacket {
     }
 
     @SneakyThrows
-    private byte[] getHashablePart() {
+    public byte[] getHashablePart() {
         var hashablePart = new byte[]{(byte) (raw[0] & 0b00001111)};
         if (this.headerType == HEADER_2) {
             hashablePart = concatArrays(hashablePart, subarray(raw, TRUNCATED_HASHLENGTH / 8 + 2, raw.length));
@@ -571,6 +575,7 @@ public class Packet implements TPacket {
     private Flags getPackedFlags() {
         var flags = new Flags();
         flags.setHeaderType(this.headerType);
+        flags.setContextType(this.contextFlag);
         flags.setPropagationType(this.transportType);
         flags.setPacketType(this.packetType);
         if (context == LRPROOF) {
