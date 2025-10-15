@@ -114,7 +114,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
 
     public void run() {
         try {
-            connect(null);
+            connect(initiator);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -171,21 +171,23 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
 
     private void startReconnecting() {
         timer.schedule(new TimerTask() {
+            int attempts = 0;
+
             @Override
             public void run() {
                 if (initiator) {
                     if (online.get()) {
                         cancel();
                     } else {
-                        var attempts = 0;
                         if (isFalse(reconnecting)) {
                             reconnecting = true;
-                            attempts++;
+                        } else {
                             if (attempts > maxReconnectTries) {
                                 log.error("Max reconnection attempts reached for {}", this);
                                 teardown();
                                 cancel();
                             } else {
+                                attempts++;
                                 reconnect(attempts);
                             }
                         }
@@ -200,8 +202,8 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
 
     private synchronized void reconnect(final int currentAttempt) {
         try {
-            reconnecting = !connect(null);
-            if (isFalse(neverConnected)) {
+            reconnecting = !connect(initiator);
+            if (isFalse(neverConnected) && online.get()) {
                 log.info("Reconnected socket for {}", this);
             }
             if (isFalse(kissFraming)) {
@@ -232,31 +234,30 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
                             (ChannelFutureListener) future -> future.channel().closeFuture()
                             .addListener((ChannelFutureListener) closeFeature -> {
                                 //Listen close detect listener
+                                online.set(false);
                                 if (isFalse(detached)) {
                                     startReconnecting();
                                 } else {
                                     // Wait until the connection is closed.
                                     workerGroup.shutdownGracefully();
-                                    online.set(false);
                                 }
                             })
                     ).sync();
 
+            online.set(channelFuture.channel().isActive());
+            neverConnected = false;
             log.debug("TCP connection for {} established", this);
         } catch (Exception e) {
             if (init) {
                 log.error("Initial connection for {}  could not be established.", this, e);
                 log.error("Leaving unconnected and retrying connection in {}  seconds.", RECONNECT_WAIT);
-                return false;
+                return online.get();
             } else {
                 throw e;
             }
         }
 
-        online.set(true);
-        neverConnected = false;
-
-        return true;
+        return online.get();
     }
 
     @Override
