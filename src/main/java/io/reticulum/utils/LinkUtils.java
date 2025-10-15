@@ -44,4 +44,13 @@ public class LinkUtils {
 
         return null;
     }
+
+    public static byte[] linkIdFromLrPacket(Packet packet) {
+        var hashablePart = packet.getHashablePart();
+        if (packet.getData().length > ECPUBSIZE) {
+            var diff = packet.getData().length - ECPUBSIZE;
+            hashablePart = subarray(hashablePart, 0, diff);
+        }
+        return IdentityUtils.truncatedHash(hashablePart);
+    }
 }
