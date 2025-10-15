@@ -69,6 +69,7 @@ public class TCPChannelInitializer extends ChannelInitializer<SocketChannel> imp
             log.info("Spawned new TCPClient Interface: {}", spownedInterface.getInterfaceName());
             Transport.getInstance().getInterfaces().add(spownedInterface);
             serverInterface.getClients().incrementAndGet();
+            serverInterface.spawnedInterfaces.add(spownedInterface);
 
             return spownedInterface;
         }

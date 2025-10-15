@@ -299,6 +299,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
 
         if (nonNull(parentInterface)) {
             parentInterface.getClients().decrementAndGet();
+            parentInterface.spawnedInterfaces.remove(this);
         }
 
         if (Transport.getInstance().getInterfaces().contains(this)) {

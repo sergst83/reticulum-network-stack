@@ -234,6 +234,7 @@ public class Link extends AbstractDestination {
             log.trace("Establishment timeout is {} ms  for link request {}", establishmentTimeout, linkId);
         }
     }
+
     public Link(Destination destination) {
         this.destination = destination;
         init();
