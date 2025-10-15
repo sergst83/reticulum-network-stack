@@ -2,6 +2,7 @@ package io.reticulum.packet.data;
 
 import com.igormaznitsa.jbbp.utils.JBBPUtils;
 import io.reticulum.destination.DestinationType;
+import io.reticulum.packet.ContextType;
 import io.reticulum.packet.HeaderType;
 import io.reticulum.packet.PacketContextType;
 import io.reticulum.packet.PacketType;
@@ -10,8 +11,6 @@ import io.reticulum.utils.IdentityUtils;
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
 import org.junit.jupiter.api.Test;
-
-import java.io.IOException;
 
 import static io.reticulum.packet.PacketType.ANNOUNCE;
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -26,13 +25,14 @@ class DataPacketConverterTest {
     }
 
     @Test
-    void toBytes() throws IOException {
+    void toBytes() {
         var flags = new Flags();
         flags.setAccessCodes(false);
         flags.setHeaderType(HeaderType.HEADER_2);
         flags.setPacketType(PacketType.PROOF);
         flags.setPropagationType(TransportType.TUNNEL);
         flags.setDestinationType(DestinationType.LINK);
+        flags.setContextType(ContextType.FLAG_SET);
         var header = new Header( new DataPacket());
         header.setHops((byte) 2);
         header.setFlags(flags);
