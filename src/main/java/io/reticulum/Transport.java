@@ -4,7 +4,6 @@ import io.reticulum.constant.TransportConstant;
 import io.reticulum.destination.Destination;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.ConnectionInterface;
-import io.reticulum.interfaces.InterfaceMode;
 import io.reticulum.link.Link;
 import io.reticulum.packet.Packet;
 import io.reticulum.packet.PacketReceipt;
@@ -28,7 +27,6 @@ import io.reticulum.transport.ReversEntry;
 import io.reticulum.transport.TransportState;
 import io.reticulum.transport.Tunnel;
 import io.reticulum.utils.IdentityUtils;
-import io.reticulum.utils.LinkUtils;
 import io.reticulum.utils.Scheduler;
 import lombok.Getter;
 import lombok.NonNull;
@@ -101,8 +99,8 @@ import static io.reticulum.constant.TransportConstant.PATHFINDER_M;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_R;
 import static io.reticulum.constant.TransportConstant.PATHFINDER_RW;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_GRACE;
-import static io.reticulum.constant.TransportConstant.PATH_REQUEST_RG;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_MI;
+import static io.reticulum.constant.TransportConstant.PATH_REQUEST_RG;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_TIMEOUT;
 import static io.reticulum.constant.TransportConstant.RECEIPTS_CHECK_INTERVAL;
 import static io.reticulum.constant.TransportConstant.REVERSE_TIMEOUT;
@@ -152,15 +150,15 @@ import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.utils.IdentityUtils.getRandomHash;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
+import static java.util.concurrent.Executors.newSingleThreadScheduledExecutor;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.apache.commons.codec.binary.Hex.decodeHex;
-
 import static org.apache.commons.codec.binary.Hex.encodeHexString;
 import static org.apache.commons.collections4.CollectionUtils.isNotEmpty;
 import static org.apache.commons.lang3.ArrayUtils.getLength;
 import static org.apache.commons.lang3.ArrayUtils.subarray;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
-import static org.apache.commons.lang3.BooleanUtils.isTrue;
+import static org.apache.commons.lang3.BooleanUtils.isNotTrue;
 
 @Slf4j
 public final class Transport implements ExitHandler {
@@ -214,6 +212,7 @@ public final class Transport implements ExitHandler {
     /**
      * A table storing externally registered announce handlers
      */
+    @Getter
     private final List<AnnounceHandler> announceHandlers = new CopyOnWriteArrayList<>();
     private final Queue<AnnounceQueueEntry> announceQueue = new ConcurrentLinkedQueue<>();
     /**
@@ -1385,33 +1384,42 @@ public final class Transport implements ExitHandler {
                                 );
                             }
 
-                            //Call externally registered callbacks from apps wanting to know when an announce arrives
-                            if (packet.getContext() != PATH_RESPONSE) {
-                                for (AnnounceHandler handler : announceHandlers) {
-                                    try {
-                                        //Check that the announced destination matches the handlers aspect filter
-                                        var executeCallback = false;
-                                        var announceIdentity = recall(packet.getDestinationHash());
-                                        if (isNull(handler.getAspectFilter())) {
-                                            //If the handlers aspect filter is set to None, we execute the callback in all cases
+                            // Call externally registered callbacks from apps
+                            // wanting to know when an announce arrives
+                            for (AnnounceHandler handler : announceHandlers) {
+                                try {
+                                    //Check that the announced destination matches the handlers aspect filter
+                                    var executeCallback = false;
+                                    var announceIdentity = recall(packet.getDestinationHash());
+                                    if (isNull(handler.getAspectFilter())) {
+                                        //If the handlers aspect filter is set to None, we execute the callback in all cases
+                                        executeCallback = true;
+                                    } else {
+                                        var handlerExpectedHash = hashFromNameAndIdentity(handler.getAspectFilter(), announceIdentity);
+                                        if (Arrays.equals(packet.getDestinationHash(), handlerExpectedHash)) {
                                             executeCallback = true;
-                                        } else {
-                                            var handlerExpectedHash = hashFromNameAndIdentity(handler.getAspectFilter(), announceIdentity);
-                                            if (Arrays.equals(packet.getDestinationHash(), handlerExpectedHash)) {
-                                                executeCallback = true;
-                                            }
                                         }
-
-                                        if (executeCallback) {
-                                            handler.receivedAnnounce(
-                                                    packet.getDestinationHash(),
-                                                    announceIdentity,
-                                                    recallAppData(packet.getDestinationHash())
-                                            );
-                                        }
-                                    } catch (Exception e) {
-                                        log.error("Error while processing external announce callback.", e);
                                     }
+
+                                    // If this is a path response, check whether the
+                                    // # handler wants to receive it.
+                                    if (packet.getContext() == PATH_RESPONSE) {
+                                        if (isNotTrue(handler.receivePathResponses())) {
+                                            executeCallback = false;
+                                        }
+                                    }
+
+                                    if (executeCallback) {
+                                        handler.receivedAnnounce(
+                                                packet.getDestinationHash(),
+                                                announceIdentity,
+                                                recallAppData(packet.getDestinationHash()),
+                                                packet.getPacketHash(),
+                                                packet.getContext() == PATH_RESPONSE
+                                        );
+                                    }
+                                } catch (Exception e) {
+                                    log.error("Error while processing external announce callback.", e);
                                 }
                             }
                         }
@@ -2090,7 +2098,11 @@ public final class Transport implements ExitHandler {
 
             if (owner.isConnectedToSharedInstance()) {
                 if (destination.getType() == SINGLE) {
-                    destination.announce(true);
+                    newSingleThreadScheduledExecutor()
+                                    .scheduleWithFixedDelay(
+                                            () -> destination.announce(true),
+                                            0, 250, MILLISECONDS
+                                    );
                 }
             }
         }
@@ -2151,12 +2163,19 @@ public final class Transport implements ExitHandler {
         }
     }
 
+    /**
+     * Registers an announce handler.
+     *
+     * @param announceHandler Must be an object with an <strong>aspect_filter</strong> attribute
+     *                        and a <strong>receivedAnnounce(destinationHash, announcedIdentity, app_data)</strong>
+     *                        or <strong>received_announce(destinationHash, announcedIdentity, app_data, announcePacketHash)</strong>
+     *                        or <strong>received_announce(destination_hash, announced_identity, app_data, announce_packet_hash, is_path_response)</strong>
+     *                        callable. Can optionally have a
+     *                        <strong>receivePathResponses</strong> attribute set to {@code true},
+     *                        to also receive all path responses, in addition to live announces.
+     */
     public void registerAnnounceHandler(AnnounceHandler announceHandler) {
         announceHandlers.add(announceHandler);
-    }
-
-    public List<AnnounceHandler> getAnnounceHandlers() {
-        return announceHandlers;
     }
 
     public void deregisterAnnounceHandler(AnnounceHandler announceHandler) {

@@ -109,7 +109,13 @@ public class Announce2AppTest {
         }
 
         @Override
-        public void receivedAnnounce(byte[] destinationHash, Identity announcedIdentity, byte[] appData) {
+        public void receivedAnnounce(
+                byte[] destinationHash,
+                Identity announcedIdentity,
+                byte[] appData,
+                byte[] announcePacketHash,
+                boolean isPathResponse
+        ) {
             log.info("Received an announce from {}", Hex.encodeHexString(destinationHash));
 
             if (appData != null) {
