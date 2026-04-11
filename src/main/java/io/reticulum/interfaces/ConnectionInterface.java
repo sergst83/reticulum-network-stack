@@ -5,6 +5,8 @@ import com.fasterxml.jackson.annotation.JsonSubTypes.Type;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.auto.AutoInterface;
+import io.reticulum.interfaces.backbone.BackboneClientInterface;
+import io.reticulum.interfaces.backbone.BackboneServerInterface;
 import io.reticulum.interfaces.tcp.TCPClientInterface;
 import io.reticulum.interfaces.tcp.TCPServerInterface;
 import io.reticulum.packet.Packet;
@@ -23,9 +25,12 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 @JsonSubTypes({
         @Type(value = AutoInterface.class, name = "AutoInterface"),
         @Type(value = TCPClientInterface.class, name = "TCPClientInterface"),
-        @Type(value = TCPServerInterface.class, name = "TCPServerInterface")
+        @Type(value = TCPServerInterface.class, name = "TCPServerInterface"),
+        @Type(value = BackboneClientInterface.class, name = "BackboneClientInterface"),
+        @Type(value = BackboneServerInterface.class, name = "BackboneServerInterface")
 })
 public interface ConnectionInterface {
+
 
     boolean OUT();
     boolean IN();
