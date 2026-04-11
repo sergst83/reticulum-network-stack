@@ -8,11 +8,6 @@ import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelOutboundInvoker;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.epoll.Epoll;
-import io.netty.channel.epoll.EpollEventLoopGroup;
-import io.netty.channel.epoll.EpollSocketChannel;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.nio.NioSocketChannel;
 import io.reticulum.Transport;
 import io.reticulum.interfaces.AbstractConnectionInterface;
 import io.reticulum.interfaces.ConnectionInterface;
@@ -224,9 +219,8 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
      * @return {@code true} if the connection was established successfully
      */
     private synchronized boolean connect(final Boolean initial) throws InterruptedException {
-        boolean init      = BooleanUtils.isTrue(initial);
-        boolean useEpoll  = Epoll.isAvailable();
-        EventLoopGroup workerGroup = useEpoll ? new EpollEventLoopGroup() : new NioEventLoopGroup();
+        boolean init       = BooleanUtils.isTrue(initial);
+        EventLoopGroup workerGroup = BackboneTransport.newWorkerGroup();
 
         try {
             if (init) {
@@ -236,7 +230,7 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
             var bootstrap = new Bootstrap();
             bootstrap
                     .group(workerGroup)
-                    .channel(useEpoll ? EpollSocketChannel.class : NioSocketChannel.class)
+                    .channel(BackboneTransport.socketChannelClass())
                     .option(ChannelOption.SO_KEEPALIVE, true)
                     .option(ChannelOption.TCP_NODELAY,  true)
                     .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) connectTimeout)

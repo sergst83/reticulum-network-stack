@@ -6,11 +6,6 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.epoll.Epoll;
-import io.netty.channel.epoll.EpollEventLoopGroup;
-import io.netty.channel.epoll.EpollServerSocketChannel;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.reticulum.interfaces.AbstractConnectionInterface;
 import io.reticulum.interfaces.HDLC;
 import io.reticulum.interfaces.InterfaceMode;
@@ -180,17 +175,16 @@ public class BackboneServerInterface extends AbstractConnectionInterface impleme
      * {@code TCPServerInterface} on other platforms.
      */
     public void startListening() throws InterruptedException {
-        boolean useEpoll = Epoll.isAvailable();
-        EventLoopGroup bossGroup   = useEpoll ? new EpollEventLoopGroup(1) : new NioEventLoopGroup(1);
-        EventLoopGroup workerGroup = useEpoll ? new EpollEventLoopGroup()  : new NioEventLoopGroup();
+        EventLoopGroup bossGroup   = BackboneTransport.newBossGroup();
+        EventLoopGroup workerGroup = BackboneTransport.newWorkerGroup();
 
         log.debug("BackboneServerInterface using {} for {}",
-                useEpoll ? "Linux epoll" : "NIO selector", this);
+                BackboneTransport.EPOLL_USABLE ? "Linux epoll" : "NIO selector", this);
 
         var bootstrap = new ServerBootstrap();
         bootstrap
                 .group(bossGroup, workerGroup)
-                .channel(useEpoll ? EpollServerSocketChannel.class : NioServerSocketChannel.class)
+                .channel(BackboneTransport.serverChannelClass())
                 .option(ChannelOption.SO_BACKLOG,  1024)
                 .option(ChannelOption.SO_REUSEADDR, true)
                 .childOption(ChannelOption.SO_KEEPALIVE, true)
