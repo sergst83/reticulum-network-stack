@@ -141,7 +141,8 @@ public class BackboneServerInterface extends AbstractConnectionInterface impleme
         this.txb.set(BigInteger.ZERO);
 
         this.IN  = true;
-        this.OUT = false;
+        // OUT stays true (AbstractConnectionInterface default), matching TCPServerInterface.
+        // processOutgoing is a no-op; actual sending is done by spawned BackboneClientInterfaces.
         this.interfaceMode = InterfaceMode.MODE_FULL;
         this.bitrate = BITRATE_GUESS;
 

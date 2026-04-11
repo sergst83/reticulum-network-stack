@@ -120,7 +120,9 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
         this.txb.set(BigInteger.ZERO);
 
         this.IN  = true;
-        this.OUT = false;
+        // OUT stays true (AbstractConnectionInterface default) so Transport will
+        // route outbound packets through this interface.  Python defaults OUT=False
+        // on Interface, but Java defaults OUT=true — don't override it here.
         this.interfaceMode = InterfaceMode.MODE_FULL;
         this.bitrate = BITRATE_GUESS;
 
