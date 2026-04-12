@@ -172,7 +172,7 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
     // ── Data plane ───────────────────────────────────────────────────────────
 
     @Override
-    public synchronized void processIncoming(byte[] data) {
+    public void processIncoming(byte[] data) {
         var processingData = unmaskHdlc(data);
         rxb.accumulateAndGet(BigInteger.valueOf(processingData.length), BigInteger::add);
 
@@ -185,7 +185,7 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
     }
 
     @Override
-    public synchronized void processOutgoing(byte[] data) {
+    public void processOutgoing(byte[] data) {
         log.trace("Backbone send. interface: {}", this);
         if (online.get()) {
             try (var os = new ByteArrayOutputStream()) {
