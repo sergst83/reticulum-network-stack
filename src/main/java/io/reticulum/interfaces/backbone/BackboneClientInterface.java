@@ -307,6 +307,10 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
             if (isFalse(neverConnected) && online.get()) {
                 log.info("Reconnected socket for {}", this);
             }
+            // Ensure the interface is still registered with Transport after reconnect.
+            if (!Transport.getInstance().getInterfaces().contains(this)) {
+                Transport.getInstance().getInterfaces().add(this);
+            }
             Transport.getInstance().synthesizeTunnel(this);
         } catch (Exception e) {
             log.debug("Connection attempt {} for {} failed: {}", currentAttempt, this, e.getMessage());

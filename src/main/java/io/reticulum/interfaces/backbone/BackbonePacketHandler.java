@@ -32,7 +32,13 @@ public class BackbonePacketHandler extends SimpleChannelInboundHandler<byte[]> {
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         log.info("BackboneClient Interface {} disconnected.", connectionInterface.getInterfaceName());
         connectionInterface.detach();
-        Transport.getInstance().getInterfaces().remove(connectionInterface);
+
+        // Only remove spawned (non-initiator) interfaces from Transport.
+        // Initiator interfaces stay registered so they can continue to route
+        // traffic after reconnection.
+        if (!connectionInterface.isInitiator()) {
+            Transport.getInstance().getInterfaces().remove(connectionInterface);
+        }
 
         var parent = connectionInterface.getParentInterface();
         if (parent instanceof BackboneServerInterface) {
