@@ -1537,7 +1537,7 @@ public final class Transport implements ExitHandler {
                                 // be discarded without major issues, but it is kept
                                 // for now to ensure backwards compatibility.
 
-                                if ((packet.getHops() == link.getExpectedHops()) || (link.getExpectedHops() == TransportConstant.PATHFINDER_M )) {
+                                if ((packet.getHops() <= link.getExpectedHops()) || (link.getExpectedHops() == TransportConstant.PATHFINDER_M)) {
                                     // Add this packet to the filter hashlist if we
                                     // have determined that it's actually destined
                                     // for this system, and then validate the proof
