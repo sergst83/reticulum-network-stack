@@ -909,6 +909,12 @@ public final class Transport implements ExitHandler {
                                 dataPacket.getHeader().getFlags().setHeaderType(HEADER_1);
                                 dataPacket.getHeader().getFlags().setPropagationType(BROADCAST);
                                 dataPacket.getHeader().setHops((byte) packet.getHops());
+                                // Packet arrived as HEADER_2 (transport_id | dest_hash).
+                                // When stripping the transport layer, promote dest_hash (hash2)
+                                // into hash1, otherwise the forwarded HEADER_1 packet carries
+                                // the transport ID as the destination address and the recipient
+                                // never recognises it.
+                                dataPacket.getAddresses().setHash1(dataPacket.getAddresses().getHash2());
                             } else if (remainingHops == 0) {
                                 //Just increase hop count and transmit
                                 dataPacket = DataPacketConverter.fromBytes(packet.getRaw());
