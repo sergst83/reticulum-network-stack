@@ -1629,7 +1629,7 @@ public final class Transport implements ExitHandler {
 
         var sent = false;
         try {
-        var outboundTime = Instant.now();
+            var outboundTime = Instant.now();
 
         var generateReceipt = packet.isCreateReceipt()
                 // Only generate receipts for DATA packets
@@ -1901,7 +1901,11 @@ public final class Transport implements ExitHandler {
             }
         }
 
-        return sent;
+            return sent;
+        } catch (Exception e) {
+            log.error("Exception in outbound() for packet type={} context={}: ",
+                    packet.getPacketType(), packet.getContext(), e);
+            throw e;
         } finally {
             jobsLock.unlock();
         }
