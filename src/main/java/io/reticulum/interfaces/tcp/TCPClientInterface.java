@@ -126,7 +126,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
     }
 
     @Override
-    public synchronized void processIncoming(byte[] data) {
+    public void processIncoming(byte[] data) {
         var processingData = kissFraming ? unmaskKiss(data) : unmaskHdlc(data);
         this.rxb.accumulateAndGet(BigInteger.valueOf(processingData.length), BigInteger::add);
         if (nonNull(parentInterface)) {
@@ -138,7 +138,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
     }
 
     @Override
-    public synchronized void processOutgoing(byte[] data) {
+    public void processOutgoing(byte[] data) {
         log.trace("Send packet data. interface: {}, message: {}", this, data);
         if (online.get()) {
             try(var os = new ByteArrayOutputStream()) {
