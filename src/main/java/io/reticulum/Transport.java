@@ -936,10 +936,11 @@ public final class Transport implements ExitHandler {
                                         .proofTimestamp(proofTimeout)
                                         .build();
 
-//                                linkTable.put(encodeHexString(packet.getTruncatedHash()), linkEntry);
-                                // I changed it to destination Hash, because in java we search by string representation and truncatedHash can be != destinationHash
-                                linkTable.put(encodeHexString(packet.getDestinationHash()), linkEntry);
-                                //linkTable.put(encodeHexString(LinkUtils.linkIdFromLrPacket(packet)), linkEntry);
+                                // Key must be the link ID (truncatedHash of the LINKREQUEST), NOT the destination hash.
+                                // The LRPROOF arrives with destinationHash = Link.linkId = LINKREQUEST.getTruncatedHash(),
+                                // so the lookup at line 1488 uses that value — the store key must match.
+                                // Python equivalent: Transport.link_table[RNS.Link.link_id_from_lr_packet(packet)]
+                                linkTable.put(encodeHexString(packet.getTruncatedHash()), linkEntry);
                             } else {
                                 //Entry format is
                                 var reserveEntry = ReversEntry.builder()
@@ -1522,7 +1523,7 @@ public final class Transport implements ExitHandler {
                                     log.error("Error while transporting link request proof.", e);
                                 }
                             } else {
-                                log.debug("Received link request proof with hop mismatch, not transporting it");
+                                log.debug("Received link request proof on wrong interface, not transporting it");
                             }
                         }
                     } else {
