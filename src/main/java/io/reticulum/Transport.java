@@ -1628,6 +1628,7 @@ public final class Transport implements ExitHandler {
         }
 
         var sent = false;
+        try {
         var outboundTime = Instant.now();
 
         var generateReceipt = packet.isCreateReceipt()
@@ -1900,9 +1901,10 @@ public final class Transport implements ExitHandler {
             }
         }
 
-        jobsLock.unlock();
-
         return sent;
+        } finally {
+            jobsLock.unlock();
+        }
     }
 
     /**
