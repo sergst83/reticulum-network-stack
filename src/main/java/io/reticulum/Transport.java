@@ -753,13 +753,14 @@ public final class Transport implements ExitHandler {
             }
         }
 
+        try {
+
         if (isNull(identity)) {
             return;
         }
 
         var packet = new Packet(localRaw);
         if (isFalse(packet.unpack())) {
-            jobsLock.unlock();
             return;
         }
 
@@ -885,7 +886,6 @@ public final class Transport implements ExitHandler {
                 // If this is a cache request, and we can fullfill it, do so and stop processing. Otherwise resume normal processing.
                 if (packet.getContext() == CACHE_REQUEST) {
                     if (cacheRequestPacket(packet)) {
-                        jobsLock.unlock();
                         return;
                     }
                 }
@@ -1016,7 +1016,6 @@ public final class Transport implements ExitHandler {
                     // by normal announce rate limiting.
                     if (iface.shouldIngressLimit()) {
                         iface.holdAnnounce(packet);
-                        jobsLock.unlock();
                         return;
                     }
                 }
@@ -1606,7 +1605,9 @@ public final class Transport implements ExitHandler {
             }
         }
 
-        jobsLock.unlock();
+        } finally {
+            jobsLock.unlock();
+        }
     }
 
     // TODO: 12.05.2023 подлежит рефакторингу. (subject to refactoring)
