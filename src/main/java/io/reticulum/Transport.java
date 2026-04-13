@@ -753,13 +753,14 @@ public final class Transport implements ExitHandler {
             }
         }
 
+        try {
+
         if (isNull(identity)) {
             return;
         }
 
         var packet = new Packet(localRaw);
         if (isFalse(packet.unpack())) {
-            jobsLock.unlock();
             return;
         }
 
@@ -885,7 +886,6 @@ public final class Transport implements ExitHandler {
                 // If this is a cache request, and we can fullfill it, do so and stop processing. Otherwise resume normal processing.
                 if (packet.getContext() == CACHE_REQUEST) {
                     if (cacheRequestPacket(packet)) {
-                        jobsLock.unlock();
                         return;
                     }
                 }
@@ -909,6 +909,12 @@ public final class Transport implements ExitHandler {
                                 dataPacket.getHeader().getFlags().setHeaderType(HEADER_1);
                                 dataPacket.getHeader().getFlags().setPropagationType(BROADCAST);
                                 dataPacket.getHeader().setHops((byte) packet.getHops());
+                                // Packet arrived as HEADER_2 (transport_id | dest_hash).
+                                // When stripping the transport layer, promote dest_hash (hash2)
+                                // into hash1, otherwise the forwarded HEADER_1 packet carries
+                                // the transport ID as the destination address and the recipient
+                                // never recognises it.
+                                dataPacket.getAddresses().setHash1(dataPacket.getAddresses().getHash2());
                             } else if (remainingHops == 0) {
                                 //Just increase hop count and transmit
                                 dataPacket = DataPacketConverter.fromBytes(packet.getRaw());
@@ -936,10 +942,11 @@ public final class Transport implements ExitHandler {
                                         .proofTimestamp(proofTimeout)
                                         .build();
 
-//                                linkTable.put(encodeHexString(packet.getTruncatedHash()), linkEntry);
-                                // I changed it to destination Hash, because in java we search by string representation and truncatedHash can be != destinationHash
-                                linkTable.put(encodeHexString(packet.getDestinationHash()), linkEntry);
-                                //linkTable.put(encodeHexString(LinkUtils.linkIdFromLrPacket(packet)), linkEntry);
+                                // Key must be the link ID (truncatedHash of the LINKREQUEST), NOT the destination hash.
+                                // The LRPROOF arrives with destinationHash = Link.linkId = LINKREQUEST.getTruncatedHash(),
+                                // so the lookup at line 1488 uses that value — the store key must match.
+                                // Python equivalent: Transport.link_table[RNS.Link.link_id_from_lr_packet(packet)]
+                                linkTable.put(encodeHexString(packet.getTruncatedHash()), linkEntry);
                             } else {
                                 //Entry format is
                                 var reserveEntry = ReversEntry.builder()
@@ -1015,7 +1022,6 @@ public final class Transport implements ExitHandler {
                     // by normal announce rate limiting.
                     if (iface.shouldIngressLimit()) {
                         iface.holdAnnounce(packet);
-                        jobsLock.unlock();
                         return;
                     }
                 }
@@ -1522,7 +1528,7 @@ public final class Transport implements ExitHandler {
                                     log.error("Error while transporting link request proof.", e);
                                 }
                             } else {
-                                log.debug("Received link request proof with hop mismatch, not transporting it");
+                                log.debug("Received link request proof on wrong interface, not transporting it");
                             }
                         }
                     } else {
@@ -1537,7 +1543,7 @@ public final class Transport implements ExitHandler {
                                 // be discarded without major issues, but it is kept
                                 // for now to ensure backwards compatibility.
 
-                                if ((packet.getHops() == link.getExpectedHops()) || (link.getExpectedHops() == TransportConstant.PATHFINDER_M )) {
+                                if ((packet.getHops() <= link.getExpectedHops()) || (link.getExpectedHops() == TransportConstant.PATHFINDER_M)) {
                                     // Add this packet to the filter hashlist if we
                                     // have determined that it's actually destined
                                     // for this system, and then validate the proof
@@ -1605,7 +1611,9 @@ public final class Transport implements ExitHandler {
             }
         }
 
-        jobsLock.unlock();
+        } finally {
+            jobsLock.unlock();
+        }
     }
 
     // TODO: 12.05.2023 подлежит рефакторингу. (subject to refactoring)
@@ -1620,7 +1628,8 @@ public final class Transport implements ExitHandler {
         }
 
         var sent = false;
-        var outboundTime = Instant.now();
+        try {
+            var outboundTime = Instant.now();
 
         var generateReceipt = packet.isCreateReceipt()
                 // Only generate receipts for DATA packets
@@ -1892,9 +1901,14 @@ public final class Transport implements ExitHandler {
             }
         }
 
-        jobsLock.unlock();
-
-        return sent;
+            return sent;
+        } catch (Exception e) {
+            log.error("Exception in outbound() for packet type={} context={}: ",
+                    packet.getPacketType(), packet.getContext(), e);
+            throw e;
+        } finally {
+            jobsLock.unlock();
+        }
     }
 
     /**

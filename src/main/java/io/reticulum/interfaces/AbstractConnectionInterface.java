@@ -274,7 +274,7 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
         var hash = Hex.encodeHexString(announcePacket.getDestinationHash());
         if (heldAnnounces.containsKey(hash)) {
             heldAnnounces.put(hash, announcePacket);
-        } else if (MapUtils.size(heldAnnounces) >= icMaxHeldAnnounces) {
+        } else if (isFalse((MapUtils.size(heldAnnounces) >= icMaxHeldAnnounces))) {
             heldAnnounces.put(hash, announcePacket);
         }
     }

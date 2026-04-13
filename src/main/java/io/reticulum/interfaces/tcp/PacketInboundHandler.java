@@ -25,9 +25,15 @@ public class PacketInboundHandler extends SimpleChannelInboundHandler<byte[]> {
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         log.info("TCPClient Interface: {} is disconnected", connectionInterface.getInterfaceName());
         connectionInterface.detach();
-        Transport.getInstance().getInterfaces().remove(connectionInterface);
-        TCPServerInterface parentInterface = connectionInterface.getParentInterface();
-        if (parentInterface != null) parentInterface.getClients().decrementAndGet();
+
+        // Only remove spawned (non-initiator) interfaces from Transport.
+        // Initiator interfaces stay registered so they can continue to route
+        // traffic after reconnection.
+        if (!connectionInterface.isInitiator()) {
+            Transport.getInstance().getInterfaces().remove(connectionInterface);
+            TCPServerInterface parentInterface = connectionInterface.getParentInterface();
+            if (parentInterface != null) parentInterface.getClients().decrementAndGet();
+        }
 
         super.channelInactive(ctx);
     }

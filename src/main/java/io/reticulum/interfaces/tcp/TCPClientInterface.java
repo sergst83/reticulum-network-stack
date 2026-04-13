@@ -126,7 +126,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
     }
 
     @Override
-    public synchronized void processIncoming(byte[] data) {
+    public void processIncoming(byte[] data) {
         var processingData = kissFraming ? unmaskKiss(data) : unmaskHdlc(data);
         this.rxb.accumulateAndGet(BigInteger.valueOf(processingData.length), BigInteger::add);
         if (nonNull(parentInterface)) {
@@ -138,7 +138,7 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
     }
 
     @Override
-    public synchronized void processOutgoing(byte[] data) {
+    public void processOutgoing(byte[] data) {
         log.trace("Send packet data. interface: {}, message: {}", this, data);
         if (online.get()) {
             try(var os = new ByteArrayOutputStream()) {
@@ -205,6 +205,10 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
             reconnecting = !connect(initiator);
             if (isFalse(neverConnected) && online.get()) {
                 log.info("Reconnected socket for {}", this);
+            }
+            // Ensure the interface is still registered with Transport after reconnect.
+            if (!Transport.getInstance().getInterfaces().contains(this)) {
+                Transport.getInstance().getInterfaces().add(this);
             }
             if (isFalse(kissFraming)) {
                 Transport.getInstance().synthesizeTunnel(this);

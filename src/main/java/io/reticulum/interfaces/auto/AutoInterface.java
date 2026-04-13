@@ -257,7 +257,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     }
 
     @Override
-    public synchronized void processIncoming(final byte[] data) {
+    public void processIncoming(final byte[] data) {
         var dataHash = Hex.encodeHexString(fullHash(data));
         if (isFalse(mifDeque.contains(dataHash))) {
             while (mifDeque.size() >= MULTI_IF_DEQUE_LEN) {
@@ -270,7 +270,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     }
 
     @Override
-    public synchronized void processOutgoing(byte[] data) {
+    public void processOutgoing(byte[] data) {
         for (InetAddress peerAddress : peers.keySet()) {
             try (var socket = new DatagramSocket()) {
                 socket.send(new DatagramPacket(data, data.length, peerAddress, dataPort));

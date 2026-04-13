@@ -195,7 +195,7 @@ public class LocalClientInterface extends AbstractConnectionInterface implements
     }
 
     @Override
-    public synchronized void processIncoming(byte[] data) {
+    public void processIncoming(byte[] data) {
         if (forceBitrate) {
             try {
                 Thread.sleep(TimeUnit.SECONDS.toMillis(data.length / bitrate * 8L));
@@ -211,7 +211,7 @@ public class LocalClientInterface extends AbstractConnectionInterface implements
         Transport.getInstance().inbound(data, this);
     }
 
-    public synchronized void processOutgoing(final byte[] data) {
+    public void processOutgoing(final byte[] data) {
         if (online.get()) {
             try {
                 var outputStream = new DataOutputStream(socket.getOutputStream());
