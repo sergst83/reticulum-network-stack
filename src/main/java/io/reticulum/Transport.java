@@ -902,6 +902,7 @@ public final class Transport implements ExitHandler {
                             if (remainingHops > 1) {
                                 //Just increase hop count and transmit
                                 dataPacket = DataPacketConverter.fromBytes(packet.getRaw());
+                                dataPacket.getHeader().setHops((byte) packet.getHops());
                                 dataPacket.getAddresses().setHash1(nextHop);
                             } else if (remainingHops == 1) {
                                 //Strip transport headers and transmit
