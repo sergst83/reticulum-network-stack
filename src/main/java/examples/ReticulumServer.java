@@ -104,6 +104,13 @@ public class ReticulumServer {
         );
         destination.setProofStrategy(PROVE_ALL);
 
+        // Enable ratchets — the ratchet file is stored alongside the identity.
+        // Each announce will include a fresh ratchet public key (rotated every
+        // RATCHET_INTERVAL = 30 min) so senders can use forward-secret encryption.
+        var ratchetsPath = reticulum.getStoragePath().resolve("ratchets_" + APP_NAME);
+        destination.enableRatchets(ratchetsPath);
+        log.info("Ratchets enabled on destination {}", destination.getHexHash());
+
         return destination;
     }
 }

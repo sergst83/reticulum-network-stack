@@ -17,6 +17,9 @@ public class IdentityConstant {
     public static final int SIGLENGTH = KEYSIZE;        // In bits
     public static final int RATCHETSIZE = 256;          // In bits
 
+    /** Expiry time for received ratchet keys in seconds (30 days). */
+    public static final long RATCHET_EXPIRY = 60L * 60 * 24 * 30;
+
     public static final int NAME_HASH_LENGTH = 80;
 
     /**

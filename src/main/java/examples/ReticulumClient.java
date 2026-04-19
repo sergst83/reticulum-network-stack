@@ -10,6 +10,7 @@ import io.reticulum.transport.AnnounceHandler;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Hex;
+import io.reticulum.identity.IdentityKnownDestination;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -65,6 +66,14 @@ public class ReticulumClient {
 
                 if (appData != null) {
                     log.debug("The announce contained the following app data: {}", new String(appData));
+                }
+
+                // Show ratchet status — if the sender has ratchets enabled, their ratchet
+                // key was extracted from the announce and stored automatically.
+                byte[] ratchetId = Identity.getCurrentRatchetId(destinationHash);
+                if (ratchetId != null) {
+                    log.info("Announce from {} carries ratchet id {}, encryption will use forward-secret key",
+                            Hex.encodeHexString(destinationHash), Hex.encodeHexString(ratchetId));
                 }
             }
         });

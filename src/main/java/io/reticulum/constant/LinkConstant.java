@@ -34,6 +34,18 @@ public class LinkConstant {
     public static final int ESTABLISHMENT_TIMEOUT_PER_HOP = DEFAULT_PER_HOP_TIMEOUT;
 
     public static final int LINK_MTU_SIZE = 3;
+
+    /** Bitmask for the MTU field within signalling bytes (21 bits). */
+    public static final int MTU_BYTEMASK = 0x1FFFFF;
+    /** Bitmask for the mode field within the first signalling byte. */
+    public static final int MODE_BYTEMASK = 0xE0;
+    /** AES-128-CBC link cipher mode identifier. */
+    public static final int MODE_AES128_CBC = 0x00;
+    /** AES-256-CBC link cipher mode identifier (default). */
+    public static final int MODE_AES256_CBC = 0x01;
+    /** Default link cipher mode. */
+    public static final int MODE_DEFAULT = MODE_AES256_CBC;
+
     //public static final double KEEPALIVE_MAX_RTT = 1.75;
     public static final int TRAFFIC_TIMEOUT_FACTOR = 6;
 

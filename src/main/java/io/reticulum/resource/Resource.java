@@ -28,6 +28,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Objects;
@@ -56,13 +57,17 @@ import static io.reticulum.constant.ResourceConstant.RETRY_GRACE_TIME;
 import static io.reticulum.constant.ResourceConstant.SDU;
 import static io.reticulum.constant.ResourceConstant.SENDER_GRACE_TIME;
 import static io.reticulum.constant.ResourceConstant.WATCHDOG_MAX_SLEEP;
+import static io.reticulum.constant.ResourceConstant.WINDOW;
+import static io.reticulum.constant.ResourceConstant.WINDOW_FLEXIBILITY;
 import static io.reticulum.constant.ResourceConstant.WINDOW_MAX;
 import static io.reticulum.constant.ResourceConstant.WINDOW_MAX_FAST;
+import static io.reticulum.constant.ResourceConstant.WINDOW_MIN;
 import static io.reticulum.packet.PacketContextType.RESOURCE;
 import static io.reticulum.packet.PacketContextType.RESOURCE_ADV;
 import static io.reticulum.packet.PacketContextType.RESOURCE_HMU;
 import static io.reticulum.packet.PacketContextType.RESOURCE_ICL;
 import static io.reticulum.packet.PacketContextType.RESOURCE_PRF;
+import static io.reticulum.packet.PacketContextType.RESOURCE_RCL;
 import static io.reticulum.packet.PacketContextType.RESOURCE_REQ;
 import static io.reticulum.packet.PacketType.PROOF;
 import static io.reticulum.resource.ResourceStatus.ADVERTISED;
@@ -138,6 +143,7 @@ public class Resource {
     private boolean split;
     private boolean isResponse;
     private boolean initiator;
+    private boolean hasMetadata;
     private volatile boolean waitingForHmu;
     private volatile boolean receivingPart;
     private boolean hmuRetryOk;
@@ -423,7 +429,7 @@ public class Resource {
     }
 
     public static Resource accept(Packet packet, Consumer<Resource> callback) {
-        return null;
+        return accept(packet, callback, null, null);
     }
 
     public static Resource accept(
@@ -432,7 +438,85 @@ public class Resource {
             Consumer<Resource> progressCallback,
             byte[] requestId
     ) {
-        return null;
+        try {
+            var adv = ResourceAdvertisement.unpack(packet.getPlaintext());
+            if (adv == null) return null;
+
+            var link = packet.getLink();
+            if (link == null) return null;
+
+            var resource = new Resource(link, requestId);
+
+            resource.status = TRANSFERRING;
+            resource.flags = adv.getF();
+            resource.size = adv.getTransferSize();
+            resource.totalSize = adv.getDataSize();
+            resource.hash = adv.getHash();
+            resource.originalHash = adv.getO();
+            resource.randomHash = adv.getR();
+            resource.hashmap = adv.getM();
+            resource.totalParts = adv.getParts();
+            resource.split = adv.isS();
+            resource.encrypted = adv.isE();
+            resource.compressed = adv.isCompressed();
+            resource.isResponse = nonNull(requestId) && adv.isP();
+            resource.segmentIndex = adv.getI();
+            resource.totalSegments = adv.getL();
+            resource.callback = callback;
+            resource.progressCallback = progressCallback;
+            resource.hasMetadata = adv.isX();
+
+            resource.grandTotalParts = (int) Math.ceil((double) adv.getDataSize() / SDU);
+            resource.storagePath = Transport.getInstance().getOwner().getResourcePath()
+                    .resolve(Hex.encodeHexString(resource.originalHash));
+            resource.parts = new ArrayList<>(Collections.nCopies(resource.totalParts, null));
+
+            resource.window = WINDOW;
+            resource.windowMax = WINDOW_MAX;
+            resource.windowMin = WINDOW_MIN;
+            resource.windowFlexibility = WINDOW_FLEXIBILITY;
+
+            resource.outstandingParts = new AtomicInteger(0);
+            resource.maxRetries = MAX_RETRIES;
+            resource.retriesLeft = resource.maxRetries;
+            resource.timeoutFactor = link.getTrafficTimeoutFactor();
+            long linkRtt = link.getRtt();
+            resource.rtt = linkRtt > 0 ? linkRtt : null;
+            resource.senderGraceTime = SENDER_GRACE_TIME;
+
+            resource.advertisementPacket = packet;
+            link.registerIncomingResource(resource);
+
+            var resourceStartedCb = link.getCallbacks().getResourceStarted();
+            if (nonNull(resourceStartedCb)) {
+                try {
+                    resourceStartedCb.accept(resource);
+                } catch (Exception e) {
+                    log.error("Error in resource started callback", e);
+                }
+            }
+
+            resource.hashmapHeight.set(adv.getParts());
+            resource.waitingForHmu = false;
+
+            resource.requestNext();
+            return resource;
+        } catch (Exception e) {
+            log.error("Could not accept resource: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+
+    public static void reject(Packet advertisementPacket) {
+        try {
+            var adv = ResourceAdvertisement.unpack(advertisementPacket.getPlaintext());
+            if (nonNull(adv)) {
+                var rclPacket = new Packet(advertisementPacket.getLink(), adv.getHash(), RESOURCE_RCL);
+                rclPacket.send();
+            }
+        } catch (Exception e) {
+            log.error("Could not send resource reject packet", e);
+        }
     }
 
     public void hashmapUpdatePacket(byte[] plaintext) {
@@ -456,11 +540,18 @@ public class Resource {
             status = TRANSFERRING;
             var hashes = hashmap.length / MAPHASH_LEN;
             for (int i = 0; i < hashes; i++) {
-                var index = i * segment * HASHMAP_MAX_LEN;
-                if (this.hashmap.length - 1 < index) {
-                    this.hashmapHeight.getAndIncrement();
+                var pos = segment * HASHMAP_MAX_LEN + i;
+                var byteOffset = pos * MAPHASH_LEN;
+                // Grow the flat hashmap array if needed
+                if (this.hashmap.length < byteOffset + MAPHASH_LEN) {
+                    var newMap = new byte[byteOffset + MAPHASH_LEN];
+                    System.arraycopy(this.hashmap, 0, newMap, 0, this.hashmap.length);
+                    this.hashmap = newMap;
                 }
-                this.hashmap = insert(index, this.hashmap, subarray(hashmap, i * MAPHASH_LEN, (i + 1) * MAPHASH_LEN));
+                System.arraycopy(hashmap, i * MAPHASH_LEN, this.hashmap, byteOffset, MAPHASH_LEN);
+                if (pos >= this.hashmapHeight.get()) {
+                    this.hashmapHeight.set(pos + 1);
+                }
             }
 
             this.waitingForHmu = false;
@@ -680,7 +771,7 @@ public class Resource {
     }
 
     private void prove() {
-        if (status == FAILED) {
+        if (status != FAILED) {
             try {
                 var proof = IdentityUtils.fullHash(concatArrays(this.data, this.hash));
                 var proofData = concatArrays(this.hash, proof);
@@ -759,9 +850,9 @@ public class Resource {
                     var partHash = getMapHash(partData);
 
                     var i = Math.max(this.consecutiveCompletedHeight, 0);
-                    while (this.hashmap.length < i + this.window) {
-                        if (Arrays.equals(partHash, subarray(this.hashmap, i, i + this.window))) {
-                            if (CollectionUtils.size(this.parts) <= i) {
+                    while (this.hashmapHeight.get() > i) {
+                        if (isNull(this.parts.get(i))) {
+                            if (Arrays.equals(partHash, subarray(this.hashmap, i * MAPHASH_LEN, (i + 1) * MAPHASH_LEN))) {
                                 // Insert data into parts list
                                 this.parts.set(i, packet);
                                 this.rttRxdBytes += partData.length;
@@ -853,11 +944,11 @@ public class Resource {
                 final var searchStart = pn;
                 final var searchSize = this.window;
 
-                for (Packet part : parts.subList(searchStart, searchSize)) {
+                for (Packet part : parts.subList(searchStart, Math.min(searchStart + searchSize, parts.size()))) {
                     if (isNull(part)) {
-                        if (this.hashmap.length - 1 > pn) {
-                            var partHash = this.hashmap[pn];
-                            requestedHashes = add(requestedHashes, partHash);
+                        if (pn < this.hashmapHeight.get()) {
+                            var partHash = subarray(this.hashmap, pn * MAPHASH_LEN, (pn + 1) * MAPHASH_LEN);
+                            requestedHashes = concatArrays(requestedHashes, partHash);
                             this.outstandingParts.getAndIncrement();
                             i++;
                         } else {
@@ -871,11 +962,14 @@ public class Resource {
                     }
                 }
 
-                var hmuPart = new byte[hashmapExhausted];
+                byte[] hmuPart;
                 if (hashmapExhausted == HASHMAP_IS_EXHAUSTED) {
-                    var lastMapHash = this.hashmap[this.hashmapHeight.get() - 1];
-                    hmuPart = add(hmuPart, lastMapHash);
-                    this.waitingForHmu = false;
+                    var lastH = this.hashmapHeight.get();
+                    var lastMapHash = subarray(this.hashmap, (lastH - 1) * MAPHASH_LEN, lastH * MAPHASH_LEN);
+                    hmuPart = concatArrays(new byte[]{HASHMAP_IS_EXHAUSTED}, lastMapHash);
+                    this.waitingForHmu = true;
+                } else {
+                    hmuPart = new byte[]{(byte) HASHMAP_IS_NOT_EXHAUSTED};
                 }
 
                 var requestData = concatArrays(hmuPart, this.hash, requestedHashes);
@@ -886,6 +980,7 @@ public class Resource {
                     this.lastActivity = Instant.now();
                     this.reqSent = lastActivity;
                     this.reqResp = null;
+                    this.reqSentBytes = ArrayUtils.getLength(requestPacket.getRaw());
                 } catch (Exception e) {
                     log.error("Could not send resource request packet, cancelling resource");
                     cancel();
@@ -1021,7 +1116,7 @@ public class Resource {
                 }
                 link.cancelOutgoingResource(this);
             } else {
-                link.cancelOutgoingResource(this);
+                link.cancelIncomingResource(this);
             }
 
             if (nonNull(callback)) {

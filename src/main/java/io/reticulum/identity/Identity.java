@@ -26,15 +26,26 @@ import org.bouncycastle.util.Arrays;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 
 import static io.reticulum.constant.IdentityConstant.KEYSIZE;
+import static io.reticulum.constant.IdentityConstant.NAME_HASH_LENGTH;
+import static io.reticulum.constant.IdentityConstant.RATCHETSIZE;
+import static io.reticulum.constant.IdentityConstant.RATCHET_EXPIRY;
 import static io.reticulum.packet.PacketType.PROOF;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
+import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.utils.IdentityUtils.truncatedHash;
 import static java.nio.file.StandardOpenOption.CREATE;
+import static java.nio.file.StandardOpenOption.TRUNCATE_EXISTING;
 import static java.nio.file.StandardOpenOption.WRITE;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
@@ -65,6 +76,162 @@ public class Identity {
 
     @Setter
     private byte[] appData;
+
+    // ── Static ratchet state ──────────────────────────────────────────────────
+
+    /** In-memory cache: hex(destinationHash) → ratchet public bytes received via announce. */
+    private static final Map<String, byte[]> knownRatchets = new ConcurrentHashMap<>();
+
+    /** Guards file-system writes for inbound ratchets. */
+    private static final ReentrantLock ratchetPersistLock = new ReentrantLock();
+
+    // ── Static ratchet API ────────────────────────────────────────────────────
+
+    /** Generates a new X25519 ratchet key and returns its raw private bytes (32 bytes). */
+    public static byte[] generateRatchet() {
+        return new X25519PrivateKeyParameters(new SecureRandom()).getEncoded();
+    }
+
+    /** Derives the public bytes (32 bytes) from a ratchet private key. */
+    public static byte[] getRatchetPublicBytes(byte[] ratchetPrvBytes) {
+        return new X25519PrivateKeyParameters(ratchetPrvBytes, 0).generatePublicKey().getEncoded();
+    }
+
+    /**
+     * Computes the ratchet ID: truncated full-hash of the ratchet public bytes,
+     * matching Python's {@code Identity._get_ratchet_id()}.
+     */
+    public static byte[] getRatchetId(byte[] ratchetPubBytes) {
+        return subarray(fullHash(ratchetPubBytes), 0, NAME_HASH_LENGTH / 8);
+    }
+
+    /**
+     * Returns the ID of the currently known ratchet for {@code destinationHash},
+     * or {@code null} if none is known.
+     */
+    public static byte[] getCurrentRatchetId(byte[] destinationHash) {
+        byte[] ratchet = getRatchet(destinationHash);
+        return ratchet != null ? getRatchetId(ratchet) : null;
+    }
+
+    /**
+     * Stores a ratchet public key received in an announce.
+     * Persists to {@code storagePath/ratchets/<hexhash>} asynchronously.
+     *
+     * @param destinationHash the destination the ratchet belongs to
+     * @param ratchetPubBytes the 32-byte public key from the announce
+     */
+    public static void rememberRatchet(byte[] destinationHash, byte[] ratchetPubBytes) {
+        String key = Hex.encodeHexString(destinationHash);
+        byte[] existing = knownRatchets.get(key);
+        if (java.util.Arrays.equals(existing, ratchetPubBytes)) {
+            return; // already known — nothing to do
+        }
+
+        log.debug("Remembering ratchet {} for {}",
+                Hex.encodeHexString(getRatchetId(ratchetPubBytes)), key);
+        knownRatchets.put(key, ratchetPubBytes);
+
+        try {
+            if (!Transport.getInstance().getOwner().isConnectedToSharedInstance()) {
+                Thread persistThread = new Thread(() -> {
+                    ratchetPersistLock.lock();
+                    try {
+                        Path ratchetDir = Transport.getInstance().getOwner()
+                                .getStoragePath().resolve("ratchets");
+                        Files.createDirectories(ratchetDir);
+
+                        // Format: 8-byte big-endian epoch-seconds + 32-byte ratchet pub bytes
+                        byte[] data = ByteBuffer.allocate(8 + ratchetPubBytes.length)
+                                .putLong(Instant.now().getEpochSecond())
+                                .put(ratchetPubBytes)
+                                .array();
+
+                        Path outPath   = ratchetDir.resolve(key + ".tmp");
+                        Path finalPath = ratchetDir.resolve(key);
+                        Files.write(outPath, data, CREATE, WRITE, TRUNCATE_EXISTING);
+                        Files.move(outPath, finalPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    } catch (Exception e) {
+                        log.error("Could not persist ratchet for {} to storage.", key, e);
+                    } finally {
+                        ratchetPersistLock.unlock();
+                    }
+                });
+                persistThread.setDaemon(true);
+                persistThread.start();
+            }
+        } catch (Exception e) {
+            log.debug("Skipping ratchet persistence: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Returns the ratchet public bytes for {@code destinationHash} if known
+     * (in memory or on disk), or {@code null} if none is available or the stored
+     * ratchet has expired.
+     */
+    public static byte[] getRatchet(byte[] destinationHash) {
+        String key = Hex.encodeHexString(destinationHash);
+        if (knownRatchets.containsKey(key)) {
+            return knownRatchets.get(key);
+        }
+
+        // Try loading from disk
+        try {
+            Path ratchetDir = Transport.getInstance().getOwner()
+                    .getStoragePath().resolve("ratchets");
+            Path ratchetPath = ratchetDir.resolve(key);
+            if (Files.isRegularFile(ratchetPath)) {
+                byte[] data = Files.readAllBytes(ratchetPath);
+                if (data.length == 8 + RATCHETSIZE / 8) {
+                    long received = ByteBuffer.wrap(data, 0, 8).getLong();
+                    if (Instant.now().getEpochSecond() < received + RATCHET_EXPIRY) {
+                        byte[] ratchet = subarray(data, 8, data.length);
+                        knownRatchets.put(key, ratchet);
+                        return ratchet;
+                    }
+                }
+                // Expired or corrupt — remove
+                Files.deleteIfExists(ratchetPath);
+            }
+        } catch (Exception e) {
+            log.debug("Could not load ratchet for {} from storage: {}", key, e.getMessage());
+        }
+
+        return null;
+    }
+
+    /**
+     * Removes ratchet files older than {@link io.reticulum.constant.IdentityConstant#RATCHET_EXPIRY}
+     * from the storage directory.
+     */
+    public static void cleanRatchets() {
+        log.debug("Cleaning ratchets...");
+        try {
+            Path ratchetDir = Transport.getInstance().getOwner()
+                    .getStoragePath().resolve("ratchets");
+            if (!Files.isDirectory(ratchetDir)) return;
+
+            long now = Instant.now().getEpochSecond();
+            Files.list(ratchetDir).forEach(path -> {
+                try {
+                    byte[] data = Files.readAllBytes(path);
+                    boolean expired  = data.length == 8 + RATCHETSIZE / 8
+                            && now > ByteBuffer.wrap(data, 0, 8).getLong() + RATCHET_EXPIRY;
+                    boolean corrupt  = data.length != 8 + RATCHETSIZE / 8;
+                    if (expired || corrupt) {
+                        Files.deleteIfExists(path);
+                    }
+                } catch (Exception e) {
+                    log.error("Error cleaning ratchet file {}: {}", path, e.getMessage());
+                }
+            });
+        } catch (Exception e) {
+            log.error("Error while cleaning ratchets: {}", e.getMessage());
+        }
+    }
+
+    // ── Constructors ──────────────────────────────────────────────────────────
 
     public Identity() {
         this(true);
@@ -193,6 +360,48 @@ public class Identity {
         }
     }
 
+    // ── Encryption / decryption ───────────────────────────────────────────────
+
+    /**
+     * Encrypts information for the identity, optionally using a ratchet public key
+     * instead of the identity's own public key as the ECDH target.
+     *
+     * @param plaintext       The plaintext to be encrypted.
+     * @param ratchetPubBytes 32-byte X25519 ratchet public key, or {@code null} to use
+     *                        the identity's base public key.
+     * @return Ciphertext token (ephemeral-pub || fernet-ciphertext).
+     */
+    @SneakyThrows
+    public byte[] encrypt(final byte[] plaintext, final byte[] ratchetPubBytes) {
+        X25519PublicKeyParameters targetPub;
+        if (ratchetPubBytes != null) {
+            targetPub = new X25519PublicKeyParameters(ratchetPubBytes, 0);
+        } else {
+            if (isNull(pub)) {
+                throw new IllegalStateException("Encryption failed because identity does not hold a public key");
+            }
+            targetPub = pub;
+        }
+
+        var ephemeralKey     = new X25519PrivateKeyParameters(new SecureRandom());
+        var ephemeralPubBytes = ephemeralKey.generatePublicKey().getEncoded();
+
+        var agreement = new X25519Agreement();
+        agreement.init(ephemeralKey);
+        var sharedKey = new byte[agreement.getAgreementSize()];
+        agreement.calculateAgreement(targetPub, sharedKey, 0);
+
+        var hkdf = new HKDFBytesGenerator(new SHA256Digest());
+        hkdf.init(new HKDFParameters(sharedKey, getSalt(), getContext()));
+        var derivedKey = new byte[32];
+        hkdf.generateBytes(derivedKey, 0, derivedKey.length);
+
+        var fernet     = new Fernet(derivedKey);
+        var ciphertext = fernet.encrypt(plaintext);
+
+        return concatArrays(ephemeralPubBytes, ciphertext);
+    }
+
     /**
      * Encrypts information for the identity.
      *
@@ -256,6 +465,70 @@ public class Identity {
         } else {
             log.debug("Decryption failed because the token size was invalid.");
 
+            return null;
+        }
+    }
+
+    /**
+     * Decrypts a ciphertext token, trying each supplied ratchet (private key bytes)
+     * before falling back to the identity's own private key.
+     *
+     * @param cipherTextToken  The ciphertext token.
+     * @param ratchets         List of ratchet private key bytes to try (newest first).
+     *                         May be {@code null} or empty to skip ratchet attempts.
+     * @param enforceRatchets  If {@code true}, return {@code null} when all ratchets
+     *                         fail rather than falling back to the base key.
+     * @return Decrypted plaintext, or {@code null} on failure.
+     */
+    public byte[] decrypt(final byte[] cipherTextToken, final List<byte[]> ratchets, final boolean enforceRatchets) {
+        if (cipherTextToken.length <= KEYSIZE / 8 / 2) {
+            log.debug("Decryption failed because the token size was invalid.");
+            return null;
+        }
+
+        var peerPubBytes = subarray(cipherTextToken, 0, KEYSIZE / 8 / 2);
+        var ciphertext   = subarray(cipherTextToken, KEYSIZE / 8 / 2, cipherTextToken.length);
+
+        // Try each ratchet (private bytes) first
+        if (ratchets != null) {
+            for (byte[] ratchetPrvBytes : ratchets) {
+                byte[] result = decryptWithPrivateKey(ratchetPrvBytes, peerPubBytes, ciphertext);
+                if (result != null) {
+                    return result;
+                }
+            }
+        }
+
+        if (enforceRatchets) {
+            log.debug("Ratchet-enforced decryption by {} failed — dropping packet.", Hex.encodeHexString(hash));
+            return null;
+        }
+
+        // Fall back to identity's base private key
+        return decrypt(cipherTextToken);
+    }
+
+    /**
+     * Shared ECDH + HKDF + Fernet decryption helper.
+     * Returns plaintext on success, {@code null} on any failure.
+     */
+    private byte[] decryptWithPrivateKey(byte[] prvBytes, byte[] peerPubBytes, byte[] ciphertext) {
+        try {
+            var ratchetPrv = new X25519PrivateKeyParameters(prvBytes, 0);
+            var peerPub    = new X25519PublicKeyParameters(peerPubBytes, 0);
+
+            var agreement = new X25519Agreement();
+            agreement.init(ratchetPrv);
+            var sharedKey = new byte[agreement.getAgreementSize()];
+            agreement.calculateAgreement(peerPub, sharedKey, 0);
+
+            var hkdf = new HKDFBytesGenerator(new SHA256Digest());
+            hkdf.init(new HKDFParameters(sharedKey, getSalt(), getContext()));
+            var derivedKey = new byte[32];
+            hkdf.generateBytes(derivedKey, 0, derivedKey.length);
+
+            return new Fernet(derivedKey).decrypt(ciphertext);
+        } catch (Exception e) {
             return null;
         }
     }

@@ -23,6 +23,10 @@ import io.reticulum.transport.Hops;
 import io.reticulum.transport.LinkEntry;
 import io.reticulum.transport.PathRequestEntry;
 import io.reticulum.transport.RateEntry;
+import com.fasterxml.jackson.core.type.TypeReference;
+import io.reticulum.interfaces.discovery.InterfaceAnnouncer;
+import io.reticulum.transport.BlackholeEntry;
+import org.msgpack.jackson.dataformat.MessagePackMapper;
 import io.reticulum.transport.ReversEntry;
 import io.reticulum.transport.TransportState;
 import io.reticulum.transport.Tunnel;
@@ -179,6 +183,8 @@ public final class Transport implements ExitHandler {
     @Getter
     private Identity identity;
     private final Storage storage;
+    @Getter
+    private InterfaceAnnouncer interfaceAnnouncer;
 
     /**
      * All active interfaces
@@ -221,8 +227,15 @@ public final class Transport implements ExitHandler {
     private final Map<String, Instant> pathRequests = new ConcurrentHashMap<>();
     private final Map<String, TransportState> pathStates = new ConcurrentHashMap<>();
     /**
+     * A table of blackholed identity hashes and their associated metadata.
+     * Announces and path table entries for identities in this table are suppressed.
+     */
+    @Getter
+    private final Map<String, BlackholeEntry> blackholedIdentities = new ConcurrentHashMap<>();
+    /**
      * A lookup table containing the next hop to a given destination
      */
+    @Getter
     private final Map<String, Hops> destinationTable = new ConcurrentHashMap<>();
     /**
      * A lookup table for storing packet hashes used to return proofs and replies
@@ -231,6 +244,7 @@ public final class Transport implements ExitHandler {
     /**
      * A lookup table containing hops for links
      */
+    @Getter
     private final Map<String, LinkEntry> linkTable = new ConcurrentHashMap<>();
     /**
      * A table storing tunnels to other transport instances
@@ -289,6 +303,7 @@ public final class Transport implements ExitHandler {
         if (isFalse(owner.isConnectedToSharedInstance())) {
             packetHashMap.clear();
             packetHashMap.putAll(storage.loadAllPacketHash());
+            reloadBlacklist();
         }
 
         //Create transport-specific destinations
@@ -389,6 +404,12 @@ public final class Transport implements ExitHandler {
             if (anInterface.wantsTunnel()) {
                 synthesizeTunnel(anInterface);
             }
+        }
+
+        // Start interface discovery announcer
+        if (isFalse(owner.isConnectedToSharedInstance())) {
+            interfaceAnnouncer = new InterfaceAnnouncer(this);
+            interfaceAnnouncer.start();
         }
     }
 
@@ -902,6 +923,7 @@ public final class Transport implements ExitHandler {
                             if (remainingHops > 1) {
                                 //Just increase hop count and transmit
                                 dataPacket = DataPacketConverter.fromBytes(packet.getRaw());
+                                dataPacket.getHeader().setHops((byte) packet.getHops());
                                 dataPacket.getAddresses().setHash1(nextHop);
                             } else if (remainingHops == 1) {
                                 //Strip transport headers and transmit
@@ -942,11 +964,10 @@ public final class Transport implements ExitHandler {
                                         .proofTimestamp(proofTimeout)
                                         .build();
 
-                                // Key must be the link ID (truncatedHash of the LINKREQUEST), NOT the destination hash.
-                                // The LRPROOF arrives with destinationHash = Link.linkId = LINKREQUEST.getTruncatedHash(),
-                                // so the lookup at line 1488 uses that value — the store key must match.
-                                // Python equivalent: Transport.link_table[RNS.Link.link_id_from_lr_packet(packet)]
-                                linkTable.put(encodeHexString(packet.getTruncatedHash()), linkEntry);
+                                // Key must be the link ID computed WITHOUT signalling bytes
+                                // (mirrors Python's link_id_from_lr_packet which strips them).
+                                // The LRPROOF arrives with destinationHash = that stripped link ID.
+                                linkTable.put(encodeHexString(io.reticulum.utils.LinkUtils.linkIdFromLrPacket(packet)), linkEntry);
                             } else {
                                 //Entry format is
                                 var reserveEntry = ReversEntry.builder()
@@ -1012,6 +1033,22 @@ public final class Transport implements ExitHandler {
             // announces, queueing rebroadcasts of these, and removal
             // of queued announce rebroadcasts once handed to the next node.
             if (packet.getPacketType() == ANNOUNCE) {
+                // Silently drop announces from blackholed identities
+                var announceSourceIdentity = recall(packet.getDestinationHash());
+                if (announceSourceIdentity != null) {
+                    var announceSourceHex = encodeHexString(announceSourceIdentity.getHash());
+                    if (blackholedIdentities.containsKey(announceSourceHex)) {
+                        var bhEntry = blackholedIdentities.get(announceSourceHex);
+                        if (bhEntry.getUntil() == null || Instant.now().isBefore(bhEntry.getUntil())) {
+                            log.debug("Dropping announce from blackholed identity {}", announceSourceHex);
+                            return;
+                        } else {
+                            // Expired inline — clean up
+                            blackholedIdentities.remove(announceSourceHex);
+                            persistBlacklist();
+                        }
+                    }
+                }
                 if (nonNull(iface) && validateAnnounce(packet)) {
                     iface.receivedAnnounce();
                 }
@@ -1510,7 +1547,17 @@ public final class Transport implements ExitHandler {
                                         var peerIdentity = recall(linkEntry.getDestinationHash());
                                         var peerSigPubBytes = subarray(peerIdentity.getPublicKey(), ECPUBSIZE / 2, ECPUBSIZE);
 
-                                        var signedData = concatArrays(packet.getDestinationHash(), peerPubBytes, peerSigPubBytes);
+                                        // Include signalling bytes in signed data for extended-size proofs
+                                        byte[] sb = new byte[0];
+                                        if (getLength(packet.getData()) == SIGLENGTH / 8 + ECPUBSIZE / 2 + LINK_MTU_SIZE) {
+                                            var confirmedMtu = io.reticulum.link.Link.mtuFromLpPacket(packet.getData());
+                                            var mode = io.reticulum.link.Link.modeFromLpPacket(packet.getData());
+                                            sb = io.reticulum.link.Link.signallingBytes(
+                                                    confirmedMtu != null ? confirmedMtu : MTU,
+                                                    mode
+                                            );
+                                        }
+                                        var signedData = concatArrays(packet.getDestinationHash(), peerPubBytes, peerSigPubBytes, sb);
                                         var signature = subarray(packet.getData(), 0, SIGLENGTH / 8);
 
                                         if (peerIdentity.validate(signature, signedData)) {
@@ -1912,10 +1959,20 @@ public final class Transport implements ExitHandler {
     }
 
     /**
-     * @param destinationHash
+     * @param destinationHash A destination hash as byte[].
+     * @return The destination hash as byte[] for the next hop to the specified destination, or null if unknown.
+     */
+    public byte[] nextHop(byte[] destinationHash) {
+        return Optional.ofNullable(destinationTable.get(encodeHexString(destinationHash)))
+                .map(Hops::getVia)
+                .orElse(null);
+    }
+
+    /**
+     * @param destinationHash A destination hash as byte[].
      * @return The interface for the next hop to the specified destination, or null if the interface is unknown.
      */
-    private ConnectionInterface nextHopInterface(byte[] destinationHash) {
+    public ConnectionInterface nextHopInterface(byte[] destinationHash) {
         return Optional.ofNullable(destinationTable.get(encodeHexString(destinationHash)))
                 .map(Hops::getInterface)
                 .orElse(null);
@@ -2997,6 +3054,20 @@ public final class Transport implements ExitHandler {
                     tablesLastCulled.set(Instant.now());
                 }
 
+                // Expire timed blackhole entries
+                var expiredBlackholes = new LinkedList<String>();
+                var now = Instant.now();
+                for (Map.Entry<String, BlackholeEntry> bhEntry : blackholedIdentities.entrySet()) {
+                    if (bhEntry.getValue().getUntil() != null && now.isAfter(bhEntry.getValue().getUntil())) {
+                        expiredBlackholes.add(bhEntry.getKey());
+                    }
+                }
+                if (isFalse(expiredBlackholes.isEmpty())) {
+                    expiredBlackholes.forEach(blackholedIdentities::remove);
+                    log.debug("Expired {} timed blackhole entries", expiredBlackholes.size());
+                    persistBlacklist();
+                }
+
                 if (Instant.now().isAfter(interfaceLastJobs.get().plusSeconds(interfaceJobsInterval.get().toSeconds()))) {
                     for (ConnectionInterface anInterface : interfaces) {
                         anInterface.processHeldAnnounces();
@@ -3036,7 +3107,7 @@ public final class Transport implements ExitHandler {
         }
     }
 
-    private boolean markPathResponsive(byte[] destinationHash) {
+    public boolean markPathResponsive(byte[] destinationHash) {
         if (destinationTable.containsKey(encodeHexString(destinationHash))) {
             pathStates.put(encodeHexString(destinationHash), STATE_RESPONSIVE);
             return true;
@@ -3045,7 +3116,7 @@ public final class Transport implements ExitHandler {
         return false;
     }
 
-    private boolean markPathUnknownState(byte[] destinationHash) {
+    public boolean markPathUnknownState(byte[] destinationHash) {
         if (destinationTable.containsKey(encodeHexString(destinationHash))) {
             pathStates.put(encodeHexString(destinationHash), STATE_UNKNOWN);
             return true;
@@ -3054,7 +3125,7 @@ public final class Transport implements ExitHandler {
         return false;
     }
 
-    private boolean markPathUnresponsive(byte[] destinationHash) {
+    public boolean markPathUnresponsive(byte[] destinationHash) {
         if (destinationTable.containsKey(encodeHexString(destinationHash))) {
             pathStates.put(encodeHexString(destinationHash), STATE_UNRESPONSIVE);
             return true;
@@ -3083,7 +3154,7 @@ public final class Transport implements ExitHandler {
         return 0;
     }
 
-    private boolean expirePath(byte[] destinationHash) {
+    public boolean expirePath(byte[] destinationHash) {
         if (destinationTable.containsKey(encodeHexString(destinationHash))) {
             var entry = destinationTable.get(encodeHexString(destinationHash));
             entry.setTimestamp(Instant.EPOCH);
@@ -3093,6 +3164,117 @@ public final class Transport implements ExitHandler {
         }
 
         return false;
+    }
+
+    /**
+     * Add an identity hash to the blackhole table, preventing its announces and
+     * path table entries from being processed.
+     *
+     * @param identityHash  truncated identity hash (16 bytes)
+     * @param until         optional expiry; {@code null} means never expires
+     * @param reason        optional human-readable reason
+     */
+    public void blackholeIdentity(byte[] identityHash, Instant until, String reason) {
+        var key = encodeHexString(identityHash);
+        var entry = new BlackholeEntry(encodeHexString(identity.getHash()), until, reason);
+        blackholedIdentities.put(key, entry);
+        log.debug("Blackholed identity {}{}", key, reason != null ? " (" + reason + ")" : "");
+        persistBlacklist();
+        removeBlackholedPaths();
+    }
+
+    /**
+     * Remove an identity hash from the blackhole table.
+     *
+     * @param identityHash  truncated identity hash (16 bytes)
+     */
+    public void unblackholeIdentity(byte[] identityHash) {
+        var key = encodeHexString(identityHash);
+        if (blackholedIdentities.remove(key) != null) {
+            log.debug("Removed {} from blackhole table", key);
+            persistBlacklist();
+        }
+    }
+
+    /**
+     * Persist all locally-sourced blackhole entries to
+     * {@code {storagepath}/blackhole/local} as a msgpack-encoded list of maps.
+     */
+    @SneakyThrows
+    private void persistBlacklist() {
+        var blackholePath = owner.getStoragePath().resolve("blackhole");
+        java.nio.file.Files.createDirectories(blackholePath);
+        var filePath = blackholePath.resolve("local");
+
+        var localSource = encodeHexString(identity.getHash());
+        var list = new ArrayList<Map<String, Object>>();
+        for (Map.Entry<String, BlackholeEntry> e : blackholedIdentities.entrySet()) {
+            if (localSource.equals(e.getValue().getSource())) {
+                var m = new HashMap<String, Object>();
+                m.put("identity_hash", e.getKey());
+                m.put("source", e.getValue().getSource());
+                m.put("until", e.getValue().getUntil() != null ? e.getValue().getUntil().getEpochSecond() : null);
+                m.put("reason", e.getValue().getReason());
+                list.add(m);
+            }
+        }
+
+        var mapper = new MessagePackMapper();
+        var tmp = filePath.getParent().resolve(filePath.getFileName() + ".tmp");
+        java.nio.file.Files.write(tmp, mapper.writeValueAsBytes(list));
+        java.nio.file.Files.move(tmp, filePath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        log.debug("Persisted {} blackhole entries to storage", list.size());
+    }
+
+    /**
+     * Load locally-persisted blackhole entries from storage at startup.
+     * Called from {@link #init()}.
+     */
+    @SneakyThrows
+    private void reloadBlacklist() {
+        var filePath = owner.getStoragePath().resolve("blackhole").resolve("local");
+        if (java.nio.file.Files.notExists(filePath)) {
+            return;
+        }
+        try {
+            var mapper = new MessagePackMapper();
+            var data = java.nio.file.Files.readAllBytes(filePath);
+            var list = mapper.readValue(data, new TypeReference<List<Map<String, Object>>>() {});
+            for (Map<String, Object> m : list) {
+                var key = (String) m.get("identity_hash");
+                var source = (String) m.get("source");
+                Instant until = null;
+                if (m.get("until") instanceof Number) {
+                    until = Instant.ofEpochSecond(((Number) m.get("until")).longValue());
+                }
+                var reason = m.get("reason") instanceof String ? (String) m.get("reason") : null;
+                blackholedIdentities.put(key, new BlackholeEntry(source, until, reason));
+            }
+            log.debug("Loaded {} blackhole entries from storage", list.size());
+        } catch (Exception e) {
+            log.warn("Failed to load blackhole list from storage", e);
+        }
+    }
+
+    /**
+     * Expire all destination-table paths whose identity is currently blackholed.
+     */
+    private void removeBlackholedPaths() {
+        for (String destinationHashHex : destinationTable.keySet()) {
+            try {
+                var destinationHashBytes = decodeHex(destinationHashHex);
+                var knownIdentity = recall(destinationHashBytes);
+                if (knownIdentity != null) {
+                    var identityHex = encodeHexString(knownIdentity.getHash());
+                    if (blackholedIdentities.containsKey(identityHex)) {
+                        expirePath(destinationHashBytes);
+                        log.debug("Expired path to blackholed identity {} (destination {})", identityHex, destinationHashHex);
+                    }
+                }
+            } catch (Exception e) {
+                // decodeHex or identity recall failure — skip
+            }
+        }
     }
 
     public synchronized void synthesizeTunnel(@NonNull final ConnectionInterface iface) {
