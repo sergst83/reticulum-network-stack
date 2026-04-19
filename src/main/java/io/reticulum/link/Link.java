@@ -59,10 +59,15 @@ import static io.reticulum.constant.LinkConstant.ECPUBSIZE;
 import static io.reticulum.constant.LinkConstant.ESTABLISHMENT_TIMEOUT_PER_HOP;
 import static io.reticulum.constant.LinkConstant.KEEPALIVE;
 import static io.reticulum.constant.LinkConstant.KEEPALIVE_TIMEOUT_FACTOR;
+import static io.reticulum.constant.LinkConstant.LINK_MTU_SIZE;
 import static io.reticulum.constant.LinkConstant.MDU;
+import static io.reticulum.constant.LinkConstant.MODE_BYTEMASK;
+import static io.reticulum.constant.LinkConstant.MODE_DEFAULT;
+import static io.reticulum.constant.LinkConstant.MTU_BYTEMASK;
 import static io.reticulum.constant.LinkConstant.STALE_GRACE;
 import static io.reticulum.constant.LinkConstant.STALE_TIME;
 import static io.reticulum.constant.LinkConstant.TRAFFIC_TIMEOUT_FACTOR;
+import static io.reticulum.constant.ReticulumConstant.MTU;
 import static io.reticulum.constant.ResourceConstant.HASHMAP_IS_EXHAUSTED;
 import static io.reticulum.constant.ResourceConstant.MAPHASH_LEN;
 import static io.reticulum.constant.ResourceConstant.RESPONSE_MAX_GRACE_TIME;
@@ -155,6 +160,10 @@ public class Link extends AbstractDestination {
     private boolean trackPhyStats = false;
     private Channel channel;
     private boolean initiator;
+    /** Link cipher mode — one of the MODE_* constants in LinkConstant. */
+    private int mode = MODE_DEFAULT;
+    /** Negotiated link MTU; defaults to the global MTU until confirmed by handshake. */
+    private int mtu = MTU;
     private X25519PrivateKeyParameters prv;
     private X25519PublicKeyParameters pub;
     private byte[] pubBytes;
@@ -219,11 +228,15 @@ public class Link extends AbstractDestination {
         }
 
         if (this.initiator) {
-            this.requestData = concatArrays(pubBytes, sigPubBytes);
+            // Always include signalling bytes in the link request (mirrors Python behaviour)
+            var sb = signallingBytes(this.mtu, this.mode);
+            this.requestData = concatArrays(pubBytes, sigPubBytes, sb);
             this.packet = new Packet(destination, requestData, PacketType.LINKREQUEST);
             this.packet.pack();
             this.establishmentCost.getAndIncrement();
-            setLinkId(this.packet);
+            // Compute link ID with signalling bytes stripped (mirrors Python link_id_from_lr_packet)
+            this.linkId = io.reticulum.utils.LinkUtils.linkIdFromLrPacket(this.packet);
+            this.hash = this.linkId;
             Transport.getInstance().registerLink(this);
             this.requestTime = Instant.now();
             startWatchdog();
@@ -282,9 +295,15 @@ public class Link extends AbstractDestination {
         return this.initiator;
     }
 
-    public void setLinkId(Packet packet) {
-        this.linkId = packet.getTruncatedHash();
-        this.hash = this.linkId;
+    /** Set link ID and hash directly from a pre-computed byte array. */
+    public void setLinkId(byte[] id) {
+        this.linkId = id;
+        this.hash = id;
+    }
+
+    /** Set link ID and hash from a LINKREQUEST packet using its raw truncated hash (no signalling stripping). */
+    public void setLinkIdFromPacket(Packet packet) {
+        setLinkId(packet.getTruncatedHash());
     }
 
     public synchronized void handshake() {
@@ -308,11 +327,84 @@ public class Link extends AbstractDestination {
     }
 
     @SneakyThrows
+    /**
+     * Compute the 3-byte MTU/mode signalling field appended to link requests and proofs.
+     *
+     * @param mtu  link MTU (up to 21 bits)
+     * @param mode link cipher mode (3 bits)
+     * @return 3 big-endian bytes encoding the combined signalling value
+     */
+    public static byte[] signallingBytes(int mtu, int mode) {
+        int value = (mtu & MTU_BYTEMASK) | (((mode << 5) & MODE_BYTEMASK) << 16);
+        return new byte[]{(byte) (value >> 16), (byte) (value >> 8), (byte) value};
+    }
+
+    /**
+     * Extract MTU from the signalling bytes at the end of a link-proof packet's data.
+     *
+     * @param data raw packet data field
+     * @return parsed MTU, or {@code null} if the packet is not extended size
+     */
+    public static Integer mtuFromLpPacket(byte[] data) {
+        int offset = SIGLENGTH / 8 + ECPUBSIZE / 2;
+        if (getLength(data) == offset + LINK_MTU_SIZE) {
+            int b0 = data[offset] & 0x1F;       // low 5 bits = MTU bits 16-20
+            int b1 = data[offset + 1] & 0xFF;
+            int b2 = data[offset + 2] & 0xFF;
+            return (b0 << 16) | (b1 << 8) | b2;
+        }
+        return null;
+    }
+
+    /**
+     * Extract the cipher mode from the signalling bytes of a link-proof packet.
+     *
+     * @param data raw packet data field
+     * @return mode value, or {@link io.reticulum.constant.LinkConstant#MODE_DEFAULT} if not extended
+     */
+    public static int modeFromLpPacket(byte[] data) {
+        int offset = SIGLENGTH / 8 + ECPUBSIZE / 2;
+        if (getLength(data) > offset) {
+            return (data[offset] & 0xFF) >> 5;
+        }
+        return MODE_DEFAULT;
+    }
+
+    /**
+     * Extract MTU from the signalling bytes of a link-request packet's data.
+     *
+     * @param data raw link-request data field
+     * @return parsed MTU, or {@code null} if not extended size
+     */
+    public static Integer mtuFromLrPacket(byte[] data) {
+        if (getLength(data) == ECPUBSIZE + LINK_MTU_SIZE) {
+            int b0 = data[ECPUBSIZE] & 0x1F;
+            int b1 = data[ECPUBSIZE + 1] & 0xFF;
+            int b2 = data[ECPUBSIZE + 2] & 0xFF;
+            return (b0 << 16) | (b1 << 8) | b2;
+        }
+        return null;
+    }
+
+    /**
+     * Extract the cipher mode from a link-request packet's data.
+     *
+     * @param data raw link-request data field
+     * @return mode value, or {@link io.reticulum.constant.LinkConstant#MODE_DEFAULT} if not extended
+     */
+    public static int modeFromLrPacket(byte[] data) {
+        if (getLength(data) > ECPUBSIZE) {
+            return (data[ECPUBSIZE] & 0xFF) >> 5;
+        }
+        return MODE_DEFAULT;
+    }
+
     public void prove() {
-        var signedData = concatArrays(this.linkId, this.pubBytes, this.sigPubBytes);
+        var sb = signallingBytes(this.mtu, this.mode);
+        var signedData = concatArrays(this.linkId, this.pubBytes, this.sigPubBytes, sb);
         var signature = this.owner.getIdentity().sign(signedData);
 
-        var proofData = concatArrays(signature, this.pubBytes);
+        var proofData = concatArrays(signature, this.pubBytes, sb);
         var proof = new Packet(this, proofData, PROOF, LRPROOF);
         proof.send();
         this.establishmentCost.getAndAdd(proof.getRaw().length);
@@ -337,15 +429,30 @@ public class Link extends AbstractDestination {
     public synchronized void validateProof(Packet packet) {
         try {
             if (this.status == PENDING) {
-                if (this.initiator && packet.getData().length == (SIGLENGTH / 8 + ECPUBSIZE / 2)) {
-                    var peerPubBytes = subarray(packet.getData(), SIGLENGTH / 8, SIGLENGTH / 8 + ECPUBSIZE / 2);
+                var data = packet.getData();
+                final int baseLen = SIGLENGTH / 8 + ECPUBSIZE / 2;
+                final int extLen  = baseLen + LINK_MTU_SIZE;
+
+                // Strip and remember signalling bytes if the proof is extended-size
+                byte[] sb = new byte[0];
+                if (getLength(data) == extLen) {
+                    Integer confirmedMtu = mtuFromLpPacket(data);
+                    if (confirmedMtu != null) {
+                        this.mtu = confirmedMtu;
+                    }
+                    sb   = signallingBytes(this.mtu, this.mode);
+                    data = subarray(data, 0, baseLen);
+                }
+
+                if (this.initiator && getLength(data) == baseLen) {
+                    var peerPubBytes = subarray(data, SIGLENGTH / 8, baseLen);
                     var peerSigPubBytes = subarray(destination.getIdentity().getPublicKey(), ECPUBSIZE / 2, ECPUBSIZE);
                     loadPeer(peerPubBytes, peerSigPubBytes);
                     handshake();
 
                     establishmentCost.getAndAdd(packet.getRaw().length);
-                    var signedData = concatArrays(linkId, this.peerPubBytes, this.peerSigPubBytes);
-                    var signature = subarray(packet.getData(), 0, SIGLENGTH / 8);
+                    var signedData = concatArrays(linkId, this.peerPubBytes, this.peerSigPubBytes, sb);
+                    var signature = subarray(data, 0, SIGLENGTH / 8);
 
                     if (destination.getIdentity().validate(signature, signedData)) {
                         if (status != HANDSHAKE) {
@@ -538,42 +645,74 @@ public class Link extends AbstractDestination {
     }
 
     /**
-     * @return The tim in miliseconds since this link was established.
+     * @return The time in milliseconds since this link was established, or 0 if not yet activated.
      */
     public long getAge() {
         if (nonNull(this.activatedAt)) {
-            return Duration.between(Instant.now(), this.activatedAt).toMillis();
+            return Duration.between(this.activatedAt, Instant.now()).toMillis();
         } else {
             return 0;
         }
     }
 
     /**
-     * @return The time in milliseconds since last inbound packet on the link.
+     * @return The time in milliseconds since last inbound packet on the link. Includes keepalive packets.
      */
     public long noInboundFor() {
-        Instant time;
-        if (nonNull(activatedAt) && activatedAt.compareTo(lastInbound) < 0) {
-            time = activatedAt;
-        } else {
-            time = lastInbound;
+        Instant reference = lastInbound;
+        if (nonNull(activatedAt) && activatedAt.isAfter(lastInbound)) {
+            reference = activatedAt;
         }
-
-        return Duration.between(time, Instant.now()).toMillis();
+        return Duration.between(reference, Instant.now()).toMillis();
     }
 
     /**
-     * @return The time in milliseconds since last outbound packet on the link.
+     * @return The time in milliseconds since last outbound packet on the link. Includes keepalive packets.
      */
     public long noOutboundFor() {
         return Duration.between(lastOutbound, Instant.now()).toMillis();
     }
 
     /**
-     * @return The time in milliseconds since activity on the link.
+     * @return The time in milliseconds since payload data traversed the link. Excludes keepalive packets.
+     */
+    public long noDataFor() {
+        return Duration.between(lastData, Instant.now()).toMillis();
+    }
+
+    /**
+     * @return The time in milliseconds since any activity on the link. Includes keepalive packets.
      */
     public long inactiveFor() {
         return Math.min(noInboundFor(), noOutboundFor());
+    }
+
+    /**
+     * @return The identity of the remote peer if it has identified itself, otherwise null.
+     */
+    public Identity getRemoteIdentity() {
+        return remoteIdentity;
+    }
+
+    /**
+     * @return The physical layer RSSI if available and phy stats tracking is enabled, otherwise null.
+     */
+    public Integer getRssi() {
+        return trackPhyStats ? rssi : null;
+    }
+
+    /**
+     * @return The physical layer SNR if available and phy stats tracking is enabled, otherwise null.
+     */
+    public Integer getSnr() {
+        return trackPhyStats ? snr : null;
+    }
+
+    /**
+     * @return The physical layer link quality if available and phy stats tracking is enabled, otherwise null.
+     */
+    public Integer getQ() {
+        return trackPhyStats ? q : null;
     }
 
     private synchronized void hadOutbound() {

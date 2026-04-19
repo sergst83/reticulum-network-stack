@@ -162,6 +162,161 @@ public class Reticulum implements ExitHandler {
         IdentityUtils.persistData();
     }
 
+    /**
+     * Returns whether Transport is enabled for the running instance.
+     * When Transport is enabled, Reticulum will route traffic for other peers,
+     * respond to path requests and pass announces over the network.
+     *
+     * @return true if Transport is enabled, false if not.
+     */
+    public static boolean transportEnabled() {
+        return Transport.getInstance().getOwner().isTransportEnabled();
+    }
+
+    /**
+     * Returns whether proofs sent are explicit or implicit.
+     *
+     * @return true if the current configuration specifies implicit proofs, false if not.
+     */
+    public static boolean shouldUseImplicitProof() {
+        return Transport.getInstance().getOwner().isUseImplicitProof();
+    }
+
+    /**
+     * Returns whether probe destination is enabled for the running instance.
+     *
+     * @return true if probe destination is enabled, false if not.
+     */
+    public static boolean probeDestinationEnabled() {
+        return Transport.getInstance().getOwner().isAllowProbes();
+    }
+
+    /**
+     * Returns whether this instance is acting as a shared instance (master)
+     * for other local programs.
+     *
+     * @return true if this is a shared instance.
+     */
+    public boolean isSharedInstance() {
+        return isSharedInstance;
+    }
+
+    /**
+     * Returns the path table as a list of entries. Each entry contains the
+     * destination hash, hops, via (next-hop), expiry, and interface.
+     *
+     * @param maxHops if non-null, only entries with hops &lt;= maxHops are included.
+     * @return list of path table entries.
+     */
+    public List<PathEntry> getPathTable(Integer maxHops) {
+        var result = new ArrayList<PathEntry>();
+        for (var entry : transport.getDestinationTable().entrySet()) {
+            var hops = entry.getValue();
+            if (maxHops == null || hops.getPathLength() <= maxHops) {
+                result.add(new PathEntry(
+                        entry.getKey(),
+                        hops.getTimestamp(),
+                        hops.getVia(),
+                        hops.getPathLength(),
+                        hops.getExpires(),
+                        nonNull(hops.getInterface()) ? hops.getInterface().toString() : null
+                ));
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Returns the path table including all entries.
+     */
+    public List<PathEntry> getPathTable() {
+        return getPathTable(null);
+    }
+
+    /**
+     * Returns the next-hop destination hash for the given destination.
+     *
+     * @param destinationHash destination hash as byte[].
+     * @return next-hop hash as byte[], or null if unknown.
+     */
+    public byte[] getNextHop(byte[] destinationHash) {
+        return transport.nextHop(destinationHash);
+    }
+
+    /**
+     * Returns the name of the interface used to reach the next hop for the given destination.
+     *
+     * @param destinationHash destination hash as byte[].
+     * @return interface name string, or null if unknown.
+     */
+    public String getNextHopIfName(byte[] destinationHash) {
+        var iface = transport.nextHopInterface(destinationHash);
+        return nonNull(iface) ? iface.toString() : null;
+    }
+
+    /**
+     * Returns the first-hop timeout in milliseconds for the given destination.
+     *
+     * @param destinationHash destination hash as byte[].
+     * @return timeout in milliseconds.
+     */
+    public int getFirstHopTimeout(byte[] destinationHash) {
+        return transport.firstHopTimeout(destinationHash);
+    }
+
+    /**
+     * Returns the number of currently tracked links (both pending and active).
+     *
+     * @return link count.
+     */
+    public int getLinkCount() {
+        return transport.getLinkTable().size();
+    }
+
+    /**
+     * Immediately expire the path to a destination, forcing re-discovery.
+     *
+     * @param destinationHash destination hash as byte[].
+     * @return {@code true} if a path existed and was expired.
+     */
+    public boolean dropPath(byte[] destinationHash) {
+        return transport.expirePath(destinationHash);
+    }
+
+    /**
+     * Expire all paths that route through a given next-hop transport node.
+     *
+     * @param viaHash  the transport node's identity hash (16 bytes) to drop routes through.
+     * @return         number of paths expired.
+     */
+    public int dropAllVia(byte[] viaHash) {
+        var count = 0;
+        for (var entry : transport.getDestinationTable().entrySet()) {
+            if (java.util.Arrays.equals(entry.getValue().getVia(), viaHash)) {
+                try {
+                    transport.expirePath(org.apache.commons.codec.binary.Hex.decodeHex(entry.getKey()));
+                    count++;
+                } catch (Exception ignored) {
+                    // Malformed key — skip
+                }
+            }
+        }
+        return count;
+    }
+
+    /**
+     * A single entry in the path table, representing a known route to a destination.
+     */
+    @lombok.Value
+    public static class PathEntry {
+        String destinationHash;
+        java.time.Instant timestamp;
+        byte[] via;
+        int hops;
+        java.time.Instant expires;
+        String interfaceName;
+    }
+
     private void cleanCaches() {
         log.trace("Cleaning resource and packet caches...");
 

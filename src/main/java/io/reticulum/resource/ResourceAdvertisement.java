@@ -47,6 +47,7 @@ public class ResourceAdvertisement {
     private byte[] q;
     private boolean u;
     private boolean p;
+    private boolean x;  // hasMetadata
     private int f;
 
     private Link link;
@@ -55,7 +56,7 @@ public class ResourceAdvertisement {
         if (nonNull(resource)) {
             this.t = resource.getSize();                // Transfer size
             this.d = resource.getTotalSize();           // Total uncompressed data size
-            this.n = getLength(resource.getParts());    // Number of parts
+            this.n = resource.getTotalParts();           // Number of parts
             this.h = resource.getHash();                // Resource hash
             this.r = resource.getRandomHash();          // Resource random hash
             this.o = resource.getOriginalHash();        // First-segment hash
@@ -80,7 +81,7 @@ public class ResourceAdvertisement {
             }
 
             // Flags
-            this.f = 0x00 | toInteger(this.p) << 4 | toInteger(this.u) << 3 | toInteger(this.s) << 2 | toInteger(this.c) << 1 | toInteger(this.e);
+            this.f = 0x00 | toInteger(this.x) << 5 | toInteger(this.p) << 4 | toInteger(this.u) << 3 | toInteger(this.s) << 2 | toInteger(this.c) << 1 | toInteger(this.e);
         }
     }
 
@@ -218,6 +219,7 @@ public class ResourceAdvertisement {
             adv.s = ((adv.f >> 2) & 0x01) == 0x01;
             adv.u = ((adv.f >> 3) & 0x01) == 0x01;
             adv.p = ((adv.f >> 4) & 0x01) == 0x01;
+            adv.x = ((adv.f >> 5) & 0x01) == 0x01;
         }
 
         return adv;

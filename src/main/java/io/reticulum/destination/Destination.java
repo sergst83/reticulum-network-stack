@@ -21,20 +21,35 @@ import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import org.msgpack.jackson.dataformat.MessagePackMapper;
+
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static io.reticulum.constant.DestinationConstant.PR_TAG_WINDOW;
 import static io.reticulum.constant.IdentityConstant.NAME_HASH_LENGTH;
+import static io.reticulum.constant.IdentityConstant.RATCHETSIZE;
+import static io.reticulum.packet.ContextType.FLAG_SET;
+import static io.reticulum.packet.ContextType.FLAG_UNSET;
+import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
+import static java.nio.file.StandardOpenOption.CREATE;
+import static java.nio.file.StandardOpenOption.TRUNCATE_EXISTING;
+import static java.nio.file.StandardOpenOption.WRITE;
 import static io.reticulum.destination.DestinationType.GROUP;
 import static io.reticulum.destination.DestinationType.PLAIN;
 import static io.reticulum.destination.DestinationType.SINGLE;
@@ -69,6 +84,44 @@ import static org.apache.commons.lang3.ArrayUtils.subarray;
 @Slf4j
 @NoArgsConstructor
 public class Destination extends AbstractDestination {
+
+    // ── Ratchet constants ─────────────────────────────────────────────────────
+
+    /** Default number of ratchet keys retained for decryption. */
+    public static final int RATCHET_COUNT    = 512;
+
+    /** Default minimum interval between ratchet rotations, in seconds (30 minutes). */
+    public static final int RATCHET_INTERVAL = 30 * 60;
+
+    // ── Ratchet state ─────────────────────────────────────────────────────────
+
+    /** Locally-generated ratchet private keys (newest first). {@code null} = ratchets not enabled. */
+    private List<byte[]> ratchets = null;
+
+    private Path ratchetsPath = null;
+
+    private int ratchetInterval = RATCHET_INTERVAL;
+
+    private int retainedRatchets = RATCHET_COUNT;
+
+    /** Epoch-second timestamp of the last ratchet rotation. */
+    private long latestRatchetTime = 0;
+
+    /**
+     * ID (truncated hash of public key) of the ratchet that successfully
+     * decrypted the last incoming packet, or {@code null} if the base key was used.
+     */
+    private byte[] latestRatchetId = null;
+
+    private boolean enforceRatchetsEnabled = false;
+
+    /** Guards ratchet file I/O. Not exposed as a Lombok setter (field is final). */
+    private final ReentrantLock ratchetFileLock = new ReentrantLock();
+
+    private static final MessagePackMapper RATCHET_MSGPACK = new MessagePackMapper();
+
+    // ── Identity ──────────────────────────────────────────────────────────────
+
     private Identity identity;
     private byte[] hash;
     private String hexHash;
@@ -272,7 +325,14 @@ public class Destination extends AbstractDestination {
                 return plaintext;
             case SINGLE:
                 if (nonNull(identity)) {
-                    return identity.encrypt(plaintext);
+                    // Use any ratchet key that was announced by the remote destination
+                    byte[] knownRatchet = Identity.getRatchet(hash);
+                    if (knownRatchet != null) {
+                        latestRatchetId = Identity.getRatchetId(knownRatchet);
+                    } else {
+                        latestRatchetId = null;
+                    }
+                    return identity.encrypt(plaintext, knownRatchet);
                 }
                 break;
             case GROUP:
@@ -305,6 +365,24 @@ public class Destination extends AbstractDestination {
                 return ciphertext;
             case SINGLE:
                 if (nonNull(identity)) {
+                    if (ratchets != null) {
+                        // Try own ratchets (private keys, newest first)
+                        byte[] plaintext = identity.decrypt(ciphertext, ratchets, enforceRatchetsEnabled);
+                        if (plaintext == null && !enforceRatchetsEnabled) {
+                            // Ratchet decryption failed — reload from disk and retry once
+                            log.error("Decryption with ratchets failed on {}, reloading ratchets and retrying", this);
+                            try {
+                                reloadRatchets(ratchetsPath);
+                                plaintext = identity.decrypt(ciphertext, ratchets, enforceRatchetsEnabled);
+                                if (plaintext != null) {
+                                    log.info("Decryption succeeded after ratchet reload on {}", this);
+                                }
+                            } catch (Exception e) {
+                                log.error("Decryption still failing after ratchet reload on {}", this, e);
+                            }
+                        }
+                        return plaintext;
+                    }
                     return identity.decrypt(ciphertext);
                 }
                 break;
@@ -339,6 +417,146 @@ public class Destination extends AbstractDestination {
 
         return null;
     }
+
+    // ── Ratchet public API ────────────────────────────────────────────────────
+
+    /**
+     * Enables ratchets on this destination.  Ratchets provide forward secrecy
+     * for packets sent outside a Link by rotating the encryption key periodically.
+     *
+     * @param ratchetsPath path to the file used to persist ratchet data
+     * @return {@code true} on success
+     */
+    public boolean enableRatchets(Path ratchetsPath) {
+        if (ratchetsPath == null) {
+            throw new IllegalArgumentException("No ratchet file path specified for " + this);
+        }
+        this.latestRatchetTime = 0;
+        reloadRatchets(ratchetsPath);
+        log.debug("Ratchets enabled on {}", this);
+        return true;
+    }
+
+    /**
+     * When called, this destination will only accept packets encrypted with
+     * one of its retained ratchet keys, rejecting anything encrypted with the
+     * base identity key.
+     *
+     * @return {@code true} if ratchets are enabled; {@code false} otherwise
+     */
+    public boolean enforceRatchets() {
+        if (ratchets != null) {
+            enforceRatchetsEnabled = true;
+            log.debug("Ratchets enforced on {}", this);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Rotates the ratchet key if the configured interval has elapsed.
+     * Called automatically during each announce.
+     *
+     * @return {@code true} if rotation occurred or was skipped (not yet due)
+     * @throws IllegalStateException if ratchets are not enabled
+     */
+    public boolean rotateRatchets() {
+        if (ratchets == null) {
+            throw new IllegalStateException("Cannot rotate ratchet on " + this + ", ratchets are not enabled");
+        }
+        long now = Instant.now().getEpochSecond();
+        if (now > latestRatchetTime + ratchetInterval) {
+            log.debug("Rotating ratchets for {}", this);
+            byte[] newRatchet = Identity.generateRatchet();
+            ratchets.add(0, newRatchet);
+            latestRatchetTime = now;
+            cleanRatchets();
+            persistRatchets();
+        }
+        return true;
+    }
+
+    // ── Ratchet private helpers ───────────────────────────────────────────────
+
+    private void cleanRatchets() {
+        if (ratchets != null && ratchets.size() > retainedRatchets) {
+            ratchets = new LinkedList<>(ratchets.subList(0, retainedRatchets));
+        }
+    }
+
+    private void persistRatchets() {
+        ratchetFileLock.lock();
+        try {
+            byte[] packedRatchets = RATCHET_MSGPACK.writeValueAsBytes(ratchets);
+            byte[] signature      = identity.sign(packedRatchets);
+
+            // Format: 4-byte sig-length + signature + ratchet list bytes
+            byte[] data = ByteBuffer.allocate(4 + signature.length + packedRatchets.length)
+                    .putInt(signature.length)
+                    .put(signature)
+                    .put(packedRatchets)
+                    .array();
+
+            Path tmpPath = Path.of(ratchetsPath.toString() + ".tmp");
+            Files.write(tmpPath, data, CREATE, WRITE, TRUNCATE_EXISTING);
+            Files.move(tmpPath, ratchetsPath, REPLACE_EXISTING);
+        } catch (Exception e) {
+            log.error("Could not persist ratchets for {}.", this, e);
+            ratchets     = null;
+            ratchetsPath = null;
+        } finally {
+            ratchetFileLock.unlock();
+        }
+    }
+
+    private void reloadRatchets(Path ratchetsPath) {
+        ratchetFileLock.lock();
+        try {
+            if (Files.isRegularFile(ratchetsPath)) {
+                try {
+                    loadRatchetFile(ratchetsPath);
+                } catch (Exception e) {
+                    log.error("First ratchet reload attempt for {} failed. Retrying in 500ms.", this, e);
+                    try {
+                        Thread.sleep(500);
+                        loadRatchetFile(ratchetsPath);
+                        log.debug("Ratchet reload retry succeeded for {}", this);
+                    } catch (Exception e2) {
+                        log.error("Ratchet file at {} could not be loaded for {}.", ratchetsPath, this, e2);
+                        this.ratchets     = null;
+                        this.ratchetsPath = null;
+                        return;
+                    }
+                }
+                this.ratchetsPath = ratchetsPath;
+            } else {
+                log.debug("No existing ratchet data found, initialising new ratchet file for {}", this);
+                this.ratchets     = new LinkedList<>();
+                this.ratchetsPath = ratchetsPath;
+                persistRatchets();
+            }
+        } finally {
+            ratchetFileLock.unlock();
+        }
+    }
+
+    private void loadRatchetFile(Path ratchetsPath) throws IOException {
+        byte[] data = Files.readAllBytes(ratchetsPath);
+        if (data.length < 4) {
+            throw new IOException("Ratchet file too short");
+        }
+        int sigLen           = ByteBuffer.wrap(data, 0, 4).getInt();
+        byte[] signature     = Arrays.copyOfRange(data, 4, 4 + sigLen);
+        byte[] packedRatchets = Arrays.copyOfRange(data, 4 + sigLen, data.length);
+
+        if (!identity.validate(signature, packedRatchets)) {
+            throw new SecurityException("Invalid ratchet file signature for " + this);
+        }
+        this.ratchets = RATCHET_MSGPACK.readValue(packedRatchets,
+                new TypeReference<List<byte[]>>() {});
+    }
+
+    // ── Announce ──────────────────────────────────────────────────────────────
 
     public Packet announce() {
         return announce(null);
@@ -412,16 +630,31 @@ public class Destination extends AbstractDestination {
                 localAppData = defaultAppData;
             }
 
-            var signedData = concatArrays(hash, identity.getPublicKey(), nameHash, randomHash);
+            // Ratchet: rotate if enabled, extract public bytes of the newest key
+            byte[] ratchetPub = null;
+            if (ratchets != null) {
+                rotateRatchets();
+                ratchetPub = Identity.getRatchetPublicBytes(ratchets.get(0));
+                Identity.rememberRatchet(hash, ratchetPub);
+            }
 
+            // signed_data = hash || pubkey || nameHash || randomHash [|| ratchet] [|| appData]
+            var signedData = concatArrays(hash, identity.getPublicKey(), nameHash, randomHash);
+            if (ratchetPub != null) {
+                signedData = concatArrays(signedData, ratchetPub);
+            }
             if (nonNull(localAppData)) {
                 signedData = concatArrays(signedData, localAppData);
             }
 
             var signature = identity.sign(signedData);
 
-            announceData = concatArrays(identity.getPublicKey(), nameHash, randomHash, signature);
-
+            // announce_data = pubkey || nameHash || randomHash [|| ratchet] || signature [|| appData]
+            announceData = concatArrays(identity.getPublicKey(), nameHash, randomHash);
+            if (ratchetPub != null) {
+                announceData = concatArrays(announceData, ratchetPub);
+            }
+            announceData = concatArrays(announceData, signature);
             if (nonNull(localAppData)) {
                 announceData = concatArrays(announceData, localAppData);
             }
@@ -440,6 +673,14 @@ public class Destination extends AbstractDestination {
         }
 
         var announcePacket = new Packet(this, announceData, ANNOUNCE, announceContext, attachedInterface);
+
+        // Set the context flag bit in the packet header to signal ratchet presence.
+        // announceData was built above and ratchetPub is local, so re-derive the flag.
+        // We detect ratchet presence by checking whether our ratchet list is active.
+        boolean hasRatchet = ratchets != null;
+        var contextFlag = hasRatchet ? FLAG_SET : FLAG_UNSET;
+        announcePacket.setContextFlag(contextFlag);
+        announcePacket.getFlags().setContextType(contextFlag);
 
         if (send) {
             announcePacket.send();

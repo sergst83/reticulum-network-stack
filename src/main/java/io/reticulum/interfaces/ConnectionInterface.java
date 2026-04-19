@@ -112,6 +112,45 @@ public interface ConnectionInterface {
         //pass
     }
 
+    /** Returns true if the interface is currently online and able to send/receive. */
+    default boolean isOnline() {
+        return false;
+    }
+
+    /** Returns the remote target hostname/IP for client-type interfaces, or null. */
+    default String getTargetHost() {
+        return null;
+    }
+
+    /** Returns the remote target port for client-type interfaces, or 0. */
+    default int getTargetPort() {
+        return 0;
+    }
+
+    /** Returns the autoconnect endpoint hash set by InterfaceDiscovery, or null. */
+    default byte[] getAutoconnectHash() {
+        return null;
+    }
+
+    /** Sets the autoconnect endpoint hash. */
+    default void setAutoconnectHash(byte[] hash) {}
+
+    /** Returns the autoconnect source network_id hex string, or null. */
+    default String getAutoconnectSource() {
+        return null;
+    }
+
+    /** Sets the autoconnect source network_id. */
+    default void setAutoconnectSource(String source) {}
+
+    /** Returns the epoch-second when the auto-connected interface went offline, or null. */
+    default Long getAutoconnectDown() {
+        return null;
+    }
+
+    /** Sets the epoch-second when the interface went offline (null = online). */
+    default void setAutoconnectDown(Long downSince) {}
+
     default byte[] getHash() {
         return IdentityUtils.fullHash(getInterfaceName().getBytes(UTF_8));
     };

@@ -80,6 +80,13 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
     @JsonProperty("ifac_size")
     protected Integer ifacSize;
 
+    /** Set by InterfaceDiscovery when this interface is auto-connected. Hash of (reachableOn:port). */
+    protected byte[] autoconnectHash;
+    /** Hex network_id of the discovery source that triggered this auto-connection. */
+    protected String autoconnectSource;
+    /** Epoch-second timestamp when an auto-connected interface first went offline; null if online. */
+    protected Long autoconnectDown;
+
     @JsonAlias({"networkname", "network_name"})
     protected String ifacNetName;
 
@@ -127,6 +134,11 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
     protected Instant announceAllowedAt;
     protected Queue<AnnounceQueueEntry> announceQueue = new ConcurrentLinkedQueue<>();
     protected Map<String, Packet> heldAnnounces = new ConcurrentHashMap<>();
+
+    @Override
+    public boolean isOnline() {
+        return online.get();
+    }
 
     public void setIfacNetName(String newIfacNetname) {
         if (StringUtils.isNotBlank(newIfacNetname)) {

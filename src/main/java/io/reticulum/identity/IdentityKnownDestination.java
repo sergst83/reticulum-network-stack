@@ -120,7 +120,7 @@ public class IdentityKnownDestination {
 
                         return false;
                     }
-                    remember(packet.getHash(), destinationHash, publicKey, appData);
+                    remember(packet.getHash(), destinationHash, publicKey, appData, ratchet);
 
                     var signalStr = "";
                     if (nonNull(packet.getRssi()) || nonNull(packet.getSnr())) {
@@ -165,6 +165,10 @@ public class IdentityKnownDestination {
     }
 
     public static void remember(@NonNull byte[] packetHash, @NonNull byte[] destinationHash, @NonNull byte[] publicKey, byte[] app_data) {
+        remember(packetHash, destinationHash, publicKey, app_data, null);
+    }
+
+    public static void remember(@NonNull byte[] packetHash, @NonNull byte[] destinationHash, @NonNull byte[] publicKey, byte[] app_data, byte[] ratchet) {
         var key = Hex.encodeHexString(destinationHash);
         if (publicKey.length != KEYSIZE / 8) {
             throw new  IllegalArgumentException(
@@ -173,6 +177,10 @@ public class IdentityKnownDestination {
         }
 
         KNOWN_DESTINATIONS.put(key, new DestinationData(key, System.currentTimeMillis(), packetHash, publicKey, app_data));
+
+        if (ratchet != null) {
+            Identity.rememberRatchet(destinationHash, ratchet);
+        }
     }
 
     /**
