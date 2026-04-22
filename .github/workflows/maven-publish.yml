@@ -32,3 +32,6 @@ jobs:
       run: mvn deploy -s $GITHUB_WORKSPACE/settings.xml
       env:
         GITHUB_TOKEN: ${{ github.token }}
+    
+#    - name: Java maven library publisher
+#      uses: MathieuSoysal/Java-maven-library-publisher@v1.0.4
