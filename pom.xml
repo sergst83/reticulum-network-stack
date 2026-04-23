@@ -4,9 +4,136 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>io.reticulum</groupId>
+    <groupId>io.github.sergst83</groupId>
     <artifactId>reticulum-network-stack</artifactId>
     <version>1.0-SNAPSHOT</version>
+
+    <description>Java implementation of Reticulum protocol</description>
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>http://www.opensource.org/licenses/mit-license.php</url>
+        </license>
+    </licenses>
+    <developers>
+        <developer>
+            <name>Sergey St.</name>
+            <email>maven.sergst83@mail.ru</email>
+        </developer>
+        <developer>
+            <name>Jürg Schulthess</name>
+            <email>schulthess@puzzle.ch</email>
+        </developer>
+    </developers>
+    <issueManagement>
+        <system>github</system>
+        <url>https://github.com/sergst83/reticulum-network-stack/issues</url>
+    </issueManagement>
+    <scm>
+        <connection>scm:git:git://github.com/sergst83/reticulum-network-stack.git</connection>
+        <developerConnection>scm:git:ssh://github.com:sergst83/reticulum-network-stack.git</developerConnection>
+        <url>http://github.com/sergst83/reticulum-network-stack</url>
+    </scm>
+
+    <profiles>
+        <!-- Profile : Maven Centrale -->
+        <profile>
+            <id>ossrhDeploy</id>
+            <distributionManagement>
+                <snapshotRepository>
+                    <id>ossrh</id>
+                    <name>Central Repository OSSRH</name>
+                    <url>https://s01.oss.sonatype.org/content/repositories/snapshots</url>
+                </snapshotRepository>
+                <repository>
+                    <id>ossrh</id>
+                    <name>Central Repository OSSRH</name>
+                    <url>https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/</url>
+                </repository>
+            </distributionManagement>
+
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.sonatype.plugins</groupId>
+                        <artifactId>nexus-staging-maven-plugin</artifactId>
+                        <version>1.6.8</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <serverId>ossrh</serverId>
+                            <nexusUrl>https://s01.oss.sonatype.org/</nexusUrl>
+                            <autoReleaseAfterClose>true</autoReleaseAfterClose>
+                        </configuration>
+                        <dependencies>
+                            <dependency>
+                                <groupId>com.thoughtworks.xstream</groupId>
+                                <artifactId>xstream</artifactId>
+                                <version>1.4.15</version>
+                            </dependency>
+                        </dependencies>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.2.1</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.0.1</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                                <configuration>
+                                    <gpgArguments>
+                                        <arg>--pinentry-mode</arg>
+                                        <arg>loopback</arg>
+                                    </gpgArguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- Profile : GitHub Apache Maven Packages -->
+        <profile>
+            <id>githubDeploy</id>
+            <distributionManagement>
+                <repository>
+                    <id>github</id>
+                    <name>GitHub sergst83 Apache Maven Packages</name>
+                    <url>https://maven.pkg.github.com/sergst83/reticulum-network-stack</url>
+                </repository>
+            </distributionManagement>
+        </profile>
+    </profiles>
 
     <properties>
         <maven.compiler.source>11</maven.compiler.source>
@@ -73,6 +200,37 @@
                 <artifactId>lombok</artifactId>
                 <version>${lombok.version}</version>
             </dependency>
+            <dependency>
+                <groupId>commons-codec</groupId>
+                <artifactId>commons-codec</artifactId>
+                <version>1.17.1</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-lang3</artifactId>
+                <version>3.17.0</version>
+            </dependency>
+            <!-- Source: https://mvnrepository.com/artifact/org.bouncycastle/bc-jdk18on-bom -->
+            <dependency>
+                <groupId>org.bouncycastle</groupId>
+                <artifactId>bc-jdk18on-bom</artifactId>
+                <version>1.84</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Source: https://mvnrepository.com/artifact/io.netty/netty-bom -->
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <version>4.2.12.Final</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.yaml</groupId>
+                <artifactId>snakeyaml</artifactId>
+                <version>2.4</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -80,12 +238,10 @@
         <dependency>
             <groupId>commons-codec</groupId>
             <artifactId>commons-codec</artifactId>
-            <version>1.17.1</version>
         </dependency>
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-lang3</artifactId>
-            <version>3.17.0</version>
         </dependency>
         <dependency>
             <groupId>org.apache.commons</groupId>
@@ -125,7 +281,6 @@
         <dependency>
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
-            <version>2.4</version>
         </dependency>
         <dependency>
             <groupId>org.msgpack</groupId>
@@ -145,7 +300,6 @@
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcpkix-jdk18on</artifactId>
-            <version>1.78.1</version>
         </dependency>
         <dependency>
             <groupId>com.macasaet.fernet</groupId>
@@ -161,7 +315,6 @@
         <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-all</artifactId>
-            <version>4.1.113.Final</version>
         </dependency>
         <dependency>
             <groupId>com.github.seancfoley</groupId>
@@ -224,26 +377,6 @@
                     </argLine>
                 </configuration>
             </plugin>
-<!--            <plugin>-->
-<!--                <groupId>com.igormaznitsa</groupId>-->
-<!--                <artifactId>jbbp-maven-plugin</artifactId>-->
-<!--                <version>2.0.4</version>-->
-<!--                <executions>-->
-<!--                    <execution>-->
-<!--                        <id>gen-jbbp-src</id>-->
-<!--                        <goals>-->
-<!--                            <goal>generate</goal>-->
-<!--                        </goals>-->
-<!--                    </execution>-->
-<!--                </executions>-->
-<!--                <configuration>-->
-<!--                    <addBinAnnotations>true</addBinAnnotations>-->
-<!--                    <addGettersSetters>true</addGettersSetters>-->
-<!--                    <addNewInstanceMethods>true</addNewInstanceMethods>-->
-<!--                    <source>${project.basedir}/src/main/resources</source>-->
-<!--                    <packageName>io.reticulum.packet.data</packageName>-->
-<!--                </configuration>-->
-<!--            </plugin>-->
         </plugins>
     </build>
 </project>
