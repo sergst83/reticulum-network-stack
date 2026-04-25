@@ -33,5 +33,12 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ github.token }}
     
-#    - name: Java maven library publisher
-#      uses: MathieuSoysal/Java-maven-library-publisher@v1.0.4
+    - name: Maven Library build and publish
+      uses: MathieuSoysal/Java-maven-library-publisher@v1.0.3
+      with:
+        nexus-username: ${{ secrets.NEXUS_USERNAME }}
+        nexus-password: ${{ secrets.NEXUS_PASSWORD }}
+        gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+        gpg-passphrase: ${{ secrets.GPG_PASSPHRASE }}
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        java-version: 11
