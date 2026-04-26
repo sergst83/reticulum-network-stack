@@ -59,7 +59,7 @@ public interface ConnectionInterface {
     /**
      * Quality for RNodeInterface
      *
-     * @return
+     * @return RStatQ always returns null
      */
     default Integer getRStatQ() {return null; }
 
@@ -112,43 +112,79 @@ public interface ConnectionInterface {
         //pass
     }
 
-    /** Returns true if the interface is currently online and able to send/receive. */
+    /**
+     * Returns true if the interface is currently online and able to send/receive.
+     *
+     * @return boolean true|false if is connected
+     */
     default boolean isOnline() {
         return false;
     }
 
-    /** Returns the remote target hostname/IP for client-type interfaces, or null. */
+    /**
+     * Returns the remote target hostname/IP for client-type interfaces, or null.
+     *
+     * @return target host
+     */
     default String getTargetHost() {
         return null;
     }
 
-    /** Returns the remote target port for client-type interfaces, or 0. */
+    /**
+     * Returns the remote target port for client-type interfaces, or 0.
+     *
+     * @return target port
+     */
     default int getTargetPort() {
         return 0;
     }
 
-    /** Returns the autoconnect endpoint hash set by InterfaceDiscovery, or null. */
+    /**
+     * Returns the autoconnect endpoint hash set by InterfaceDiscovery, or null.
+     *
+     * @return autoconnecthash bytes
+     */
     default byte[] getAutoconnectHash() {
         return null;
     }
 
-    /** Sets the autoconnect endpoint hash. */
+    /**
+     * Sets the autoconnect endpoint hash.
+     *
+     * @param hash Hash to be used as a key in future connections
+     */
     default void setAutoconnectHash(byte[] hash) {}
 
-    /** Returns the autoconnect source network_id hex string, or null. */
+    /**
+     * Returns the autoconnect source network_id hex string, or null.
+     *
+     * @return Source Network ID Hex
+     */
     default String getAutoconnectSource() {
         return null;
     }
 
-    /** Sets the autoconnect source network_id. */
+    /**
+     * Sets the autoconnect source network_id.
+     *
+     * @param source Soruce of Autoconnection Endpoint
+     */
     default void setAutoconnectSource(String source) {}
 
-    /** Returns the epoch-second when the auto-connected interface went offline, or null. */
+    /**
+     * Returns the epoch-second when the auto-connected interface went offline, or null.
+     *
+     * @return Epoch seconds
+     */
     default Long getAutoconnectDown() {
         return null;
     }
 
-    /** Sets the epoch-second when the interface went offline (null = online). */
+    /**
+     * Sets the epoch-second when the interface went offline (null = online).
+     *
+     * @param downSince Time Seconds
+     */
     default void setAutoconnectDown(Long downSince) {}
 
     default byte[] getHash() {
@@ -176,7 +212,7 @@ public interface ConnectionInterface {
     /**
      * Have to be threadsafe
      *
-     * @param tunnelId
+     * @param tunnelId byte array of length TUNNEL_ID_LENGTH bytes, or NULL if not a tunneled connection
      */
     default void setTunnelId(byte[] tunnelId) {}
 

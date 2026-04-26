@@ -11,7 +11,6 @@ import io.reticulum.utils.InterfaceUtils;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.MapUtils;
-import sun.misc.Signal;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -21,15 +20,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static io.reticulum.constant.ReticulumConstant.CLEAN_CONSUMER;
-import static io.reticulum.constant.ReticulumConstant.CLEAN_INTERVAL;
-import static io.reticulum.constant.ReticulumConstant.CONFIG_FILE_NAME;
-import static io.reticulum.constant.ReticulumConstant.ETC_DIR;
-import static io.reticulum.constant.ReticulumConstant.IFAC_SALT;
-import static io.reticulum.constant.ReticulumConstant.PERSIST_INTERVAL;
-import static io.reticulum.constant.ReticulumConstant.RESOURCE_CACHE;
+import static io.reticulum.constant.ReticulumConstant.*;
 import static io.reticulum.identity.IdentityKnownDestination.loadKnownDestinations;
-import static io.reticulum.utils.CommonUtils.exit;
 import static io.reticulum.utils.CommonUtils.panic;
 import static io.reticulum.utils.Scheduler.scheduler;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
@@ -47,18 +39,18 @@ import static org.apache.commons.lang3.SystemUtils.USER_HOME;
  * their own instance of the Reticulum class, but Reticulum will
  * automatically handle inter-program communication on the same system,
  * and expose all connected programs to external interfaces as well.
- * <p>
+ * <br>
  * As soon as an instance of this class is created, Reticulum will start
  * opening and configuring any hardware devices specified in the supplied
  * configuration.
- * <p>
+ * <br>
  * Currently the first running instance must be kept running while other
  * local instances are connected, as the first created instance will
  * act as a master instance that directly communicates with external
  * hardware such as modems, TNCs and radios. If a master instance is
  * asked to exit, it will not exit until all client processes have
  * terminated (unless killed forcibly).
- * <p>
+ * <br>
  * If you are running Reticulum on a system with several different
  * programs that use RNS starting and terminating at different times,
  * it will be advantageous to run a master RNS instance as a daemon for
@@ -105,6 +97,7 @@ public class Reticulum implements ExitHandler {
      * pass any traffic before being instantiated.
      *
      * @param configDir Full path to a Reticulum configuration directory.
+     * @throws IOException if there were problems reading/writing files from/to filesystem.
      */
     public Reticulum(final String configDir) throws IOException {
         initConfig(configDir);
@@ -127,9 +120,10 @@ public class Reticulum implements ExitHandler {
                 .filter(ConnectionInterface::isEnabled)
                 .forEach(ConnectionInterface::launch);
 
-        Runtime.getRuntime().addShutdownHook(new Thread(this::exitHandler));
-        Signal.handle(new Signal("INT"), sig -> sigintHandler());
-        Signal.handle(new Signal("TERM"), sig -> sigtermHandler());
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            transport.detachInterfaces();
+            this.exitHandler();
+        }));
     }
 
     public Reticulum getInstance() {
@@ -145,16 +139,6 @@ public class Reticulum implements ExitHandler {
     public void exitHandler() {
         transport.exitHandler();
         IdentityUtils.exitHandler();
-    }
-
-    private void sigintHandler() {
-        transport.detachInterfaces();
-        exit();
-    }
-
-    private void sigtermHandler() {
-        transport.detachInterfaces();
-        exit();
     }
 
     public void persistData() {
@@ -228,6 +212,8 @@ public class Reticulum implements ExitHandler {
 
     /**
      * Returns the path table including all entries.
+     *
+     * @return list containing every existing path tabel entry.
      */
     public List<PathEntry> getPathTable() {
         return getPathTable(null);

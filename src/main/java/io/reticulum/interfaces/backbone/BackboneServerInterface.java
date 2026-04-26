@@ -28,11 +28,11 @@ import static java.util.Objects.nonNull;
  * <p>Corresponds to {@code BackboneInterface} in the Python reference implementation
  * (RNS/Interfaces/BackboneInterface.py).
  *
- * <p>On Linux, Netty's epoll transport ({@link EpollEventLoopGroup} +
- * {@link EpollServerSocketChannel}) is used automatically when available, providing
+ * <p>On Linux, Netty's epoll transport ({@link io.netty.channel.socket.nio.NioSocketChannel} +
+ * {@link io.netty.channel.epoll.EpollServerSocketChannel}) is used automatically when available, providing
  * the same scalability benefit as Python's {@code select.epoll}.  On other platforms
- * the implementation falls back to NIO ({@link NioEventLoopGroup} +
- * {@link NioServerSocketChannel}), matching the Python fall-back to TCPServerInterface.
+ * the implementation falls back to NIO ({@link io.netty.channel.nio.NioEventLoopGroup} +
+ * {@link io.netty.channel.socket.nio.NioServerSocketChannel}), matching the Python fall-back to TCPServerInterface.
  *
  * <p>Configuration keys (YAML):
  * <ul>
@@ -170,7 +170,7 @@ public class BackboneServerInterface extends AbstractConnectionInterface impleme
     /**
      * Binds and starts the TCP server.
      *
-     * <p>Uses epoll when running on Linux (Netty's {@link Epoll#isAvailable()} is
+     * <p>Uses epoll when running on Linux (Netty's Epoll#isAvailable() is
      * {@code true}), otherwise falls back to NIO selectors — matching the Python
      * reference which uses {@code select.epoll} on Linux and falls back to
      * {@code TCPServerInterface} on other platforms.

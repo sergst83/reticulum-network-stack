@@ -111,7 +111,7 @@ public class TCPServerInterface extends AbstractConnectionInterface implements H
     }
 
     /**
-     * server processees only incoming packets <br/>
+     * server processees only incoming packets <br>
      * outgoing packets processed by attached client interfaces see {@link io.reticulum.interfaces.tcp.TCPChannelInitializer}
      *
      * @param data ignored

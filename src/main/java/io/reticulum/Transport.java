@@ -1997,7 +1997,7 @@ public final class Transport implements ExitHandler {
     }
 
     /**
-     * @param destinationHash
+     * @param destinationHash A Destination object's Hash property
      * @return milliseconds
      */
     public int firstHopTimeout(byte[] destinationHash) {
@@ -2180,7 +2180,7 @@ public final class Transport implements ExitHandler {
     }
 
     /**
-     * @param destinationHash
+     * @param destinationHash A single-descriptor identity address
      * @return The number of hops to the specified destination, or ``RNS.Transport.PATHFINDER_M`` if the number of hops is unknown.
      */
     public int hopsTo(byte[] destinationHash) {
@@ -2521,7 +2521,8 @@ public final class Transport implements ExitHandler {
      * Check if the path to a destination exists.
      * Note: if not, a call to requestPath(desitinationHash) may be able to retrieve it from the network.
      * 
-     * @param destinationHash
+     * @param destinationHash path hash
+     * @return True/false depending on whether any route towards given node can currently be determined by checking routing tables etc..
      */
     public Boolean hasPath(@NonNull byte[] destinationHash) {
         return destinationTable.containsKey(encodeHexString(destinationHash));
@@ -2530,7 +2531,7 @@ public final class Transport implements ExitHandler {
     /**
      * Public version of the method requestPath.
      * 
-     * @param destinationHash
+     * @param destinationHash hash
      */
     public void requestPath(@NonNull byte[] destinationHash) {
         requestPath(destinationHash, null, null, false);

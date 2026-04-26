@@ -48,7 +48,7 @@ import static java.util.Objects.nonNull;
  *   available : heard within 24 h
  *   unknown   : heard 24 h–3 days ago
  *   stale     : heard 3–7 days ago
- *   (removed) : not heard for > 7 days
+ *   (removed) : not heard for ;gt 7 days
  * </pre>
  *
  * <h2>Usage</h2>

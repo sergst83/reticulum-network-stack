@@ -87,12 +87,21 @@ public class Identity {
 
     // ── Static ratchet API ────────────────────────────────────────────────────
 
-    /** Generates a new X25519 ratchet key and returns its raw private bytes (32 bytes). */
+    /**
+     * Generates a new X25519 ratchet key and returns its raw private bytes (32 bytes).
+     *
+     * @return A newly generated randomized set of identity secret material.
+     */
     public static byte[] generateRatchet() {
         return new X25519PrivateKeyParameters(new SecureRandom()).getEncoded();
     }
 
-    /** Derives the public bytes (32 bytes) from a ratchet private key. */
+    /**
+     * Derives the public bytes (32 bytes) from a ratchet private key.
+     *
+     * @param ratchetPrvBytes The input array containing both parts
+     * @return Public part derived by applying ECDH with our own ephemeral
+     */
     public static byte[] getRatchetPublicBytes(byte[] ratchetPrvBytes) {
         return new X25519PrivateKeyParameters(ratchetPrvBytes, 0).generatePublicKey().getEncoded();
     }
@@ -100,6 +109,9 @@ public class Identity {
     /**
      * Computes the ratchet ID: truncated full-hash of the ratchet public bytes,
      * matching Python's {@code Identity._get_ratchet_id()}.
+     *
+     * @param ratchetPubBytes Raw output returned by either
+     * @return rachetID
      */
     public static byte[] getRatchetId(byte[] ratchetPubBytes) {
         return subarray(fullHash(ratchetPubBytes), 0, NAME_HASH_LENGTH / 8);
@@ -108,6 +120,9 @@ public class Identity {
     /**
      * Returns the ID of the currently known ratchet for {@code destinationHash},
      * or {@code null} if none is known.
+     *
+     * @param destinationHash Hash identifying some Destinations
+     * @return current racthhet ID, possibly cached locally!
      */
     public static byte[] getCurrentRatchetId(byte[] destinationHash) {
         byte[] ratchet = getRatchet(destinationHash);
@@ -169,6 +184,9 @@ public class Identity {
      * Returns the ratchet public bytes for {@code destinationHash} if known
      * (in memory or on disk), or {@code null} if none is available or the stored
      * ratchet has expired.
+     *
+     * @param destinationHash Identifies one specific remote peer
+     * @return Current local copy of that peers' shared symmetric session
      */
     public static byte[] getRatchet(byte[] destinationHash) {
         String key = Hex.encodeHexString(destinationHash);
@@ -570,6 +588,8 @@ public class Identity {
     /**
      * Save identity to file
      * @param path The full path to the file
+     * @return Whether saving succeeded
+     * @throws IOException When something goes wrong with writing to disc
      */
     public boolean toFile(Path path) throws IOException {
         var privateKeyBytes = Arrays.concatenate(prvBytes, sigPrvBytes);

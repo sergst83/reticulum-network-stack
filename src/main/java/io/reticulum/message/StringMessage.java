@@ -12,10 +12,9 @@ import java.time.Instant;
  *      The MSGTYPE class variable needs to be assigned a
  *      2 byte integer value. This identifier allows the
  *      channel to look up your message's constructor when a
- *      message arrives over the channel.
- *
+ *      message arrives over the channel.<br>
  *      MSGTYPE must be unique across all message types we
- *      register with the channel. MSGTYPEs >= 0xf000 are
+ *      register with the channel. MSGTYPEs ;gt= 0xf000 are
  *      reserved for the system.
  */
 @Data

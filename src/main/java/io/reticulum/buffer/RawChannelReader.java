@@ -106,8 +106,8 @@ public class RawChannelReader extends InputStream {
     }
 
     /**
-     * @param readyBytes
-     * @return
+     * @param readyBytes - The amount that is expected
+     * @return - A copy array.
      * @throws IOException
      * 
      * Read a certain number of bytes from a callback alerting to
