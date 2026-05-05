@@ -8,6 +8,8 @@
     <artifactId>reticulum-network-stack</artifactId>
     <version>1.0.0</version>
 
+    <name>JReticulum</name>
+    <url>http://github.com/sergst83/reticulum-network-stack</url>
     <description>Java implementation of Reticulum protocol</description>
     <licenses>
         <license>
