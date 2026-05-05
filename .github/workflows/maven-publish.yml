@@ -39,20 +39,21 @@ jobs:
 
       - name: Publish to GitHub Packages Apache Maven
         run: |
-          mvn deploy -PgithubDeploy -DskipTests \
-                      | tee $HOME/deploy.log \
-                      || true
-
-                    if grep -q "409 Conflict" $HOME/deploy.log; then
-                      echo "🟨 409 Conflict detected – artifact already exists. Skipping."
-                      exit 0
-                    elif grep -q "ERROR" $HOME/deploy.log; then
-                      echo "❌ Deployment failed:"
-                      cat $HOME/deploy.log
-                      exit 1
-                    else
-                      echo "✅ Successfully deployed"
-                    fi
+          # Запускаем mvn deploy и перехватываем вывод
+          if mvn deploy -PgithubDeploy -DskipTests --batch-mode; then
+            echo "✅ Deployment successful"
+          else
+            # Проверяем, была ли ошибка 409
+            if grep -q "409 Conflict" "$HOME/.m2/log.txt" 2>/dev/null || \
+               grep -q "status code: 409" <(mvn deploy -PgithubDeploy -DskipTests --batch-mode 2>&1 | tee /tmp/mvn.log); then
+              echo "🟨 409 Conflict: Artifact already exists. Ignoring."
+              exit 0
+            else
+              echo "❌ Deployment failed for another reason"
+              cat /tmp/mvn.log
+              exit 1
+            fi
+          fi
         env:
           GITHUB_TOKEN: ${{ github.token }} # GITHUB_TOKEN is the default env for the password
 
