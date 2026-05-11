@@ -1,5 +1,6 @@
 package io.reticulum.destination;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import io.reticulum.Transport;
 import io.reticulum.cryptography.Fernet;
 import io.reticulum.identity.Identity;
@@ -11,17 +12,11 @@ import io.reticulum.packet.PacketType;
 import io.reticulum.utils.DestinationUtils;
 import io.reticulum.utils.IdentityUtils;
 import io.reticulum.utils.LinkUtils;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.NonNull;
-import lombok.Setter;
-import lombok.SneakyThrows;
+import lombok.*;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
-
-import com.fasterxml.jackson.core.type.TypeReference;
 import org.msgpack.jackson.dataformat.MessagePackMapper;
 
 import java.io.IOException;
@@ -29,11 +24,7 @@ import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.locks.ReentrantLock;
@@ -43,32 +34,22 @@ import java.util.function.Function;
 
 import static io.reticulum.constant.DestinationConstant.PR_TAG_WINDOW;
 import static io.reticulum.constant.IdentityConstant.NAME_HASH_LENGTH;
-import static io.reticulum.constant.IdentityConstant.RATCHETSIZE;
-import static io.reticulum.packet.ContextType.FLAG_SET;
-import static io.reticulum.packet.ContextType.FLAG_UNSET;
-import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
-import static java.nio.file.StandardOpenOption.CREATE;
-import static java.nio.file.StandardOpenOption.TRUNCATE_EXISTING;
-import static java.nio.file.StandardOpenOption.WRITE;
-import static io.reticulum.destination.DestinationType.GROUP;
-import static io.reticulum.destination.DestinationType.PLAIN;
-import static io.reticulum.destination.DestinationType.SINGLE;
+import static io.reticulum.destination.DestinationType.*;
 import static io.reticulum.destination.Direction.IN;
 import static io.reticulum.destination.ProofStrategy.PROVE_NONE;
+import static io.reticulum.packet.ContextType.FLAG_SET;
+import static io.reticulum.packet.ContextType.FLAG_UNSET;
 import static io.reticulum.packet.PacketContextType.NONE;
 import static io.reticulum.packet.PacketContextType.PATH_RESPONSE;
 import static io.reticulum.packet.PacketType.ANNOUNCE;
 import static io.reticulum.utils.CommonUtils.longToByteArray;
 import static io.reticulum.utils.DestinationUtils.expandName;
-import static io.reticulum.utils.IdentityUtils.concatArrays;
-import static io.reticulum.utils.IdentityUtils.fullHash;
-import static io.reticulum.utils.IdentityUtils.getRandomHash;
-import static io.reticulum.utils.IdentityUtils.truncatedHash;
+import static io.reticulum.utils.IdentityUtils.*;
 import static java.lang.System.currentTimeMillis;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.Objects.isNull;
-import static java.util.Objects.nonNull;
-import static java.util.Objects.requireNonNullElse;
+import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
+import static java.nio.file.StandardOpenOption.*;
+import static java.util.Objects.*;
 import static org.apache.commons.lang3.ArrayUtils.subarray;
 
 /**
@@ -580,6 +561,9 @@ public class Destination extends AbstractDestination {
      *
      * @param appData      byte array containing the app_data
      * @param pathResponse Internal flag used by {@link Transport}. Ignore.
+     * @param attachedInterface {@link ConnectionInterface} to attach
+     * @param tag           Optional identifier string
+     * @param send          Whether to actually transmit the created packaged
      * @return {@link Packet}
      */
     public Packet announce(

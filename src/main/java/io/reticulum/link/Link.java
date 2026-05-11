@@ -295,13 +295,21 @@ public class Link extends AbstractDestination {
         return this.initiator;
     }
 
-    /** Set link ID and hash directly from a pre-computed byte array. */
+    /**
+     * Set link ID and hash directly from a pre-computed byte array.
+     *
+     * @param id full length identifier including any required padding/signaling fields
+    */
     public void setLinkId(byte[] id) {
         this.linkId = id;
         this.hash = id;
     }
 
-    /** Set link ID and hash from a LINKREQUEST packet using its raw truncated hash (no signalling stripping). */
+    /**
+     * Set link ID and hash from a LINKREQUEST packet using its raw truncated hash (no signalling stripping).
+     *
+     * @param packet {@link Packet}
+     */
     public void setLinkIdFromPacket(Packet packet) {
         setLinkId(packet.getTruncatedHash());
     }
@@ -522,7 +530,7 @@ public class Link extends AbstractDestination {
      * Sends a request to the remote peer.
      *
      * @param path The request path.
-     * @param data
+     * @param data The binary content associated with your message.
      * @param responseCallback An optional function or method with the signature
      * @param failedCallback An optional function or method with the signature to be called when a request fails.
      * @param progressCallback An optional function or method with the signature to be called when progress is made
@@ -1322,7 +1330,7 @@ public class Link extends AbstractDestination {
     /**
      * Registers a function to be called when a link has been torn down.
      *
-     * @param closedCallback
+     * @param closedCallback function callback. Argument passed as parameter.
      */
     public void setLinkClosedCallback(Consumer<Link> closedCallback) {
         callbacks.setLinkClosed(closedCallback);
@@ -1331,7 +1339,7 @@ public class Link extends AbstractDestination {
     /**
      * Registers a function to be called when a packet has been received over this link.
      *
-     * @param callback
+     * @param callback function callbakc; arguments are raw bytes and {@link Packet}
      */
     public void setPacketCallback(BiConsumer<byte[], Packet> callback) {
         callbacks.setPacket(callback);
@@ -1341,7 +1349,7 @@ public class Link extends AbstractDestination {
      * Registers a function to be called when a resource has been advertised over this link. If the function returns
      * <strong>true</strong> the resource will be accepted. If it returns <strong>false</strong> it will be ignored.
      *
-     * @param callback
+     * @param callback resource callback
      */
     public void setResourceCallback(Function<ResourceAdvertisement, Boolean> callback) {
         callbacks.setResource(callback);
@@ -1350,7 +1358,7 @@ public class Link extends AbstractDestination {
     /**
      * Registers a function to be called when a resource has begun transferring over this link.
      *
-     * @param callback
+     * @param callback function arguments includenig instance of class implementing interface {@link Resource}
      */
     public void setResourceStartedCallback(Consumer<Resource> callback) {
         callbacks.setResourceStarted(callback);
@@ -1359,7 +1367,7 @@ public class Link extends AbstractDestination {
     /**
      * Registers a function to be called when a resource has concluded transferring over this link.
      *
-     * @param callback
+     * @param callback resource callback
      */
     public void setResourceConcludedCallback(Consumer<Resource> callback) {
         callbacks.setResourceConcluded(callback);
@@ -1368,7 +1376,7 @@ public class Link extends AbstractDestination {
     /**
      * Registers a function to be called when an initiating peer has identified over this link.
      *
-     * @param callback
+     * @param callback remote identification calback
      */
     public void setRemoteIdentifiedCallback(BiConsumer<Link, Identity> callback) {
         callbacks.setRemoteIdentified(callback);

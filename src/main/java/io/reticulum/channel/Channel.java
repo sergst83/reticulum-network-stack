@@ -6,12 +6,7 @@ import io.reticulum.packet.Packet;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -20,50 +15,35 @@ import java.util.function.Function;
 
 import static io.reticulum.channel.MessageState.MSGSTATE_DELIVERED;
 import static io.reticulum.channel.MessageState.MSGSTATE_SENT;
-import static io.reticulum.constant.ChannelConstant.RTT_FAST;
-import static io.reticulum.constant.ChannelConstant.RTT_MEDIUM;
-import static io.reticulum.constant.ChannelConstant.RTT_SLOW;
-import static io.reticulum.constant.ChannelConstant.SEQ_MODULUS;
-import static io.reticulum.constant.ChannelConstant.WINDOW;
-import static io.reticulum.constant.ChannelConstant.WINDOW_FLEXIBILITY;
-import static io.reticulum.constant.ChannelConstant.WINDOW_MAX;
-import static io.reticulum.constant.ChannelConstant.WINDOW_MAX_FAST;
-import static io.reticulum.constant.ChannelConstant.WINDOW_MAX_MEDIUM;
-import static io.reticulum.constant.ChannelConstant.WINDOW_MAX_SLOW;
-import static io.reticulum.constant.ChannelConstant.WINDOW_MIN;
-import static io.reticulum.constant.ChannelConstant.WINDOW_MIN_LIMIT_FAST;
-import static io.reticulum.constant.ChannelConstant.WINDOW_MIN_LIMIT_MEDIUM;
+import static io.reticulum.constant.ChannelConstant.*;
 import static io.reticulum.constant.ResourceConstant.FAST_RATE_THRESHOLD;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
-import static java.util.concurrent.CompletableFuture.runAsync;
-import static java.util.stream.Collectors.collectingAndThen;
-import static java.util.stream.Collectors.toList;
 import static org.apache.commons.lang3.ArrayUtils.getLength;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
 /**
  * Provides reliable delivery of messages over a link.
- * <br/>
- * <br/>
+ * <br>
+ * <br>
  * {@link Channel} differs from {@link io.reticulum.destination.Request} and {@link io.reticulum.resource.Resource}
  * in some important ways:
- * <br/>
+ * <br>
  * <strong>Continuous</strong>:
  * Messages can be sent or received as long as {@link io.reticulum.link.Link} is open.
- * <br/>
+ * <br>
  * <strong>Bi-directional</strong>:
  * Messages can be sent in either direction on {@link io.reticulum.link.Link} neither end is the client or server.
- * <br/>
+ * <br>
  * <strong>Size-constrained</strong>:
  * Messages must be encoded into a single packet.
- * <br/>
- * <br/>
+ * <br>
+ * <br>
  * {@link Channel} is similar to {@link Packet}, except that it
  * provides reliable delivery (automatic retries) as well
  * as a structure for exchanging several types of
  * messages over the {@link io.reticulum.link.Link}
- * <br/>
+ * <br>
  * {@link Channel} is not instantiated directly, but rather
  * obtained from a {@link io.reticulum.link.Link} with {@link Link#getChannel()}
  */
@@ -117,7 +97,9 @@ public class Channel {
      * Register a message class for reception over a Channel.
      * Message classes must extend MessageBase.
      *
-     * @param messageClass
+     * @param messageClass    Class extending {@link MessageBase}
+     * @param isSystemType Whether its an internal use only
+     * @throws RChannelException if registration fails due to bad parameters etc..
      */
     public void registerMessageType(MessageBase messageClass, Boolean isSystemType) throws RChannelException {
         lock.lock();
@@ -135,7 +117,7 @@ public class Channel {
     }
 
     /**
-     * Add a handler for incoming messages. <br/>
+     * Add a handler for incoming messages. <br>
      * <p>
      * Handlers are processed in the order they are
      * added. If any handler returns True, processing
