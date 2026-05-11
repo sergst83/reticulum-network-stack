@@ -144,24 +144,18 @@ public class Channel {
      *
      * @param callback Function to call
      */
-    public synchronized void addMessageHandler(MessageCallbackType callback) {
-        lock.lock();
-        try {
-            if (isFalse(messageCallbacks.contains(callback))) {
-                messageCallbacks.add(callback);
-            }
-        } finally {
-            lock.unlock();
+    public void addMessageHandler(MessageCallbackType callback) {
+        // messageCallbacks is CopyOnWriteArrayList — no lock needed for thread safety.
+        // Do NOT add synchronized here: synchronized(channel) + lock is the inverse order of
+        // receive() which holds lock then calls runCallbacks() (synchronized(channel)) → ABBA deadlock.
+        if (isFalse(messageCallbacks.contains(callback))) {
+            messageCallbacks.add(callback);
         }
     }
 
-    public synchronized void removeMessageHandler(MessageCallbackType callback) {
-        lock.lock();
-        try {
-            messageCallbacks.remove(callback);
-        } finally {
-            lock.unlock();
-        }
+    public void removeMessageHandler(MessageCallbackType callback) {
+        // See addMessageHandler — same ABBA risk; CopyOnWriteArrayList handles thread safety.
+        messageCallbacks.remove(callback);
     }
 
     public synchronized void shutdown() {
