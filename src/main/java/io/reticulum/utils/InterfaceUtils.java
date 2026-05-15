@@ -21,8 +21,8 @@ public class InterfaceUtils {
 
     public static boolean initIFac(AbstractConnectionInterface iface) {
         // diagnostic log
-        log.info("initIFac: {} — ifacNetName={}, ifacNetKey={}",
-               iface.getInterfaceName(), iface.getIfacNetName(), iface.getIfacNetKey());
+        //log.debug("initIFac: {} — ifacNetName={}, ifacNetKey={}",
+        //       iface.getInterfaceName(), iface.getIfacNetName(), iface.getIfacNetKey());
         if (isNotBlank(iface.getIfacNetName()) || isNotBlank(iface.getIfacNetKey())) {
             var ifacOrigin = new byte[]{};
 
