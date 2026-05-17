@@ -243,8 +243,20 @@ public class Link extends AbstractDestination {
             this.packet.send();
             this.hadOutbound();
 
-            log.debug("Link request {}  sent to {}", linkId, destination);
-            log.trace("Establishment timeout is {} ms  for link request {}", establishmentTimeout, linkId);
+            if (!this.packet.isSent()) {
+                // LINKREQUEST could not be sent (e.g. jobsLock busy or no interface).
+                // The link is already in pendingLinks; leaving it there as a zombie for
+                // the full establishmentTimeout would fire expirePath() → cull cascade.
+                // Close it immediately instead.
+                log.warn("LINKREQUEST for {} could not be sent, closing link immediately to prevent zombie",
+                        Hex.encodeHexString(linkId));
+                this.status = CLOSED;
+                this.teardownReason = TIMEOUT;
+                linkClosed();
+            } else {
+                log.debug("Link request {}  sent to {}", linkId, destination);
+                log.trace("Establishment timeout is {} ms  for link request {}", establishmentTimeout, linkId);
+            }
         }
     }
 

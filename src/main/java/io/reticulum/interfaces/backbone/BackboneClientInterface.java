@@ -362,6 +362,26 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
+    /**
+     * Force-close the current TCP channel to trigger the automatic reconnect mechanism.
+     * Unlike {@link #detach()}, this does NOT set the detached flag, so the normal
+     * {@link #startReconnecting()} cycle fires automatically when the channel closes.
+     * Used by the application layer as a circuit breaker when the backbone appears stuck.
+     */
+    public synchronized void forceReconnect() {
+        Channel ch = this.channel;
+        if (ch != null && ch.isActive()) {
+            log.warn("forceReconnect() on {} — closing channel to trigger auto-reconnect", this);
+            try {
+                ch.close();
+            } catch (Exception e) {
+                log.debug("forceReconnect channel close error for {}", this, e);
+            }
+        } else {
+            log.debug("forceReconnect() on {} but channel not active — no action", this);
+        }
+    }
+
     @Override
     public ConnectionInterface getParentInterface() {
         return parentInterface;
