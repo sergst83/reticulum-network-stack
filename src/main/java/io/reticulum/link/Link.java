@@ -842,7 +842,8 @@ public class Link extends AbstractDestination {
                     // Link was initiated, but no response from destination yet
                     switch (this.status) {
                         case PENDING:
-                            nextCheck = this.requestTime.plusSeconds(this.establishmentTimeout);
+                            // establishmentTimeout is in milliseconds; use plusMillis, not plusSeconds.
+                            nextCheck = this.requestTime.plusMillis(this.establishmentTimeout);
                             sleepTime = Duration.between(Instant.now(), nextCheck).toMillis();
                             if (Instant.now().compareTo(nextCheck) >= 0) {
                                 log.info("Link establishment timed out");
@@ -853,7 +854,7 @@ public class Link extends AbstractDestination {
                             }
                             break;
                         case HANDSHAKE:
-                            nextCheck = this.requestTime.plusSeconds(this.establishmentTimeout);
+                            nextCheck = this.requestTime.plusMillis(this.establishmentTimeout);
                             sleepTime = Duration.between(Instant.now(), nextCheck).toMillis();
                             if (Instant.now().compareTo(nextCheck) >= 0) {
                                 if (initiator) {

@@ -2829,10 +2829,13 @@ public final class Transport implements ExitHandler {
                 }
 
                 //Cull the packet hashlist if it has reached its max size
+                // storage.trimPacketHashList() reads 1M Nitrite DB records while holding jobsLock,
+                // which can take 60+ seconds and block all outbound/inbound traffic. Since packet-
+                // dedup works in a rolling window (not a full multi-day history), a simple in-memory
+                // clear is sufficient and matches Python RNS behaviour (in-memory only).
                 if (packetHashMap.size() > HASHLIST_MAXSIZE) {
-                    var list = storage.trimPacketHashList();
+                    log.warn("packetHashMap reached {} entries — clearing in-memory dedup table", packetHashMap.size());
                     packetHashMap.clear();
-                    packetHashMap.putAll(list);
                 }
 
                 //Cull the path request tags list if it has reached its max size
