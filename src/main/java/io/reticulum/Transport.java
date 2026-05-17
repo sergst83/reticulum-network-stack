@@ -773,6 +773,11 @@ public final class Transport implements ExitHandler {
                 TimeUnit.MICROSECONDS.sleep(500);
             } catch (InterruptedException e) {
                 log.trace("sleep interrupted");
+                Thread.currentThread().interrupt();
+                return;
+            }
+            if (Thread.currentThread().isInterrupted()) {
+                return;
             }
         }
 
@@ -1673,6 +1678,11 @@ public final class Transport implements ExitHandler {
                 MILLISECONDS.sleep(5);
             } catch (InterruptedException e) {
                 log.debug("sleep interrupted: {}", e);
+                Thread.currentThread().interrupt();
+                return false;
+            }
+            if (Thread.currentThread().isInterrupted()) {
+                return false;
             }
         }
 
