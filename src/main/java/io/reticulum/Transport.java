@@ -1496,11 +1496,20 @@ public final class Transport implements ExitHandler {
             //Handling for local data packets
             else if (packet.getPacketType() == DATA) {
                 if (packet.getDestinationType() == LINK) {
+                    Link dataLink = null;
                     for (Link link : activeLinks) {
                         if (Arrays.equals(link.getLinkId(), packet.getDestinationHash())) {
                             packet.setDestination(link);
-                            link.receive(packet);
+                            dataLink = link;
+                            break;
                         }
+                    }
+                    if (dataLink != null) {
+                        // Release jobsLock before calling link.receive() to prevent ABBA deadlock:
+                        // inbound holds jobsLock and blocks on channel.lock (inside channel.receive()),
+                        // while channel.send() holds channel.lock and spins for jobsLock (in outbound()).
+                        jobsLock.unlock();
+                        dataLink.receive(packet);
                     }
                 } else {
                     for (Destination destination : destinations) {
@@ -1608,10 +1617,16 @@ public final class Transport implements ExitHandler {
                         }
                     }
                 } else if (packet.getContext() == RESOURCE_PRF) {
+                    Link resourceLink = null;
                     for (Link link : activeLinks) {
                         if (Arrays.equals(link.getLinkId(), packet.getDestinationHash())) {
-                            link.receive(packet);
+                            resourceLink = link;
+                            break;
                         }
+                    }
+                    if (resourceLink != null) {
+                        jobsLock.unlock(); // same deadlock risk as DATA/LINK dispatch
+                        resourceLink.receive(packet);
                     }
                 } else {
                     if (packet.getDestinationType() == LINK) {
@@ -1670,7 +1685,11 @@ public final class Transport implements ExitHandler {
             if (inboundHeldMs > 200) {
                 log.warn("inbound() held jobsLock for {}ms (thread={})", inboundHeldMs, Thread.currentThread().getName());
             }
-            jobsLock.unlock();
+            // Guard against double-unlock: DATA/LINK and RESOURCE_PRF paths release the lock
+            // early (before link.receive()) to break the ABBA deadlock with channel.lock.
+            if (jobsLock.isHeldByCurrentThread()) {
+                jobsLock.unlock();
+            }
         }
     }
 
