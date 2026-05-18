@@ -781,6 +781,9 @@ public final class Transport implements ExitHandler {
         }
 
         var inboundLockAcquiredAt = System.currentTimeMillis();
+        // Collect all outgoing I/O operations; execute them AFTER releasing jobsLock
+        // to prevent ABBA deadlock with channel.lock (processOutgoing → channel.send acquires it).
+        List<Runnable> deferredIO = new ArrayList<>();
         try {
 
         if (isNull(identity)) {
@@ -888,13 +891,17 @@ public final class Transport implements ExitHandler {
                     if (fromLocalClient) {
                         for (ConnectionInterface anInterface : interfaces) {
                             if (isFalse(anInterface.equals(packet.getReceivingInterface()))) {
-                                transmit(anInterface, packet.getRaw());
+                                final var _iface = anInterface;
+                                final var _raw = packet.getRaw();
+                                deferredIO.add(() -> transmit(_iface, _raw));
                             }
                         }
                     } else {
                         //If the packet was not from a local client, send it directly to all local clients
                         for (ConnectionInterface localClientInterface : localClientInterfaces) {
-                            transmit(localClientInterface, packet.getRaw());
+                            final var _iface = localClientInterface;
+                            final var _raw = packet.getRaw();
+                            deferredIO.add(() -> transmit(_iface, _raw));
                         }
                     }
                 }
@@ -987,7 +994,9 @@ public final class Transport implements ExitHandler {
                                 //reverseTable.put(encodeHexString(packet.getTruncatedHash()), reserveEntry);
                             }
 
-                            transmit(outboundInterface, DataPacketConverter.toBytes(dataPacket));
+                            final var _hopIface = outboundInterface;
+                            final var _hopRaw = DataPacketConverter.toBytes(dataPacket);
+                            deferredIO.add(() -> transmit(_hopIface, _hopRaw));
                             hopsEntry.setTimestamp(Instant.now());
                         } else {
                             // TODO: 11.05.2023 There should probably be some kind of REJECT
@@ -1029,7 +1038,9 @@ public final class Transport implements ExitHandler {
                         if (nonNull(outboundInterface)) {
                             var dataPacket = DataPacketConverter.fromBytes(packet.getRaw());
                             dataPacket.getHeader().setHops((byte) packet.getHops());
-                            transmit(outboundInterface, DataPacketConverter.toBytes(dataPacket));
+                            final var _linkIface = outboundInterface;
+                            final var _linkRaw = DataPacketConverter.toBytes(dataPacket);
+                            deferredIO.add(() -> transmit(_linkIface, _linkRaw));
                             linkEntry.setTimestamp(Instant.now());
                         }
                     }
@@ -1344,7 +1355,8 @@ public final class Transport implements ExitHandler {
                                                     localClientInterface
                                             );
                                             newAnnounce.setHops(packet.getHops());
-                                            newAnnounce.send();
+                                            final var _a1 = newAnnounce;
+                                            deferredIO.add(_a1::send);
                                         }
                                     }
                                 } else {
@@ -1361,7 +1373,8 @@ public final class Transport implements ExitHandler {
                                                     localClientInterface
                                             );
                                             newAnnounce.setHops(packet.getHops());
-                                            newAnnounce.send();
+                                            final var _a2 = newAnnounce;
+                                            deferredIO.add(_a2::send);
                                         }
                                     }
                                 }
@@ -1393,7 +1406,8 @@ public final class Transport implements ExitHandler {
                                         attachedInterface
                                 );
                                 newAnnounce.setHops(packet.getHops());
-                                newAnnounce.send();
+                                final var _a3 = newAnnounce;
+                                deferredIO.add(_a3::send);
                             }
 
                             var destinationTableEntry = Hops.builder()
@@ -1600,7 +1614,9 @@ public final class Transport implements ExitHandler {
                                             var dataPacket = DataPacketConverter.fromBytes(packet.getRaw());
                                             dataPacket.getHeader().setHops((byte) packet.getHops());
                                             linkEntry.setValidated(true);
-                                            transmit(linkEntry.getReceivingInterface(), DataPacketConverter.toBytes(dataPacket));
+                                            final var _lrpIface = linkEntry.getReceivingInterface();
+                                            final var _lrpRaw = DataPacketConverter.toBytes(dataPacket);
+                                            deferredIO.add(() -> transmit(_lrpIface, _lrpRaw));
                                         } else {
                                             log.debug("Invalid link request proof in transport for link {}, dropping proof.",
                                                     encodeHexString(packet.getDestinationHash()));
@@ -1672,7 +1688,9 @@ public final class Transport implements ExitHandler {
                             var dataPacket = DataPacketConverter.fromBytes(packet.getRaw());
                             dataPacket.getHeader().setHops((byte) packet.getHops());
                             //transmit(reverseEntry.getOutboundInterface(), DataPacketConverter.toBytes(dataPacket));
-                            transmit(reverseEntry.getReceivingInterface(), DataPacketConverter.toBytes(dataPacket));
+                            final var _proofIface = reverseEntry.getReceivingInterface();
+                            final var _proofRaw = DataPacketConverter.toBytes(dataPacket);
+                            deferredIO.add(() -> transmit(_proofIface, _proofRaw));
                         } else {
                             log.debug("Proof received on wrong interface, not transporting it.");
                         }
@@ -1704,10 +1722,15 @@ public final class Transport implements ExitHandler {
             if (inboundHeldMs > 200) {
                 log.warn("inbound() held jobsLock for {}ms (thread={})", inboundHeldMs, Thread.currentThread().getName());
             }
-            // Guard against double-unlock: DATA/LINK and RESOURCE_PRF paths release the lock
-            // early (before link.receive()) to break the ABBA deadlock with channel.lock.
             if (jobsLock.isHeldByCurrentThread()) {
                 jobsLock.unlock();
+            }
+            // Flush deferred I/O AFTER releasing jobsLock to prevent ABBA deadlock:
+            // processOutgoing → channel.send acquires channel.lock; if jobsLock were still
+            // held here, and another thread held channel.lock while spinning for jobsLock,
+            // we would deadlock.
+            for (Runnable io : deferredIO) {
+                try { io.run(); } catch (Exception e) { log.error("Error in deferred inbound I/O", e); }
             }
         }
     }
