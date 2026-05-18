@@ -1480,6 +1480,7 @@ public final class Transport implements ExitHandler {
             //Handling for link requests to local destinations
             else if (packet.getPacketType() == LINKREQUEST) {
                 if (isNull(packet.getTransportId()) || Arrays.equals(packet.getTransportId(), identity.getHash())) {
+                    Destination linkRequestDest = null;
                     for (Destination destination : destinations) {
                         // Note: TODO - implement python path_mtu, mode part
                         if (
@@ -1487,8 +1488,17 @@ public final class Transport implements ExitHandler {
                                         && destination.getType() == packet.getDestinationType()
                         ) {
                             packet.setDestination(destination);
-                            destination.receive(packet);
+                            linkRequestDest = destination;
+                            break;
                         }
+                    }
+                    if (linkRequestDest != null) {
+                        // Release jobsLock before dispatch to prevent ABBA deadlock:
+                        // destination.receive() on a link request triggers Link establishment
+                        // which may acquire channel.lock, while channel.send() holds channel.lock
+                        // and spins for jobsLock (in outbound()).
+                        jobsLock.unlock();
+                        linkRequestDest.receive(packet);
                     }
                 }
             }
@@ -1512,25 +1522,34 @@ public final class Transport implements ExitHandler {
                         dataLink.receive(packet);
                     }
                 } else {
+                    Destination dataDest = null;
                     for (Destination destination : destinations) {
                         if (
                                 Arrays.equals(destination.getHash(), packet.getDestinationHash())
                                         && destination.getType() == packet.getDestinationType()
                         ) {
                             packet.setDestination(destination);
-                            destination.receive(packet);
+                            dataDest = destination;
+                            break;
+                        }
+                    }
+                    if (dataDest != null) {
+                        // Release jobsLock before dispatch to prevent ABBA deadlock:
+                        // destination.receive() may acquire other locks (channel.lock, etc.)
+                        // while outbound() holds channel.lock and spins for jobsLock.
+                        jobsLock.unlock();
+                        dataDest.receive(packet);
 
-                            if (destination.getProofStrategy() == PROVE_ALL) {
-                                packet.prove(null);
-                            } else if (destination.getProofStrategy() == PROVE_APP) {
-                                if (nonNull(destination.getCallbacks().getProofRequested())) {
-                                    try {
-                                        if (destination.getCallbacks().getProofRequested().apply(packet)) {
-                                            packet.prove(null);
-                                        }
-                                    } catch (Exception e) {
-                                        log.error("Error while executing proof request callback.", e);
+                        if (dataDest.getProofStrategy() == PROVE_ALL) {
+                            packet.prove(null);
+                        } else if (dataDest.getProofStrategy() == PROVE_APP) {
+                            if (nonNull(dataDest.getCallbacks().getProofRequested())) {
+                                try {
+                                    if (dataDest.getCallbacks().getProofRequested().apply(packet)) {
+                                        packet.prove(null);
                                     }
+                                } catch (Exception e) {
+                                    log.error("Error while executing proof request callback.", e);
                                 }
                             }
                         }
