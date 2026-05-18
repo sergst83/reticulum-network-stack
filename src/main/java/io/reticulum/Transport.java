@@ -1687,6 +1687,7 @@ public final class Transport implements ExitHandler {
         }
 
         var sent = false;
+        var lockAcquiredAt = System.currentTimeMillis();
         try {
             var outboundTime = Instant.now();
 
@@ -1966,6 +1967,12 @@ public final class Transport implements ExitHandler {
                     packet.getPacketType(), packet.getContext(), e);
             throw e;
         } finally {
+            long heldMs = System.currentTimeMillis() - lockAcquiredAt;
+            if (heldMs > 200) {
+                log.warn("outbound() held jobsLock for {}ms (thread={}, pkt={})",
+                        heldMs, Thread.currentThread().getName(),
+                        packet.getPacketType());
+            }
             jobsLock.unlock();
         }
     }
