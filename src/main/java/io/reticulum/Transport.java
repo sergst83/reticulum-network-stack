@@ -2718,7 +2718,9 @@ public final class Transport implements ExitHandler {
 
         //if (jobsLock.tryLock()) {
         if (jobsLock.tryLock(3, TimeUnit.SECONDS)) {
+            var jobsLockAcquiredAt = System.currentTimeMillis();
             try {
+                long _t = System.currentTimeMillis();
                 //Process active and pending link lists
                 if (Instant.now().isAfter(linksLastChecked.get().plusMillis(LINKS_CHECK_INTERVAL))) {
                     for (Link link : pendingLinks) {
@@ -2756,6 +2758,7 @@ public final class Transport implements ExitHandler {
 
                     linksLastChecked.set(Instant.now());
                 }
+                long _linksMs = System.currentTimeMillis() - _t; _t = System.currentTimeMillis();
 
                 //Process receipts list for timed-out packets
                 if (Instant.now().isAfter(receiptsLastChecked.get().plusMillis(RECEIPTS_CHECK_INTERVAL))) {
@@ -2774,6 +2777,7 @@ public final class Transport implements ExitHandler {
 
                     receiptsLastChecked.set(Instant.now());
                 }
+                long _receiptsMs = System.currentTimeMillis() - _t; _t = System.currentTimeMillis();
 
                 // Process announces needing retransmission
                 if (Instant.now().isAfter(announcesLastChecked.get().plusMillis(ANNOUNCES_CHECK_INTERVAL))) {
@@ -2839,6 +2843,7 @@ public final class Transport implements ExitHandler {
 
                     announcesLastChecked.set(Instant.now());
                 }
+                long _announcesMs = System.currentTimeMillis() - _t; _t = System.currentTimeMillis();
 
                 //Cull the packet hashlist if it has reached its max size
                 // storage.trimPacketHashList() reads 1M Nitrite DB records while holding jobsLock,
@@ -3081,6 +3086,7 @@ public final class Transport implements ExitHandler {
 
                     tablesLastCulled.set(Instant.now());
                 }
+                long _cullMs = System.currentTimeMillis() - _t; _t = System.currentTimeMillis();
 
                 // Expire timed blackhole entries
                 var expiredBlackholes = new LinkedList<String>();
@@ -3102,10 +3108,20 @@ public final class Transport implements ExitHandler {
                     }
                     interfaceLastJobs.set(Instant.now());
                 }
+                long _ifaceMs = System.currentTimeMillis() - _t;
+                long _totalMs = System.currentTimeMillis() - jobsLockAcquiredAt;
+                if (_totalMs > 200) {
+                    log.warn("jobs() slow sections: links={}ms receipts={}ms announces={}ms cull={}ms iface={}ms total={}ms",
+                            _linksMs, _receiptsMs, _announcesMs, _cullMs, _ifaceMs, _totalMs);
+                }
 
             } catch (Exception e) {
                 log.error("An exception occurred while running Transport jobs.", e);
             } finally {
+                long jobsHeldMs = System.currentTimeMillis() - jobsLockAcquiredAt;
+                if (jobsHeldMs > 200) {
+                    log.warn("jobs() held jobsLock for {}ms (thread={})", jobsHeldMs, Thread.currentThread().getName());
+                }
                 try {
                     jobsLock.unlock();
                 } catch (IllegalStateException e) {
