@@ -781,6 +781,7 @@ public final class Transport implements ExitHandler {
             }
         }
 
+        var inboundLockAcquiredAt = System.currentTimeMillis();
         try {
 
         if (isNull(identity)) {
@@ -1666,6 +1667,10 @@ public final class Transport implements ExitHandler {
         }
 
         } finally {
+            long inboundHeldMs = System.currentTimeMillis() - inboundLockAcquiredAt;
+            if (inboundHeldMs > 200) {
+                log.warn("inbound() held jobsLock for {}ms (thread={})", inboundHeldMs, Thread.currentThread().getName());
+            }
             jobsLock.unlock();
         }
     }
