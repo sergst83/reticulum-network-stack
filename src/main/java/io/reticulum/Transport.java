@@ -766,19 +766,18 @@ public final class Transport implements ExitHandler {
             return;
         }
 
-        while (isFalse(jobsLock.tryLock())) {
-            //sleep
-            log.debug("jobs locked by {}", jobsLock);
-            try {
-                TimeUnit.MICROSECONDS.sleep(500);
-            } catch (InterruptedException e) {
-                log.trace("sleep interrupted");
-                Thread.currentThread().interrupt();
-                return;
+        // tryLock(2ms) enters the fair queue, preventing starvation of outbound() callers.
+        // Plain tryLock() barges past waiting threads; with high inbound rate this starves announce.
+        try {
+            while (isFalse(jobsLock.tryLock(2, MILLISECONDS))) {
+                if (Thread.currentThread().isInterrupted()) {
+                    return;
+                }
             }
-            if (Thread.currentThread().isInterrupted()) {
-                return;
-            }
+        } catch (InterruptedException e) {
+            log.trace("inbound lock wait interrupted");
+            Thread.currentThread().interrupt();
+            return;
         }
 
         var inboundLockAcquiredAt = System.currentTimeMillis();
@@ -1677,8 +1676,8 @@ public final class Transport implements ExitHandler {
 
     // TODO: 12.05.2023 подлежит рефакторингу. (subject to refactoring)
     public boolean outbound(@NonNull final Packet packet) {
+        var outboundSpinStart = System.currentTimeMillis();
         while (isFalse(jobsLock.tryLock())) {
-            //sleep
             try {
                 MILLISECONDS.sleep(5);
             } catch (InterruptedException e) {
@@ -1688,6 +1687,10 @@ public final class Transport implements ExitHandler {
             }
             if (Thread.currentThread().isInterrupted()) {
                 return false;
+            }
+            long outboundWaitedMs = System.currentTimeMillis() - outboundSpinStart;
+            if (outboundWaitedMs > 1000 && outboundWaitedMs % 5000 < 10) {
+                log.warn("outbound() spin-waited {}ms for jobsLock; lock state: {}", outboundWaitedMs, jobsLock);
             }
         }
 
