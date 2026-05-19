@@ -1706,22 +1706,21 @@ public final class Transport implements ExitHandler {
                         }
                     }
 
+                    // validateProofPacket() fires delivery callbacks → Channel.packetTxOp()
+                    // → channel.lock.lock() (blocking).  Calling it while holding jobsLock
+                    // creates a classic ABBA deadlock with any thread that holds channel.lock
+                    // and spins for jobsLock in outbound().  Defer to deferredIO instead.
+                    final var _proofPacket = packet;
                     for (PacketReceipt receipt : receipts) {
-                        var receiptValidated = false;
-                        if (nonNull(proofHash)) {
-                            //Only test validation if hash matches
-                            if (Arrays.equals(receipt.getHash(), proofHash)) {
-                                receiptValidated = receipt.validateProofPacket(packet);
+                        if (nonNull(proofHash) && !Arrays.equals(receipt.getHash(), proofHash)) {
+                            continue; // skip non-matching receipts for explicit proofs
+                        }
+                        final PacketReceipt _receipt = receipt;
+                        deferredIO.add(() -> {
+                            if (_receipt.validateProofPacket(_proofPacket)) {
+                                receipts.remove(_receipt);
                             }
-                        } else {
-                            // In case of an implicit proof, we have
-                            // to check every single outstanding receipt
-                            receiptValidated = receipt.validateProofPacket(packet);
-                        }
-
-                        if (receiptValidated) {
-                            receipts.remove(receipt);
-                        }
+                        });
                     }
                 }
             }
