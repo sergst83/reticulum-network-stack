@@ -1449,7 +1449,9 @@ public final class Transport implements ExitHandler {
                             }
 
                             // Call externally registered callbacks from apps
-                            // wanting to know when an announce arrives
+                            // wanting to know when an announce arrives.
+                            // Callbacks are deferred to run AFTER jobsLock is released to avoid
+                            // holding the lock while application code runs (e.g. creating links).
                             for (AnnounceHandler handler : announceHandlers) {
                                 try {
                                     //Check that the announced destination matches the handlers aspect filter
@@ -1474,13 +1476,21 @@ public final class Transport implements ExitHandler {
                                     }
 
                                     if (executeCallback) {
-                                        handler.receivedAnnounce(
-                                                packet.getDestinationHash(),
-                                                announceIdentity,
-                                                recallAppData(packet.getDestinationHash()),
-                                                packet.getPacketHash(),
-                                                packet.getContext() == PATH_RESPONSE
-                                        );
+                                        // Capture all data needed by the callback while still holding jobsLock,
+                                        // then defer the actual invocation to after the lock is released.
+                                        final AnnounceHandler _handler = handler;
+                                        final byte[] _destHash = packet.getDestinationHash();
+                                        final Identity _identity = announceIdentity;
+                                        final byte[] _appData = recallAppData(packet.getDestinationHash());
+                                        final byte[] _pktHash = packet.getPacketHash();
+                                        final boolean _isPathResponse = packet.getContext() == PATH_RESPONSE;
+                                        deferredIO.add(() -> {
+                                            try {
+                                                _handler.receivedAnnounce(_destHash, _identity, _appData, _pktHash, _isPathResponse);
+                                            } catch (Exception e) {
+                                                log.error("Error while processing external announce callback.", e);
+                                            }
+                                        });
                                     }
                                 } catch (Exception e) {
                                     log.error("Error while processing external announce callback.", e);
@@ -1752,6 +1762,17 @@ public final class Transport implements ExitHandler {
             long outboundWaitedMs = System.currentTimeMillis() - outboundSpinStart;
             if (outboundWaitedMs > 1000 && outboundWaitedMs % 5000 < 10) {
                 log.warn("outbound() spin-waited {}ms for jobsLock; lock state: {}", outboundWaitedMs, jobsLock);
+            }
+            // At 30s intervals, log the full stack trace of the lock holder for root-cause diagnosis.
+            if (outboundWaitedMs > 30_000 && outboundWaitedMs % 30_000 < 10) {
+                String holderDesc = jobsLock.toString();
+                Thread.getAllStackTraces().forEach((t, frames) -> {
+                    if (holderDesc.contains(t.getName())) {
+                        StringBuilder sb = new StringBuilder();
+                        for (StackTraceElement f : frames) sb.append("\n  at ").append(f);
+                        log.warn("outbound() spin-waited {}ms — lock holder '{}' stack trace:{}", outboundWaitedMs, t.getName(), sb);
+                    }
+                });
             }
         }
 
