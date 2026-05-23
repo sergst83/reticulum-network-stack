@@ -108,9 +108,10 @@ JReticulum is a **pure Java implementation** of this protocol, suitable for:
 
 ```xml
 <dependency>
-    <groupId>io.reticulum</groupId>
-    <artifactId>reticulum-network-stack</artifactId>
-    <version>1.0-SNAPSHOT</version>
+  <groupId>io.github.sergst83</groupId>
+  <artifactId>reticulum-network-stack</artifactId>
+  <version>1.0.1</version>
+  <scope>compile</scope>
 </dependency>
 ```
 
