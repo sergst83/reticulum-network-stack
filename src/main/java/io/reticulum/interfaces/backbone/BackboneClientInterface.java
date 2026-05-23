@@ -98,8 +98,9 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
     // ── Runtime state ────────────────────────────────────────────────────────
 
     private Timer timer;
-    private ChannelFuture channelFuture;
-    private Channel channel;
+    // volatile: written by the timer/reconnect thread, read by Transport threads in processOutgoing()
+    private volatile ChannelFuture channelFuture;
+    private volatile Channel channel;
 
     /** {@code true} when this interface originated the connection. */
     private boolean initiator;
@@ -193,9 +194,15 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
                 os.write(escapeHdlc(data));
                 os.write(FLAG);
 
-                getInternalChannel()
-                        .map(ch -> ch.writeAndFlush(os.toByteArray()))
-                        .orElseThrow(() -> new RuntimeException("Channel not present for " + this));
+                var maybeChannel = getInternalChannel();
+                if (maybeChannel.isEmpty()) {
+                    // Channel not yet available (connecting) or temporarily inactive — drop this
+                    // packet silently.  This is a normal transient state during reconnect; calling
+                    // teardown() here would permanently disable the initiator interface.
+                    log.debug("processOutgoing: no active channel on {}, dropping packet during reconnect", this);
+                    return;
+                }
+                maybeChannel.get().writeAndFlush(os.toByteArray());
 
                 txb.accumulateAndGet(BigInteger.valueOf(data.length), BigInteger::add);
 
@@ -362,22 +369,55 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
+    /**
+     * Force-close the current TCP channel to trigger the automatic reconnect mechanism.
+     * Unlike {@link #detach()}, this does NOT set the detached flag, so the normal
+     * {@link #startReconnecting()} cycle fires automatically when the channel closes.
+     * Used by the application layer as a circuit breaker when the backbone appears stuck.
+     */
+    public synchronized void forceReconnect() {
+        var maybeChannel = getInternalChannel();
+        if (maybeChannel.isPresent()) {
+            log.warn("forceReconnect() on {} — closing channel to trigger auto-reconnect", this);
+            try {
+                maybeChannel.get().close();
+            } catch (Exception e) {
+                log.debug("forceReconnect channel close error for {}", this, e);
+            }
+        } else {
+            log.debug("forceReconnect() on {} but no active channel — no action", this);
+        }
+    }
+
     @Override
     public ConnectionInterface getParentInterface() {
         return parentInterface;
     }
 
+    /**
+     * Returns the active Netty channel, or empty if no active channel is available.
+     *
+     * <p>Deliberately does NOT call {@code ChannelFuture.sync()} — that call blocks the
+     * calling thread until the TCP connect completes (up to the OS TCP-SYN timeout of
+     * ~63 s on Linux).  When called from {@link #processOutgoing} inside Transport's
+     * {@code jobsLock}, blocking there starves ALL other Reticulum outbound/inbound
+     * operations for the full TCP-timeout duration.  Instead we snapshot the volatile
+     * field and check {@code isActive()} — a non-blocking, always-instant test.
+     */
     private Optional<Channel> getInternalChannel() {
-        return Optional.ofNullable(channelFuture)
-                .map(future -> {
-                    try {
-                        return future.sync().channel();
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        throw new RuntimeException(e);
-                    }
-                })
-                .or(() -> Optional.ofNullable(channel));
+        ChannelFuture f = channelFuture;  // volatile read — safe across threads
+        if (f != null && f.isDone() && f.isSuccess()) {
+            Channel ch = f.channel();
+            if (ch != null && ch.isActive()) {
+                return Optional.of(ch);
+            }
+        }
+        // Fallback: spawned (server-side) interfaces store the channel directly.
+        Channel c = channel;
+        if (c != null && c.isActive()) {
+            return Optional.of(c);
+        }
+        return Optional.empty();
     }
 
     // ── Object identity ──────────────────────────────────────────────────────

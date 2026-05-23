@@ -700,6 +700,8 @@ public final class Transport implements ExitHandler {
         //If interface access codes are enabled, we must authenticate each packet.
         if (getLength(raw) > 2) {
             if (nonNull(iface) && nonNull(iface.getIdentity())) {
+                // diagnostic log
+                //log.debug("inbound IFAC check: iface={}, identity null={}", iface.getInterfaceName(), iface.getIdentity() == null);
                 //Check that IFAC flag is set
                 if ((raw[0] & 0x80) == 0x80) {
                     if (getLength(raw) > 2 + iface.getIfacSize()) {
@@ -764,16 +766,24 @@ public final class Transport implements ExitHandler {
             return;
         }
 
-        while (isFalse(jobsLock.tryLock())) {
-            //sleep
-            log.debug("jobs locked by {}", jobsLock);
-            try {
-                TimeUnit.MICROSECONDS.sleep(500);
-            } catch (InterruptedException e) {
-                log.trace("sleep interrupted");
+        // tryLock(2ms) enters the fair queue, preventing starvation of outbound() callers.
+        // Plain tryLock() barges past waiting threads; with high inbound rate this starves announce.
+        try {
+            while (isFalse(jobsLock.tryLock(2, MILLISECONDS))) {
+                if (Thread.currentThread().isInterrupted()) {
+                    return;
+                }
             }
+        } catch (InterruptedException e) {
+            log.trace("inbound lock wait interrupted");
+            Thread.currentThread().interrupt();
+            return;
         }
 
+        var inboundLockAcquiredAt = System.currentTimeMillis();
+        // Collect all outgoing I/O operations; execute them AFTER releasing jobsLock
+        // to prevent ABBA deadlock with channel.lock (processOutgoing → channel.send acquires it).
+        List<Runnable> deferredIO = new ArrayList<>();
         try {
 
         if (isNull(identity)) {
@@ -881,13 +891,17 @@ public final class Transport implements ExitHandler {
                     if (fromLocalClient) {
                         for (ConnectionInterface anInterface : interfaces) {
                             if (isFalse(anInterface.equals(packet.getReceivingInterface()))) {
-                                transmit(anInterface, packet.getRaw());
+                                final var _iface = anInterface;
+                                final var _raw = packet.getRaw();
+                                deferredIO.add(() -> transmit(_iface, _raw));
                             }
                         }
                     } else {
                         //If the packet was not from a local client, send it directly to all local clients
                         for (ConnectionInterface localClientInterface : localClientInterfaces) {
-                            transmit(localClientInterface, packet.getRaw());
+                            final var _iface = localClientInterface;
+                            final var _raw = packet.getRaw();
+                            deferredIO.add(() -> transmit(_iface, _raw));
                         }
                     }
                 }
@@ -980,7 +994,9 @@ public final class Transport implements ExitHandler {
                                 //reverseTable.put(encodeHexString(packet.getTruncatedHash()), reserveEntry);
                             }
 
-                            transmit(outboundInterface, DataPacketConverter.toBytes(dataPacket));
+                            final var _hopIface = outboundInterface;
+                            final var _hopRaw = DataPacketConverter.toBytes(dataPacket);
+                            deferredIO.add(() -> transmit(_hopIface, _hopRaw));
                             hopsEntry.setTimestamp(Instant.now());
                         } else {
                             // TODO: 11.05.2023 There should probably be some kind of REJECT
@@ -1022,7 +1038,9 @@ public final class Transport implements ExitHandler {
                         if (nonNull(outboundInterface)) {
                             var dataPacket = DataPacketConverter.fromBytes(packet.getRaw());
                             dataPacket.getHeader().setHops((byte) packet.getHops());
-                            transmit(outboundInterface, DataPacketConverter.toBytes(dataPacket));
+                            final var _linkIface = outboundInterface;
+                            final var _linkRaw = DataPacketConverter.toBytes(dataPacket);
+                            deferredIO.add(() -> transmit(_linkIface, _linkRaw));
                             linkEntry.setTimestamp(Instant.now());
                         }
                     }
@@ -1337,7 +1355,8 @@ public final class Transport implements ExitHandler {
                                                     localClientInterface
                                             );
                                             newAnnounce.setHops(packet.getHops());
-                                            newAnnounce.send();
+                                            final var _a1 = newAnnounce;
+                                            deferredIO.add(_a1::send);
                                         }
                                     }
                                 } else {
@@ -1354,7 +1373,8 @@ public final class Transport implements ExitHandler {
                                                     localClientInterface
                                             );
                                             newAnnounce.setHops(packet.getHops());
-                                            newAnnounce.send();
+                                            final var _a2 = newAnnounce;
+                                            deferredIO.add(_a2::send);
                                         }
                                     }
                                 }
@@ -1386,7 +1406,8 @@ public final class Transport implements ExitHandler {
                                         attachedInterface
                                 );
                                 newAnnounce.setHops(packet.getHops());
-                                newAnnounce.send();
+                                final var _a3 = newAnnounce;
+                                deferredIO.add(_a3::send);
                             }
 
                             var destinationTableEntry = Hops.builder()
@@ -1428,7 +1449,9 @@ public final class Transport implements ExitHandler {
                             }
 
                             // Call externally registered callbacks from apps
-                            // wanting to know when an announce arrives
+                            // wanting to know when an announce arrives.
+                            // Callbacks are deferred to run AFTER jobsLock is released to avoid
+                            // holding the lock while application code runs (e.g. creating links).
                             for (AnnounceHandler handler : announceHandlers) {
                                 try {
                                     //Check that the announced destination matches the handlers aspect filter
@@ -1453,13 +1476,21 @@ public final class Transport implements ExitHandler {
                                     }
 
                                     if (executeCallback) {
-                                        handler.receivedAnnounce(
-                                                packet.getDestinationHash(),
-                                                announceIdentity,
-                                                recallAppData(packet.getDestinationHash()),
-                                                packet.getPacketHash(),
-                                                packet.getContext() == PATH_RESPONSE
-                                        );
+                                        // Capture all data needed by the callback while still holding jobsLock,
+                                        // then defer the actual invocation to after the lock is released.
+                                        final AnnounceHandler _handler = handler;
+                                        final byte[] _destHash = packet.getDestinationHash();
+                                        final Identity _identity = announceIdentity;
+                                        final byte[] _appData = recallAppData(packet.getDestinationHash());
+                                        final byte[] _pktHash = packet.getPacketHash();
+                                        final boolean _isPathResponse = packet.getContext() == PATH_RESPONSE;
+                                        deferredIO.add(() -> {
+                                            try {
+                                                _handler.receivedAnnounce(_destHash, _identity, _appData, _pktHash, _isPathResponse);
+                                            } catch (Exception e) {
+                                                log.error("Error while processing external announce callback.", e);
+                                            }
+                                        });
                                     }
                                 } catch (Exception e) {
                                     log.error("Error while processing external announce callback.", e);
@@ -1473,6 +1504,7 @@ public final class Transport implements ExitHandler {
             //Handling for link requests to local destinations
             else if (packet.getPacketType() == LINKREQUEST) {
                 if (isNull(packet.getTransportId()) || Arrays.equals(packet.getTransportId(), identity.getHash())) {
+                    Destination linkRequestDest = null;
                     for (Destination destination : destinations) {
                         // Note: TODO - implement python path_mtu, mode part
                         if (
@@ -1480,8 +1512,17 @@ public final class Transport implements ExitHandler {
                                         && destination.getType() == packet.getDestinationType()
                         ) {
                             packet.setDestination(destination);
-                            destination.receive(packet);
+                            linkRequestDest = destination;
+                            break;
                         }
+                    }
+                    if (linkRequestDest != null) {
+                        // Release jobsLock before dispatch to prevent ABBA deadlock:
+                        // destination.receive() on a link request triggers Link establishment
+                        // which may acquire channel.lock, while channel.send() holds channel.lock
+                        // and spins for jobsLock (in outbound()).
+                        jobsLock.unlock();
+                        linkRequestDest.receive(packet);
                     }
                 }
             }
@@ -1489,32 +1530,50 @@ public final class Transport implements ExitHandler {
             //Handling for local data packets
             else if (packet.getPacketType() == DATA) {
                 if (packet.getDestinationType() == LINK) {
+                    Link dataLink = null;
                     for (Link link : activeLinks) {
                         if (Arrays.equals(link.getLinkId(), packet.getDestinationHash())) {
                             packet.setDestination(link);
-                            link.receive(packet);
+                            dataLink = link;
+                            break;
                         }
                     }
+                    if (dataLink != null) {
+                        // Release jobsLock before calling link.receive() to prevent ABBA deadlock:
+                        // inbound holds jobsLock and blocks on channel.lock (inside channel.receive()),
+                        // while channel.send() holds channel.lock and spins for jobsLock (in outbound()).
+                        jobsLock.unlock();
+                        dataLink.receive(packet);
+                    }
                 } else {
+                    Destination dataDest = null;
                     for (Destination destination : destinations) {
                         if (
                                 Arrays.equals(destination.getHash(), packet.getDestinationHash())
                                         && destination.getType() == packet.getDestinationType()
                         ) {
                             packet.setDestination(destination);
-                            destination.receive(packet);
+                            dataDest = destination;
+                            break;
+                        }
+                    }
+                    if (dataDest != null) {
+                        // Release jobsLock before dispatch to prevent ABBA deadlock:
+                        // destination.receive() may acquire other locks (channel.lock, etc.)
+                        // while outbound() holds channel.lock and spins for jobsLock.
+                        jobsLock.unlock();
+                        dataDest.receive(packet);
 
-                            if (destination.getProofStrategy() == PROVE_ALL) {
-                                packet.prove(null);
-                            } else if (destination.getProofStrategy() == PROVE_APP) {
-                                if (nonNull(destination.getCallbacks().getProofRequested())) {
-                                    try {
-                                        if (destination.getCallbacks().getProofRequested().apply(packet)) {
-                                            packet.prove(null);
-                                        }
-                                    } catch (Exception e) {
-                                        log.error("Error while executing proof request callback.", e);
+                        if (dataDest.getProofStrategy() == PROVE_ALL) {
+                            packet.prove(null);
+                        } else if (dataDest.getProofStrategy() == PROVE_APP) {
+                            if (nonNull(dataDest.getCallbacks().getProofRequested())) {
+                                try {
+                                    if (dataDest.getCallbacks().getProofRequested().apply(packet)) {
+                                        packet.prove(null);
                                     }
+                                } catch (Exception e) {
+                                    log.error("Error while executing proof request callback.", e);
                                 }
                             }
                         }
@@ -1565,7 +1624,9 @@ public final class Transport implements ExitHandler {
                                             var dataPacket = DataPacketConverter.fromBytes(packet.getRaw());
                                             dataPacket.getHeader().setHops((byte) packet.getHops());
                                             linkEntry.setValidated(true);
-                                            transmit(linkEntry.getReceivingInterface(), DataPacketConverter.toBytes(dataPacket));
+                                            final var _lrpIface = linkEntry.getReceivingInterface();
+                                            final var _lrpRaw = DataPacketConverter.toBytes(dataPacket);
+                                            deferredIO.add(() -> transmit(_lrpIface, _lrpRaw));
                                         } else {
                                             log.debug("Invalid link request proof in transport for link {}, dropping proof.",
                                                     encodeHexString(packet.getDestinationHash()));
@@ -1601,10 +1662,16 @@ public final class Transport implements ExitHandler {
                         }
                     }
                 } else if (packet.getContext() == RESOURCE_PRF) {
+                    Link resourceLink = null;
                     for (Link link : activeLinks) {
                         if (Arrays.equals(link.getLinkId(), packet.getDestinationHash())) {
-                            link.receive(packet);
+                            resourceLink = link;
+                            break;
                         }
+                    }
+                    if (resourceLink != null) {
+                        jobsLock.unlock(); // same deadlock risk as DATA/LINK dispatch
+                        resourceLink.receive(packet);
                     }
                 } else {
                     if (packet.getDestinationType() == LINK) {
@@ -1631,50 +1698,85 @@ public final class Transport implements ExitHandler {
                             var dataPacket = DataPacketConverter.fromBytes(packet.getRaw());
                             dataPacket.getHeader().setHops((byte) packet.getHops());
                             //transmit(reverseEntry.getOutboundInterface(), DataPacketConverter.toBytes(dataPacket));
-                            transmit(reverseEntry.getReceivingInterface(), DataPacketConverter.toBytes(dataPacket));
+                            final var _proofIface = reverseEntry.getReceivingInterface();
+                            final var _proofRaw = DataPacketConverter.toBytes(dataPacket);
+                            deferredIO.add(() -> transmit(_proofIface, _proofRaw));
                         } else {
                             log.debug("Proof received on wrong interface, not transporting it.");
                         }
                     }
 
+                    // validateProofPacket() fires delivery callbacks → Channel.packetTxOp()
+                    // → channel.lock.lock() (blocking).  Calling it while holding jobsLock
+                    // creates a classic ABBA deadlock with any thread that holds channel.lock
+                    // and spins for jobsLock in outbound().  Defer to deferredIO instead.
+                    final var _proofPacket = packet;
                     for (PacketReceipt receipt : receipts) {
-                        var receiptValidated = false;
-                        if (nonNull(proofHash)) {
-                            //Only test validation if hash matches
-                            if (Arrays.equals(receipt.getHash(), proofHash)) {
-                                receiptValidated = receipt.validateProofPacket(packet);
+                        if (nonNull(proofHash) && !Arrays.equals(receipt.getHash(), proofHash)) {
+                            continue; // skip non-matching receipts for explicit proofs
+                        }
+                        final PacketReceipt _receipt = receipt;
+                        deferredIO.add(() -> {
+                            if (_receipt.validateProofPacket(_proofPacket)) {
+                                receipts.remove(_receipt);
                             }
-                        } else {
-                            // In case of an implicit proof, we have
-                            // to check every single outstanding receipt
-                            receiptValidated = receipt.validateProofPacket(packet);
-                        }
-
-                        if (receiptValidated) {
-                            receipts.remove(receipt);
-                        }
+                        });
                     }
                 }
             }
         }
 
         } finally {
-            jobsLock.unlock();
+            long inboundHeldMs = System.currentTimeMillis() - inboundLockAcquiredAt;
+            if (inboundHeldMs > 200) {
+                log.warn("inbound() held jobsLock for {}ms (thread={})", inboundHeldMs, Thread.currentThread().getName());
+            }
+            if (jobsLock.isHeldByCurrentThread()) {
+                jobsLock.unlock();
+            }
+            // Flush deferred I/O AFTER releasing jobsLock to prevent ABBA deadlock:
+            // processOutgoing → channel.send acquires channel.lock; if jobsLock were still
+            // held here, and another thread held channel.lock while spinning for jobsLock,
+            // we would deadlock.
+            for (Runnable io : deferredIO) {
+                try { io.run(); } catch (Exception e) { log.error("Error in deferred inbound I/O", e); }
+            }
         }
     }
 
     // TODO: 12.05.2023 подлежит рефакторингу. (subject to refactoring)
     public boolean outbound(@NonNull final Packet packet) {
+        var outboundSpinStart = System.currentTimeMillis();
         while (isFalse(jobsLock.tryLock())) {
-            //sleep
             try {
                 MILLISECONDS.sleep(5);
             } catch (InterruptedException e) {
                 log.debug("sleep interrupted: {}", e);
+                Thread.currentThread().interrupt();
+                return false;
+            }
+            if (Thread.currentThread().isInterrupted()) {
+                return false;
+            }
+            long outboundWaitedMs = System.currentTimeMillis() - outboundSpinStart;
+            if (outboundWaitedMs > 1000 && outboundWaitedMs % 5000 < 10) {
+                log.warn("outbound() spin-waited {}ms for jobsLock; lock state: {}", outboundWaitedMs, jobsLock);
+            }
+            // At 30s intervals, log the full stack trace of the lock holder for root-cause diagnosis.
+            if (outboundWaitedMs > 30_000 && outboundWaitedMs % 30_000 < 10) {
+                String holderDesc = jobsLock.toString();
+                Thread.getAllStackTraces().forEach((t, frames) -> {
+                    if (holderDesc.contains(t.getName())) {
+                        StringBuilder sb = new StringBuilder();
+                        for (StackTraceElement f : frames) sb.append("\n  at ").append(f);
+                        log.warn("outbound() spin-waited {}ms — lock holder '{}' stack trace:{}", outboundWaitedMs, t.getName(), sb);
+                    }
+                });
             }
         }
 
         var sent = false;
+        var lockAcquiredAt = System.currentTimeMillis();
         try {
             var outboundTime = Instant.now();
 
@@ -1954,6 +2056,12 @@ public final class Transport implements ExitHandler {
                     packet.getPacketType(), packet.getContext(), e);
             throw e;
         } finally {
+            long heldMs = System.currentTimeMillis() - lockAcquiredAt;
+            if (heldMs > 200) {
+                log.warn("outbound() held jobsLock for {}ms (thread={}, pkt={})",
+                        heldMs, Thread.currentThread().getName(),
+                        packet.getPacketType());
+            }
             jobsLock.unlock();
         }
     }
@@ -2689,12 +2797,15 @@ public final class Transport implements ExitHandler {
     @SneakyThrows
     private void jobs() {
         List<Packet> outgoing = new LinkedList<>();
+        List<Runnable> deferredReceiptChecks = new ArrayList<>();
         Map<String, ConnectionInterface> pathRequestList = new HashMap<>();
         ConnectionInterface blockedIf = null;
 
         //if (jobsLock.tryLock()) {
         if (jobsLock.tryLock(3, TimeUnit.SECONDS)) {
+            var jobsLockAcquiredAt = System.currentTimeMillis();
             try {
+                long _t = System.currentTimeMillis();
                 //Process active and pending link lists
                 if (Instant.now().isAfter(linksLastChecked.get().plusMillis(LINKS_CHECK_INTERVAL))) {
                     for (Link link : pendingLinks) {
@@ -2732,24 +2843,33 @@ public final class Transport implements ExitHandler {
 
                     linksLastChecked.set(Instant.now());
                 }
+                long _linksMs = System.currentTimeMillis() - _t; _t = System.currentTimeMillis();
 
                 //Process receipts list for timed-out packets
                 if (Instant.now().isAfter(receiptsLastChecked.get().plusMillis(RECEIPTS_CHECK_INTERVAL))) {
                     while (receipts.size() > MAX_RECEIPTS) {
                         var culledReceipt = receipts.remove(0);
                         culledReceipt.setTimeout(-1);
-                        culledReceipt.checkTimeout();
+                        // Defer checkTimeout(): it can fire the packet delivery callback → channel.lock,
+                        // causing ABBA with outbound() which holds channel.lock and spins for jobsLock.
+                        deferredReceiptChecks.add(culledReceipt::checkTimeout);
                     }
 
+                    // CopyOnWriteArrayList for-each iterates a snapshot; capture each receipt
+                    // explicitly for the deferred lambda so checkTimeout() runs after jobsLock released.
                     for (PacketReceipt receipt : receipts) {
-                        receipt.checkTimeout();
-                        if (receipt.getStatus() != PacketReceiptStatus.SENT) {
-                            receipts.remove(receipt);
-                        }
+                        PacketReceipt capturedReceipt = receipt;
+                        deferredReceiptChecks.add(() -> {
+                            capturedReceipt.checkTimeout();
+                            if (capturedReceipt.getStatus() != PacketReceiptStatus.SENT) {
+                                receipts.remove(capturedReceipt);
+                            }
+                        });
                     }
 
                     receiptsLastChecked.set(Instant.now());
                 }
+                long _receiptsMs = System.currentTimeMillis() - _t; _t = System.currentTimeMillis();
 
                 // Process announces needing retransmission
                 if (Instant.now().isAfter(announcesLastChecked.get().plusMillis(ANNOUNCES_CHECK_INTERVAL))) {
@@ -2815,12 +2935,16 @@ public final class Transport implements ExitHandler {
 
                     announcesLastChecked.set(Instant.now());
                 }
+                long _announcesMs = System.currentTimeMillis() - _t; _t = System.currentTimeMillis();
 
                 //Cull the packet hashlist if it has reached its max size
+                // storage.trimPacketHashList() reads 1M Nitrite DB records while holding jobsLock,
+                // which can take 60+ seconds and block all outbound/inbound traffic. Since packet-
+                // dedup works in a rolling window (not a full multi-day history), a simple in-memory
+                // clear is sufficient and matches Python RNS behaviour (in-memory only).
                 if (packetHashMap.size() > HASHLIST_MAXSIZE) {
-                    var list = storage.trimPacketHashList();
+                    log.warn("packetHashMap reached {} entries — clearing in-memory dedup table", packetHashMap.size());
                     packetHashMap.clear();
-                    packetHashMap.putAll(list);
                 }
 
                 //Cull the path request tags list if it has reached its max size
@@ -3054,6 +3178,7 @@ public final class Transport implements ExitHandler {
 
                     tablesLastCulled.set(Instant.now());
                 }
+                long _cullMs = System.currentTimeMillis() - _t; _t = System.currentTimeMillis();
 
                 // Expire timed blackhole entries
                 var expiredBlackholes = new LinkedList<String>();
@@ -3075,10 +3200,20 @@ public final class Transport implements ExitHandler {
                     }
                     interfaceLastJobs.set(Instant.now());
                 }
+                long _ifaceMs = System.currentTimeMillis() - _t;
+                long _totalMs = System.currentTimeMillis() - jobsLockAcquiredAt;
+                if (_totalMs > 200) {
+                    log.warn("jobs() slow sections: links={}ms receipts={}ms announces={}ms cull={}ms iface={}ms total={}ms",
+                            _linksMs, _receiptsMs, _announcesMs, _cullMs, _ifaceMs, _totalMs);
+                }
 
             } catch (Exception e) {
                 log.error("An exception occurred while running Transport jobs.", e);
             } finally {
+                long jobsHeldMs = System.currentTimeMillis() - jobsLockAcquiredAt;
+                if (jobsHeldMs > 200) {
+                    log.warn("jobs() held jobsLock for {}ms (thread={})", jobsHeldMs, Thread.currentThread().getName());
+                }
                 try {
                     jobsLock.unlock();
                 } catch (IllegalStateException e) {
@@ -3090,7 +3225,14 @@ public final class Transport implements ExitHandler {
         }
 
         outgoing.forEach(Packet::send);
-        
+
+        // Flush deferred receipt checks AFTER releasing jobsLock to prevent ABBA deadlock:
+        // checkTimeout() can fire packet delivery callback → channel.lock; if jobsLock were still
+        // held, and another thread held channel.lock spinning for jobsLock, we would deadlock.
+        for (Runnable r : deferredReceiptChecks) {
+            try { r.run(); } catch (Exception e) { log.error("Error in deferred receipt check", e); }
+        }
+
         for (String destinationHashString : pathRequestList.keySet()) {
             blockedIf = pathRequestList.get(destinationHashString);
             if (isNull(blockedIf)) {

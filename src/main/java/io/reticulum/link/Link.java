@@ -243,8 +243,20 @@ public class Link extends AbstractDestination {
             this.packet.send();
             this.hadOutbound();
 
-            log.debug("Link request {}  sent to {}", linkId, destination);
-            log.trace("Establishment timeout is {} ms  for link request {}", establishmentTimeout, linkId);
+            if (!this.packet.isSent()) {
+                // LINKREQUEST could not be sent (e.g. jobsLock busy or no interface).
+                // The link is already in pendingLinks; leaving it there as a zombie for
+                // the full establishmentTimeout would fire expirePath() → cull cascade.
+                // Close it immediately instead.
+                log.warn("LINKREQUEST for {} could not be sent, closing link immediately to prevent zombie",
+                        Hex.encodeHexString(linkId));
+                this.status = CLOSED;
+                this.teardownReason = TIMEOUT;
+                linkClosed();
+            } else {
+                log.debug("Link request {}  sent to {}", linkId, destination);
+                log.trace("Establishment timeout is {} ms  for link request {}", establishmentTimeout, linkId);
+            }
         }
     }
 
@@ -892,8 +904,8 @@ public class Link extends AbstractDestination {
                     }
 
                     if (sleepTime == 0) {
-                        log.error("Warning! Link watchdog sleep time of 0!");
-                    } else if (sleepTime <= 0) {
+                        sleepTime = 1;
+                    } else if (sleepTime < 0) {
                         log.error("Timing error! Tearing down link {}  now.", this);
                         teardown();
                         sleepTime = 100;
