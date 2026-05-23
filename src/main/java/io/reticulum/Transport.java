@@ -2797,6 +2797,7 @@ public final class Transport implements ExitHandler {
     @SneakyThrows
     private void jobs() {
         List<Packet> outgoing = new LinkedList<>();
+        List<Runnable> deferredReceiptChecks = new ArrayList<>();
         Map<String, ConnectionInterface> pathRequestList = new HashMap<>();
         ConnectionInterface blockedIf = null;
 
@@ -2849,14 +2850,21 @@ public final class Transport implements ExitHandler {
                     while (receipts.size() > MAX_RECEIPTS) {
                         var culledReceipt = receipts.remove(0);
                         culledReceipt.setTimeout(-1);
-                        culledReceipt.checkTimeout();
+                        // Defer checkTimeout(): it can fire the packet delivery callback → channel.lock,
+                        // causing ABBA with outbound() which holds channel.lock and spins for jobsLock.
+                        deferredReceiptChecks.add(culledReceipt::checkTimeout);
                     }
 
+                    // CopyOnWriteArrayList for-each iterates a snapshot; capture each receipt
+                    // explicitly for the deferred lambda so checkTimeout() runs after jobsLock released.
                     for (PacketReceipt receipt : receipts) {
-                        receipt.checkTimeout();
-                        if (receipt.getStatus() != PacketReceiptStatus.SENT) {
-                            receipts.remove(receipt);
-                        }
+                        PacketReceipt capturedReceipt = receipt;
+                        deferredReceiptChecks.add(() -> {
+                            capturedReceipt.checkTimeout();
+                            if (capturedReceipt.getStatus() != PacketReceiptStatus.SENT) {
+                                receipts.remove(capturedReceipt);
+                            }
+                        });
                     }
 
                     receiptsLastChecked.set(Instant.now());
@@ -3217,7 +3225,14 @@ public final class Transport implements ExitHandler {
         }
 
         outgoing.forEach(Packet::send);
-        
+
+        // Flush deferred receipt checks AFTER releasing jobsLock to prevent ABBA deadlock:
+        // checkTimeout() can fire packet delivery callback → channel.lock; if jobsLock were still
+        // held, and another thread held channel.lock spinning for jobsLock, we would deadlock.
+        for (Runnable r : deferredReceiptChecks) {
+            try { r.run(); } catch (Exception e) { log.error("Error in deferred receipt check", e); }
+        }
+
         for (String destinationHashString : pathRequestList.keySet()) {
             blockedIf = pathRequestList.get(destinationHashString);
             if (isNull(blockedIf)) {
