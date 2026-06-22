@@ -21,6 +21,18 @@ import static io.reticulum.utils.IdentityUtils.concatArrays;
 
 @Slf4j
 public class RawChannelReader extends InputStream {
+    /**
+     * Hard cap on the inbound buffer per stream. When exceeded we drop further
+     * incoming data and mark the stream EOF so consumers stop. Without this cap
+     * a misbehaving (or simply faster-than-consumer) peer can drive
+     * {@code buffer = concatArrays(buffer, ...)} to OutOfMemoryError, which has
+     * been observed on public-facing nodes and propagates up into
+     * {@code Transport.inbound()}.
+     *
+     * Override via {@code -Dio.reticulum.buffer.maxSize=<bytes>}.
+     */
+    public static final int MAX_BUFFER_SIZE =
+            Integer.getInteger("io.reticulum.buffer.maxSize", 8 * 1024 * 1024); // 8 MiB
     private final int streamId;
     private final Channel channel;
     private final ReentrantLock lock = new ReentrantLock();
@@ -28,6 +40,7 @@ public class RawChannelReader extends InputStream {
     private StreamDataMessage sdm = new StreamDataMessage();
     private byte[] buffer;
     private boolean eof;
+    private boolean overflowed;
 
     public RawChannelReader(int streamId, Channel channel) {
         this.streamId = streamId;
@@ -68,13 +81,28 @@ public class RawChannelReader extends InputStream {
             if (streamMessage.getStreamId().equals(this.streamId)) {
                 lock.lock();
                 try {
-                    if (streamMessage.getData() != null) {
-                        buffer = concatArrays(buffer, streamMessage.getData());
+                    byte[] data = streamMessage.getData();
+                    if (data != null && !overflowed) {
+                        // Guard against unbounded growth: if the next concat would push past
+                        // MAX_BUFFER_SIZE, drop the incoming chunk, mark EOF and stop accepting
+                        // further data on this stream. Use long arithmetic to avoid int overflow
+                        // when buffer.length + data.length > Integer.MAX_VALUE.
+                        long projected = (long) buffer.length + (long) data.length;
+                        if (projected > MAX_BUFFER_SIZE) {
+                            overflowed = true;
+                            eof = true;
+                            log.warn("RawChannelReader buffer cap exceeded "
+                                            + "(streamId={}, current={} bytes, incoming={} bytes, cap={} bytes) "
+                                            + "— dropping data and signalling EOF to consumer",
+                                    streamId, buffer.length, data.length, MAX_BUFFER_SIZE);
+                        } else {
+                            buffer = concatArrays(buffer, data);
+                        }
                     }
                     if (streamMessage.getEof()) {
                         eof = true;
                     }
-                    
+
                     for (Consumer<Integer> listener : listeners) {
                         //new Thread(() -> listener.call(buffer.length)).start();
                         new Thread(() -> listener.accept(buffer.length)).start();
@@ -126,7 +154,13 @@ public class RawChannelReader extends InputStream {
 
     public void flush() {
         log.debug("reater - flushing buffer");
-        this.buffer = new byte[0];
+        lock.lock();
+        try {
+            this.buffer = new byte[0];
+            this.overflowed = false;
+        } finally {
+            lock.unlock();
+        }
     }
 
     public Boolean seekable() {
