@@ -21,8 +21,19 @@ public class Scheduler {
                 () -> {
                     try {
                         command.run();
-                    } catch (Exception e) {
-                        log.error("Error while execute task", e);
+                    } catch (Throwable t) {
+                        // Catch Throwable, not just Exception: OutOfMemoryError and other
+                        // Errors otherwise escape this safety net and abort the scheduled
+                        // task (ScheduledExecutorService suppresses subsequent executions
+                        // on exceptional completion). Swallow so the next tick fires
+                        // normally — matches the "safe" intent of this wrapper.
+                        // The logger itself may allocate; wrap it so a logger-OOM does
+                        // not bypass the swallow.
+                        try {
+                            log.error("Error while execute task", t);
+                        } catch (Throwable ignored) {
+                            // Best-effort: if the logger itself fails, drop quietly.
+                        }
                     }
                 }, 100, delay, unite);
 
