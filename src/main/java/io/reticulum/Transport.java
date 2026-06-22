@@ -1727,12 +1727,16 @@ public final class Transport implements ExitHandler {
         }
 
         } finally {
+            // Unlock BEFORE logging: log.warn() allocates (string format + autoboxing) and can
+            // itself throw OutOfMemoryError under heap pressure, which would skip unlock() and
+            // leak the lock forever. Capture timing into primitives first, release the lock,
+            // then log.
             long inboundHeldMs = System.currentTimeMillis() - inboundLockAcquiredAt;
-            if (inboundHeldMs > 200) {
-                log.warn("inbound() held jobsLock for {}ms (thread={})", inboundHeldMs, Thread.currentThread().getName());
-            }
             if (jobsLock.isHeldByCurrentThread()) {
                 jobsLock.unlock();
+            }
+            if (inboundHeldMs > 200) {
+                log.warn("inbound() held jobsLock for {}ms (thread={})", inboundHeldMs, Thread.currentThread().getName());
             }
             // Flush deferred I/O AFTER releasing jobsLock to prevent ABBA deadlock:
             // processOutgoing → channel.send acquires channel.lock; if jobsLock were still
@@ -2056,13 +2060,17 @@ public final class Transport implements ExitHandler {
                     packet.getPacketType(), packet.getContext(), e);
             throw e;
         } finally {
+            // Unlock BEFORE logging: log.warn() allocates (string format + autoboxing) and can
+            // itself throw OutOfMemoryError under heap pressure, which would skip unlock() and
+            // leak the lock forever. Capture timing into primitives first, release the lock,
+            // then log.
             long heldMs = System.currentTimeMillis() - lockAcquiredAt;
+            jobsLock.unlock();
             if (heldMs > 200) {
                 log.warn("outbound() held jobsLock for {}ms (thread={}, pkt={})",
                         heldMs, Thread.currentThread().getName(),
                         packet.getPacketType());
             }
-            jobsLock.unlock();
         }
     }
 
@@ -3210,14 +3218,18 @@ public final class Transport implements ExitHandler {
             } catch (Exception e) {
                 log.error("An exception occurred while running Transport jobs.", e);
             } finally {
+                // Unlock BEFORE logging: log.warn() allocates (string format + autoboxing) and can
+                // itself throw OutOfMemoryError under heap pressure, which would skip unlock() and
+                // leak the lock forever. Capture timing into primitives first, release the lock,
+                // then log.
                 long jobsHeldMs = System.currentTimeMillis() - jobsLockAcquiredAt;
-                if (jobsHeldMs > 200) {
-                    log.warn("jobs() held jobsLock for {}ms (thread={})", jobsHeldMs, Thread.currentThread().getName());
-                }
                 try {
                     jobsLock.unlock();
-                } catch (IllegalStateException e) {
-                    log.warn("Error while jobsLock unlock", e);
+                } catch (IllegalMonitorStateException e) {
+                    log.warn("jobsLock unlock failed (not held by current thread)", e);
+                }
+                if (jobsHeldMs > 200) {
+                    log.warn("jobs() held jobsLock for {}ms (thread={})", jobsHeldMs, Thread.currentThread().getName());
                 }
             }
         } else {
