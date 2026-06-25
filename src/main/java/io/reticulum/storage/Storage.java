@@ -18,16 +18,19 @@ import io.reticulum.storage.entity.TunnelEntity;
 import lombok.AccessLevel;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.collections4.MapUtils;
 import org.dizitart.no2.Nitrite;
 import org.dizitart.no2.common.mapper.SimpleNitriteMapper;
+import org.dizitart.no2.exceptions.NitriteException;
 import org.dizitart.no2.mvstore.MVStoreModule;
 
 import java.nio.file.Path;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -38,6 +41,7 @@ import static org.dizitart.no2.collection.FindOptions.orderBy;
 import static org.dizitart.no2.common.SortOrder.Descending;
 import static org.dizitart.no2.common.util.Iterables.setOf;
 
+@Slf4j
 @RequiredArgsConstructor(access = AccessLevel.PRIVATE)
 public final class Storage {
 
@@ -55,6 +59,15 @@ public final class Storage {
 
 
     private final Nitrite db;
+
+    /**
+     * Latched once the packet cache is observed to be unavailable (e.g. the
+     * underlying Nitrite/MVStore was closed after a disk-full write failure).
+     * Used to log a single WARN instead of one per inbound packet — without
+     * this guard a stuck store has been observed to spam thousands of
+     * identical stack traces in {@code Transport.pathRequestHandler}.
+     */
+    private final AtomicBoolean packetCacheUnavailableLogged = new AtomicBoolean(false);
 
     public static Storage getInstance() {
         if (STORAGE == null) {
@@ -172,15 +185,40 @@ public final class Storage {
     }
 
     public void savePacketCache(@NonNull final PacketCache packetCache) {
-        doInTransactionWithoutResult(__ -> {
-            var repo = db.getRepository(PacketCache.class);
-            repo.update(packetCache, true);
-        });
+        try {
+            doInTransactionWithoutResult(__ -> {
+                var repo = db.getRepository(PacketCache.class);
+                repo.update(packetCache, true);
+            });
+        } catch (NitriteException e) {
+            // Packet cache is optional: if the underlying store is closed (e.g.
+            // disk-full write failure earlier), continue without caching rather
+            // than propagating to per-packet error sites.
+            logPacketCacheUnavailable(e);
+        }
     }
 
     public PacketCache getPacketCache(@NonNull final String packetHash) {
-        return db.getRepository(PacketCache.class)
-                .getById(packetHash);
+        try {
+            return db.getRepository(PacketCache.class)
+                    .getById(packetHash);
+        } catch (NitriteException e) {
+            // Treat a closed/unavailable store as a cache miss. Caller already
+            // handles null gracefully (Transport.getCachedPacket returns null →
+            // path request continues without cached reply).
+            logPacketCacheUnavailable(e);
+            return null;
+        }
+    }
+
+    private void logPacketCacheUnavailable(NitriteException e) {
+        if (packetCacheUnavailableLogged.compareAndSet(false, true)) {
+            log.warn("Packet cache unavailable ({}: {}). Continuing without cache; further "
+                            + "occurrences logged at DEBUG only.",
+                    e.getClass().getSimpleName(), e.getMessage());
+        } else {
+            log.debug("Packet cache still unavailable: {}", e.getMessage());
+        }
     }
 
     public void cleanPacketCache() {
