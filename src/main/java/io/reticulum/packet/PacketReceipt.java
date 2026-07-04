@@ -63,7 +63,16 @@ public class PacketReceipt {
 
     public synchronized boolean validateProofPacket(@NonNull final Packet proofPacket) {
         if (proofPacket.getDestinationType() == DestinationType.LINK) {
-            return validateLinkProof((Link) proofPacket.getDestination(), proofPacket);
+            // proofPacket.getDestination() can be null if the link was torn down
+            // between the receipt being enqueued (as deferred I/O in Transport.inbound)
+            // and the deferred runnable actually executing. In that case there is
+            // nothing to validate against — treat as a no-op rather than NPE.
+            var linkDest = proofPacket.getDestination();
+            if (linkDest == null) {
+                log.debug("validateProofPacket: link destination is null (link likely torn down); skipping proof validation");
+                return false;
+            }
+            return validateLinkProof((Link) linkDest, proofPacket);
         } else {
             return  validateProof(proofPacket.getData(), proofPacket);
         }
@@ -130,13 +139,18 @@ public class PacketReceipt {
     }
 
     /**
-     * Validate a raw proof for a link
+     * Validate a raw proof for a link. Returns false (rather than throwing) if
+     * the link reference is null, which can happen if the link was torn down
+     * after the receipt was enqueued for deferred validation.
      *
-     * @param link
-     * @param proofPacket
-     * @return
+     * @param link        the link to validate against; may be null
+     * @param proofPacket the proof packet
+     * @return true iff the proof validated and delivery callbacks fired
      */
-    private boolean validateLinkProof(@NonNull final Link link, @NonNull final Packet proofPacket) {
+    private boolean validateLinkProof(final Link link, @NonNull final Packet proofPacket) {
+        if (link == null) {
+            return false;
+        }
         var proof = proofPacket.getData();
         if (proof.length == EXPL_LENGTH) {
             //This is an explicit proof

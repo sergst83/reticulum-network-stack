@@ -15,6 +15,18 @@ public class RawChannelWriter extends OutputStream {
     private static final int MAX_CHUNK_LEN = 1024 * 16;
     private static final int COMPRESSION_TRIES = 4;
 
+    /**
+     * Block size passed to {@link BZip2CompressorOutputStream}. The value is
+     * multiplied by 100 KB internally, so block size 1 = 100 KB block and about
+     * 600 KB of transient allocation per compressor instance; block size 9
+     * (Apache Commons Compress default) = 900 KB block and about 5–6 MB per
+     * instance. Since MAX_CHUNK_LEN is only 16 KB, block size 1 gives us
+     * plenty of compression room while cutting the per-write transient heap
+     * cost by ~9×. Block size is stored in the bzip2 header, so decompressors
+     * auto-adapt — this does not affect wire compatibility.
+     */
+    private static final int BZIP2_BLOCK_SIZE = 1;
+
     private final int streamId;
     private final Channel channel;
     private boolean eof = false;
@@ -57,7 +69,7 @@ public class RawChannelWriter extends OutputStream {
             while (chunkLen > 32 && compTry < COMPRESSION_TRIES) {
                 int chunkSegmentLength = chunkLen / compTry;
                 ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-                BZip2CompressorOutputStream bzip2OutputStream = new BZip2CompressorOutputStream(byteArrayOutputStream);
+                BZip2CompressorOutputStream bzip2OutputStream = new BZip2CompressorOutputStream(byteArrayOutputStream, BZIP2_BLOCK_SIZE);
                 bzip2OutputStream.write(chunk, 0, chunkSegmentLength);
                 bzip2OutputStream.close();
                 compressedChunk = byteArrayOutputStream.toByteArray();
