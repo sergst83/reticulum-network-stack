@@ -2957,9 +2957,15 @@ public final class Transport implements ExitHandler {
 
                 //Cull the path request tags list if it has reached its max size
                 if (discoveryPrTags.size() > MAX_PR_TAGS) {
-                    var list = discoveryPrTags.subList(discoveryPrTags.size() - MAX_PR_TAGS, discoveryPrTags.size() - 1);
+                    // Copy the tail into an independent list BEFORE clearing.
+                    // subList() returns a live view into the backing CopyOnWriteArrayList;
+                    // clear() then invalidates the view and the subsequent addAll(view)
+                    // throws ConcurrentModificationException, aborting the whole jobs() run.
+                    var keep = new ArrayList<>(discoveryPrTags.subList(
+                            discoveryPrTags.size() - MAX_PR_TAGS,
+                            discoveryPrTags.size() - 1));
                     discoveryPrTags.clear();
-                    discoveryPrTags.addAll(list);
+                    discoveryPrTags.addAll(keep);
                 }
 
                 if (Instant.now().isAfter(tablesLastCulled.get().plusMillis(TABLES_CULL_INTERVAL))) {
