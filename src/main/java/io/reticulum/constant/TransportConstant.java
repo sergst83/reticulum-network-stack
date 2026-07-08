@@ -59,4 +59,16 @@ public class TransportConstant {
     public static final int MAX_PR_TAGS = 32_000;
     public static final long TABLES_CULL_INTERVAL = 5_000; //ms
 
+    /**
+     * Cap on the number of most-recent random blobs kept per destination in
+     * {@code Hops.randomBlobs}. Without a cap the list grows monotonically —
+     * one blob per unique announce heard — and is fully serialized on every
+     * 12-hour {@code savePathTable()} dump, which on public transport-enabled
+     * nodes has been observed to drive the Nitrite jreticulum.db file into
+     * multi-gigabyte territory. 128 keeps a replay-detection window that
+     * comfortably covers any realistic announce rate while bounding
+     * per-destination footprint to ~1 KB.
+     */
+    public static final int RANDOM_BLOBS_MAX_PER_DESTINATION = 128;
+
 }

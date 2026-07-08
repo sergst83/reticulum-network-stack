@@ -106,6 +106,7 @@ import static io.reticulum.constant.TransportConstant.PATH_REQUEST_GRACE;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_MI;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_RG;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_TIMEOUT;
+import static io.reticulum.constant.TransportConstant.RANDOM_BLOBS_MAX_PER_DESTINATION;
 import static io.reticulum.constant.TransportConstant.RECEIPTS_CHECK_INTERVAL;
 import static io.reticulum.constant.TransportConstant.REVERSE_TIMEOUT;
 import static io.reticulum.constant.TransportConstant.ROAMING_PATH_TIME;
@@ -1276,6 +1277,14 @@ public final class Transport implements ExitHandler {
                             }
 
                             randomBlobs.add(randomBlob);
+                            // Bound the list: drop oldest entries once we exceed the cap.
+                            // Without this the list grows monotonically (one blob per
+                            // unique announce) and is fully serialized on every 12h
+                            // savePathTable() dump, which on transport-enabled public
+                            // nodes has driven jreticulum.db into multi-GB territory.
+                            while (randomBlobs.size() > RANDOM_BLOBS_MAX_PER_DESTINATION) {
+                                randomBlobs.remove(0);
+                            }
 
                             if ((owner.isTransportEnabled() || fromLocalClient(packet)) && packet.getContext() != PATH_RESPONSE) {
                                 //Insert announce into announce table for retransmission

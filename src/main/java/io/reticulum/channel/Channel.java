@@ -367,12 +367,19 @@ public class Channel {
     }
 
     private void packetTimeout(Packet packet) {
+        // Deferred until AFTER packetTxOp releases Channel.lock. Calling
+        // outlet.timedOut() (→ Link.teardown, synchronized on Link) or
+        // shutdown() from inside the retry lambda would run them while
+        // Channel.lock is still held — and Link.receive → Channel.receive
+        // takes the two locks in the opposite order. That's an ABBA
+        // deadlock (observed: Synchronizer parked on Channel.lock while a
+        // worker was blocked on the Link monitor).
+        final boolean[] shouldTeardown = { false };
+
         Function<Envelope, Boolean> retryEnvelope = envelope -> {
             if (envelope.getTries() >= maxTries) {
                 log.error("Channel: Retry count exceeded, tearing down Link.");
-                shutdown();
-                outlet.timedOut();
-
+                shouldTeardown[0] = true;
                 return true;
             }
             envelope.setTries(envelope.getTries() + 1);
@@ -394,6 +401,12 @@ public class Channel {
 
         if (outlet.getPacketState(packet) != MSGSTATE_DELIVERED) {
             packetTxOp(packet, retryEnvelope);
+        }
+
+        // Runs OUTSIDE Channel.lock — safe to take Link monitor / Channel monitor here.
+        if (shouldTeardown[0]) {
+            shutdown();
+            outlet.timedOut();
         }
     }
 
