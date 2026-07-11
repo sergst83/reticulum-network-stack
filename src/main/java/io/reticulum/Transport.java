@@ -302,8 +302,12 @@ public final class Transport implements ExitHandler {
                 });
 
         if (isFalse(owner.isConnectedToSharedInstance())) {
+            // The packet hashlist is an in-memory dedup window only (Python RNS
+            // behaviour) and is no longer persisted. Do not load it from storage —
+            // a multi-GB legacy collection would be read into memory here and risk
+            // OOM at startup. Drop any legacy on-disk collection instead.
             packetHashMap.clear();
-            packetHashMap.putAll(storage.loadAllPacketHash());
+            storage.clearPacketHashList();
             reloadBlacklist();
         }
 
@@ -494,17 +498,13 @@ public final class Transport implements ExitHandler {
     }
 
     private void savePacketHashlist() {
-        if (owner.isConnectedToSharedInstance()) {
-            return;
-        }
-
-        var saveStart = Instant.now();
-        if (isFalse(owner.isTransportEnabled())) {
-            packetHashMap.clear();
-        }
-        log.debug("Saving packet hashlist to storage...");
-        storage.saveAllPacketHash(packetHashMap);
-        log.debug("Saved packet hashlist in {} ms", Duration.between(saveStart, Instant.now()).toMillis());
+        // The packet hashlist is an in-memory dedup window only (matching Python RNS)
+        // and is intentionally NOT persisted. The previous implementation upserted the
+        // current hashes into Nitrite on every persist but never deleted aged-out ones,
+        // so the on-disk collection grew without bound (the union of every packet hash
+        // ever seen) and drove jreticulum.db into multi-GB territory on transport-enabled
+        // nodes. The in-memory map is bounded by the HASHLIST_MAXSIZE clear in jobs(), so
+        // nothing needs to be written here.
     }
 
     private void savePathTable() {
@@ -2955,9 +2955,11 @@ public final class Transport implements ExitHandler {
                 long _announcesMs = System.currentTimeMillis() - _t; _t = System.currentTimeMillis();
 
                 //Cull the packet hashlist if it has reached its max size
-                // storage.trimPacketHashList() reads 1M Nitrite DB records while holding jobsLock,
-                // which can take 60+ seconds and block all outbound/inbound traffic. Since packet-
-                // dedup works in a rolling window (not a full multi-day history), a simple in-memory
+                // The packet hashlist is an in-memory-only dedup window (never persisted).
+                // Persisting it previously drove jreticulum.db into multi-GB territory, and a
+                // DB-backed trim read 1M Nitrite records while holding jobsLock (60+ seconds,
+                // blocking all traffic). Since packet-dedup works in a rolling window (not a
+                // full multi-day history), a simple in-memory
                 // clear is sufficient and matches Python RNS behaviour (in-memory only).
                 if (packetHashMap.size() > HASHLIST_MAXSIZE) {
                     log.warn("packetHashMap reached {} entries — clearing in-memory dedup table", packetHashMap.size());

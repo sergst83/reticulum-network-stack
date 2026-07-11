@@ -20,7 +20,6 @@ import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.CollectionUtils;
-import org.apache.commons.collections4.MapUtils;
 import org.dizitart.no2.Nitrite;
 import org.dizitart.no2.common.mapper.SimpleNitriteMapper;
 import org.dizitart.no2.exceptions.NitriteException;
@@ -34,11 +33,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
-import static io.reticulum.constant.TransportConstant.HASHLIST_MAXSIZE;
 import static java.util.function.Function.identity;
 import static java.util.stream.Collectors.toMap;
-import static org.dizitart.no2.collection.FindOptions.orderBy;
-import static org.dizitart.no2.common.SortOrder.Descending;
 import static org.dizitart.no2.common.util.Iterables.setOf;
 
 @Slf4j
@@ -145,13 +141,16 @@ public final class Storage {
                 .collect(toMap(DestinationData::getDestinationHash, identity()));
     }
 
-    public void saveAllPacketHash(Map<String, byte[]> packetHashes) {
-        var repo = db.getRepository(PacketHash.class);
-        if (MapUtils.isNotEmpty(packetHashes)) {
-            doInTransactionWithoutResult(__ -> packetHashes.forEach((hex, bytes) -> repo.update(PacketHash.builder().packetHash(hex).hash(bytes).build(), true)));
-        } else {
-            repo.clear();
-        }
+    /**
+     * Clears the persisted packet hashlist collection. The packet hashlist is an
+     * in-memory dedup window only (matching Python RNS) and is no longer persisted:
+     * the previous {@code saveAllPacketHash()} upserted the current hashes but never
+     * deleted aged-out ones, so the on-disk collection grew without bound (the union
+     * of every packet hash ever seen) and drove jreticulum.db into multi-GB territory
+     * on transport-enabled nodes. This drops any (possibly legacy) on-disk collection.
+     */
+    public void clearPacketHashList() {
+        doInTransactionWithoutResult(__ -> db.getRepository(PacketHash.class).clear());
     }
 
     public void saveDestinationTables(Collection<DestinationTable> destinationTables) {
@@ -163,25 +162,6 @@ public final class Storage {
 
     public Collection<DestinationTable> getDestinationTables() {
         return db.getRepository(DestinationTable.class).find().toList();
-    }
-
-    public Map<String, byte[]> loadAllPacketHash() {
-        return db.getRepository(PacketHash.class).find()
-                .toList()
-                .stream()
-                .collect(toMap(PacketHash::getPacketHash, PacketHash::getHash));
-    }
-
-    public Map<String, byte[]> trimPacketHashList() {
-        var repo = db.getRepository(PacketHash.class);
-        var toSave = repo.find(orderBy("timestamp", Descending).limit(HASHLIST_MAXSIZE)).toList();
-        repo.clear();
-
-        return doInTransaction(() -> {
-            repo.insert(toSave.toArray(PacketHash[]::new));
-
-            return toSave.stream().collect(toMap(PacketHash::getPacketHash, PacketHash::getHash));
-        });
     }
 
     public void savePacketCache(@NonNull final PacketCache packetCache) {
