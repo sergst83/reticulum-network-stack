@@ -14,6 +14,7 @@ import static io.reticulum.interfaces.auto.AutoInterfaceConstant.DARWIN_PREDICAT
 import static io.reticulum.interfaces.auto.AutoInterfaceConstant.HAS_IPV6_ADDRESS;
 import static io.reticulum.interfaces.auto.AutoInterfaceConstant.IGNORED_PREDICATE;
 import static io.reticulum.interfaces.auto.AutoInterfaceConstant.IN_ALL_IGNORE_IFS;
+import static io.reticulum.interfaces.auto.AutoInterfaceConstant.IS_USABLE;
 import static io.reticulum.interfaces.auto.AutoInterfaceConstant.NOT_IN_ALLOWED_PREDICATE;
 import static java.net.NetworkInterface.networkInterfaces;
 import static java.util.stream.Collectors.toUnmodifiableList;
@@ -28,6 +29,7 @@ public interface AutoInterfaceUtil {
                 .filter(netIface -> IGNORED_PREDICATE.negate().test(netIface, instace))
                 .filter(netIface -> NOT_IN_ALLOWED_PREDICATE.negate().test(netIface, instace))
                 .filter(netIface -> IN_ALL_IGNORE_IFS.negate().test(netIface, instace))
+                .filter(IS_USABLE)
                 .filter(HAS_IPV6_ADDRESS)
                 .collect(toUnmodifiableList());
     }

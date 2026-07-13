@@ -50,7 +50,6 @@ import static java.lang.Byte.toUnsignedInt;
 import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.nonNull;
-import static java.util.concurrent.Executors.defaultThreadFactory;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.stream.Collectors.toList;
@@ -106,7 +105,15 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
 
     @Setter(PRIVATE)
     @Getter(PRIVATE)
-    private ThreadFactory defaultThreadFactory = defaultThreadFactory();
+    // Daemon threads: the discovery and listener threads below run blocking
+    // socket.receive() loops with no stop signal; as non-daemon threads they
+    // prevented the JVM from exiting on shutdown (the node "would not stop" and
+    // had to be killed). Daemon so process exit is never blocked by them.
+    private ThreadFactory defaultThreadFactory = runnable -> {
+        var thread = new Thread(runnable);
+        thread.setDaemon(true);
+        return thread;
+    };
 
     private ScheduledExecutorService scheduledThreadPool = newScheduledThreadPool(2, defaultThreadFactory);
 

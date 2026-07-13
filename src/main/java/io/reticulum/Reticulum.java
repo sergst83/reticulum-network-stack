@@ -8,6 +8,7 @@ import io.reticulum.interfaces.local.LocalServerInterface;
 import io.reticulum.storage.Storage;
 import io.reticulum.utils.IdentityUtils;
 import io.reticulum.utils.InterfaceUtils;
+import io.reticulum.utils.Scheduler;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.MapUtils;
@@ -139,6 +140,11 @@ public class Reticulum implements ExitHandler {
     public void exitHandler() {
         transport.exitHandler();
         IdentityUtils.exitHandler();
+        // Stop the shared scheduler last, after data has been persisted. This halts
+        // Transport.jobs() and the periodic announce/persist work so the mesh stops
+        // recovering once shutdown has begun (previously these kept running and the
+        // node appeared to "keep building the mesh" during shutdown).
+        Scheduler.shutdown();
     }
 
     public void persistData() {
