@@ -265,6 +265,8 @@ Welcome to:
 - [Reticulum](https://reticulum.network/) Manual (EN)
 - [LXMF](https://github.com/markqvist/LXMF) Specification (EN)
 - GitHub: [JReticulum](https://github.com/sergst83/reticulum-network-stack)
+- [LXMF (Java)](https://github.com/jschulthess/lightweight-extensible-message-format) (EN)
+- [LXST (Java)](https://github.com/jschulthess/lightweight-extensible-signal-transport) (EN)
 
 Создано с ❤️ для децентрализованной связи. \
 Built with ❤️ for decentralized communication.
