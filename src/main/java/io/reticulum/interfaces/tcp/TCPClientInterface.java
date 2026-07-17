@@ -27,6 +27,7 @@ import java.time.Duration;
 import java.util.Optional;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
@@ -42,7 +43,17 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
 
     private static final int BITRATE_GUESS = 10_000_000;
     private static final long INITIAL_CONNECT_TIMEOUT = 5_000; //milliseconds
-    private static final long RECONNECT_WAIT = 5; //seconds
+    private static final long RECONNECT_WAIT = 5; //seconds (initial backoff)
+    private static final long MAX_RECONNECT_WAIT = 60; //seconds (backoff cap)
+    private static final long CONNECT_ERROR_LOG_INTERVAL_MILLIS = 60_000; //throttle refused-connection logging
+
+    // Guards against spawning more than one reconnect cycle per interface. Without it the
+    // channel close-listener scheduled a fresh recurring timer on every failed connect,
+    // multiplying into a reconnect storm (hundreds of attempts/sec) that starved the node.
+    private final AtomicBoolean reconnectScheduled = new AtomicBoolean(false);
+    private volatile int reconnectAttempts = 0;
+    private volatile long reconnectBackoffSeconds = RECONNECT_WAIT;
+    private volatile long lastConnectErrorLogMillis = 0;
 
     private ChannelFuture channelFuture;
     private Channel channel;
@@ -50,7 +61,6 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
     private Integer maxReconnectTries = 20;
 
     private boolean initiator;
-    private volatile boolean reconnecting = false;
     private volatile boolean neverConnected = true;
     private volatile boolean detached = false;
 
@@ -170,39 +180,71 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
     }
 
     private void startReconnecting() {
-        timer.schedule(new TimerTask() {
-            int attempts = 0;
+        if (isFalse(initiator)) {
+            log.error("Attempt to reconnect on a non-initiator TCP interface. This should not happen");
+            return;
+        }
+        // Idempotent: only one reconnect cycle may run per interface at a time. Re-entrant calls
+        // from the close-listener (which fires on every failed connect) return immediately here,
+        // so retries can no longer multiply.
+        if (isFalse(reconnectScheduled.compareAndSet(false, true))) {
+            return;
+        }
+        reconnectAttempts = 0;
+        reconnectBackoffSeconds = RECONNECT_WAIT;
+        scheduleReconnect(500);
+    }
 
+    /**
+     * Schedules a single one-shot reconnect attempt {@code delayMillis} from now. Each attempt
+     * reschedules the next with an exponentially increasing, capped backoff — so a persistently
+     * refused target settles at one attempt per {@link #MAX_RECONNECT_WAIT} seconds instead of a
+     * fixed-interval storm.
+     */
+    private void scheduleReconnect(long delayMillis) {
+        timer.schedule(new TimerTask() {
             @Override
             public void run() {
-                if (initiator) {
+                try {
                     if (online.get()) {
-                        cancel();
-                    } else {
-                        if (isFalse(reconnecting)) {
-                            reconnecting = true;
-                        } else {
-                            if (attempts > maxReconnectTries) {
-                                log.error("Max reconnection attempts reached for {}", this);
-                                teardown();
-                                cancel();
-                            } else {
-                                attempts++;
-                                reconnect(attempts);
-                            }
-                        }
+                        stopReconnecting();
+                        return;
                     }
-                } else {
-                    log.error("Attempt to reconnect on a non-initiator TCP interface. This should not happen");
-                    throw new IllegalStateException("Attempt to reconnect on a non-initiator TCP interface");
+                    if (reconnectAttempts >= maxReconnectTries) {
+                        log.error("Max reconnection attempts ({}) reached for {}, tearing down interface",
+                                maxReconnectTries, TCPClientInterface.this);
+                        stopReconnecting();
+                        teardown();
+                        return;
+                    }
+                    reconnectAttempts++;
+                    reconnect(reconnectAttempts);
+                    if (online.get()) {
+                        log.info("Reconnected {} after {} attempt(s)", TCPClientInterface.this, reconnectAttempts);
+                        stopReconnecting();
+                        return;
+                    }
+                    // Still down: back off (capped) and try again.
+                    reconnectBackoffSeconds = Math.min(reconnectBackoffSeconds * 2, MAX_RECONNECT_WAIT);
+                    scheduleReconnect(Duration.ofSeconds(reconnectBackoffSeconds).toMillis());
+                } catch (Exception e) {
+                    // Never let a task throw: an uncaught exception kills the Timer thread and
+                    // permanently stops all future reconnects for this interface.
+                    log.debug("Reconnect task for {} failed, will retry", TCPClientInterface.this, e);
+                    reconnectBackoffSeconds = Math.min(reconnectBackoffSeconds * 2, MAX_RECONNECT_WAIT);
+                    scheduleReconnect(Duration.ofSeconds(reconnectBackoffSeconds).toMillis());
                 }
             }
-        }, 500, Duration.ofSeconds(RECONNECT_WAIT).toMillis());
+        }, delayMillis);
+    }
+
+    private void stopReconnecting() {
+        reconnectScheduled.set(false);
     }
 
     private synchronized void reconnect(final int currentAttempt) {
         try {
-            reconnecting = !connect(initiator);
+            connect(initiator);
             if (isFalse(neverConnected) && online.get()) {
                 log.info("Reconnected socket for {}", this);
             }
@@ -260,8 +302,17 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
             // EventLoopGroup here to avoid leaking it on every failed connection attempt.
             workerGroup.shutdownGracefully();
             if (init) {
-                log.error("Initial connection for {}  could not be established.", this, e);
-                log.error("Leaving unconnected and retrying connection in {}  seconds.", RECONNECT_WAIT);
+                // Throttle logging: a persistently refused target (e.g. a down gateway) would
+                // otherwise log a full stack trace on every attempt — 25,900 stacks / 45s / 43MB
+                // in test-15. Log a concise line at most once per interval; rest at DEBUG.
+                long now = System.currentTimeMillis();
+                if (now - lastConnectErrorLogMillis >= CONNECT_ERROR_LOG_INTERVAL_MILLIS) {
+                    lastConnectErrorLogMillis = now;
+                    log.error("Connection for {} could not be established: {}. Retrying with backoff (up to {}s).",
+                            this, e.getMessage(), MAX_RECONNECT_WAIT);
+                } else {
+                    log.debug("Connection for {} still failing: {}", this, e.getMessage());
+                }
                 return online.get();
             } else {
                 throw e;

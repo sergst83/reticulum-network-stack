@@ -79,6 +79,17 @@ public class PacketReceipt {
     }
 
     public synchronized boolean validateProof(@NonNull byte[] proof, final Packet proofPacket) {
+        // destination may be a Link rather than a Destination — both extend AbstractDestination.
+        // A blind cast threw ClassCastException here and aborted deferred inbound I/O
+        // (Transport). Handle the Link case explicitly, mirroring validateProofPacket().
+        if (destination instanceof Link) {
+            return nonNull(proofPacket) && validateLinkProof((Link) destination, proofPacket);
+        }
+        if (!(destination instanceof Destination)) {
+            log.debug("validateProof: receipt destination is neither Destination nor Link ({}); skipping",
+                    isNull(destination) ? "null" : destination.getClass().getSimpleName());
+            return false;
+        }
         var dest = (Destination) destination;
         if (proof.length == EXPL_LENGTH) {
             //This is an explicit proof

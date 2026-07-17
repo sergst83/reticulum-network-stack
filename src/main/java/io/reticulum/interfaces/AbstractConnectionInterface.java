@@ -391,7 +391,10 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
             for (int i = 1; i < dqLen; i++) {
                 deltaSum += Duration.between(iaFreqDeque.get(i), iaFreqDeque.get(i - 1)).getSeconds();
             }
-            deltaSum += Duration.between(Instant.now(), oaFreqDeque.get(dqLen - 1)).getSeconds();
+            // Was oaFreqDeque.get(dqLen - 1) — a copy-paste from outgoingAnnounceFrequency().
+            // dqLen is the INCOMING deque's size, so indexing the OUTGOING deque threw
+            // IndexOutOfBounds whenever oaFreqDeque was shorter. Use the incoming deque.
+            deltaSum += Duration.between(Instant.now(), iaFreqDeque.get(dqLen - 1)).getSeconds();
 
             return deltaSum == 0 ? 0 : (double) 1 / deltaSum / dqLen;
         }
