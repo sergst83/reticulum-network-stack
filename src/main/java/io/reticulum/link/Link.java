@@ -820,7 +820,13 @@ public class Link extends AbstractDestination {
     }
 
     public void startWatchdog() {
-        defaultThreadFactory().newThread(watchdogJob()).start();
+        // Watchdog must be a daemon thread: a Link whose watchdog is non-daemon keeps the
+        // whole JVM alive after shutdown (thousands leaked in Qortal test-14), preventing a
+        // clean stop and holding network ports until the OS reaps the process on reboot.
+        var watchdogThread = defaultThreadFactory().newThread(watchdogJob());
+        watchdogThread.setDaemon(true);
+        watchdogThread.setName("RNS-LinkWatchdog");
+        watchdogThread.start();
     }
 
     private Runnable watchdogJob() {
@@ -1043,6 +1049,7 @@ public class Link extends AbstractDestination {
     @SneakyThrows
     public synchronized void receive(Packet packet) {
         watchdogLock.lock();
+        try {
         if (status != CLOSED
                 && isFalse(
                 initiator && packet.getContext() == PacketContextType.KEEPALIVE
@@ -1279,7 +1286,13 @@ public class Link extends AbstractDestination {
                 }
             }
         }
-        watchdogLock.unlock();
+        } finally {
+            // Always release: if any packet-processing step above throws (e.g. the known
+            // PacketReceipt/validateProof ClassCastException), an unreleased watchdogLock
+            // would trap this Link's watchdog in its isLocked() spin loop forever, so it
+            // could never observe status==CLOSED and would leak as a live thread.
+            watchdogLock.unlock();
+        }
     }
 
     public byte[] encrypt(@NonNull final byte[] plaintext) {

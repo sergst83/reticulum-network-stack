@@ -239,11 +239,15 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
                             .addListener((ChannelFutureListener) closeFeature -> {
                                 //Listen close detect listener
                                 online.set(false);
+                                // Always release this connection's EventLoopGroup once the
+                                // channel closes. Previously it was only shut down on the
+                                // detached path, so every reconnect leaked a whole
+                                // NioEventLoopGroup (~2×cores threads) — the nioEventLoopGroup
+                                // thread pile-up seen in Qortal test-14. A reconnect creates a
+                                // fresh group via connect(), so the old one is safe to drop.
+                                workerGroup.shutdownGracefully();
                                 if (isFalse(detached)) {
                                     startReconnecting();
-                                } else {
-                                    // Wait until the connection is closed.
-                                    workerGroup.shutdownGracefully();
                                 }
                             })
                     ).sync();
@@ -252,6 +256,9 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
             neverConnected = false;
             log.debug("TCP connection for {} established", this);
         } catch (Exception e) {
+            // Connection never became active, so its close-listener won't fire — release the
+            // EventLoopGroup here to avoid leaking it on every failed connection attempt.
+            workerGroup.shutdownGracefully();
             if (init) {
                 log.error("Initial connection for {}  could not be established.", this, e);
                 log.error("Leaving unconnected and retrying connection in {}  seconds.", RECONNECT_WAIT);
