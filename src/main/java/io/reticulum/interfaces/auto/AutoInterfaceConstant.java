@@ -89,4 +89,22 @@ public final class AutoInterfaceConstant {
 
     static final Predicate<NetworkInterface> HAS_IPV6_ADDRESS = netIface -> netIface.inetAddresses()
             .anyMatch(inetAddress -> inetAddress instanceof Inet6Address);
+
+    /**
+     * Only keep interfaces that can actually carry multicast discovery traffic:
+     * up, multicast-capable and non-loopback. Without this, a device that still
+     * exposes a stale link-local IPv6 address but has no carrier/route (e.g. an
+     * unplugged USB-ethernet dongle) stays in the announce rotation and every
+     * peerAnnounce() send fails with "Network is unreachable" — observed spamming
+     * ERROR thousands of times over a run. isUp()/supportsMulticast() throw
+     * SocketException, so treat any failure as "not usable" and drop the interface.
+     */
+    static final Predicate<NetworkInterface> IS_USABLE = netIface -> {
+        try {
+            return netIface.isUp() && netIface.supportsMulticast() && isFalse(netIface.isLoopback());
+        } catch (java.net.SocketException e) {
+            log.debug("Skipping interface {} while checking usability: {}", netIface.getName(), e.getMessage());
+            return false;
+        }
+    };
 }

@@ -53,6 +53,23 @@ import static org.apache.commons.lang3.BooleanUtils.isFalse;
 @Slf4j
 public abstract class AbstractConnectionInterface extends Thread implements ConnectionInterface {
 
+    /**
+     * Shared, daemon-backed scheduler for pacing announce-queue processing across all
+     * interfaces. Previously {@link #processAnnounceQueue()} created a brand-new
+     * {@code newSingleThreadScheduledExecutor()} on every call with
+     * {@code scheduleAtFixedRate} — a non-daemon, never-shut-down executor that both
+     * kept firing forever and multiplied on each pass, leaking threads (observed as a
+     * large, growing set of {@code pool-*} threads) and preventing clean JVM exit on
+     * shutdown. A single shared daemon executor with a one-shot {@code schedule} is
+     * sufficient: the method re-schedules itself while the queue is non-empty.
+     */
+    private static final java.util.concurrent.ScheduledExecutorService ANNOUNCE_QUEUE_EXECUTOR =
+            Executors.newSingleThreadScheduledExecutor(runnable -> {
+                var thread = new Thread(runnable, "announce-queue");
+                thread.setDaemon(true);
+                return thread;
+            });
+
     @JsonProperty("outgoing")
     protected boolean OUT = true;
     protected boolean IN = false;
@@ -247,9 +264,11 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
                     announceQueue.remove(selected);
 
                     if (!announceQueue.isEmpty()) {
-                        Executors
-                                .newSingleThreadScheduledExecutor()
-                                .scheduleAtFixedRate(this::processAnnounceQueue, 1, waitTime, TimeUnit.SECONDS);
+                        // One-shot: process the next queued announce after waitTime. This method
+                        // re-schedules itself as long as entries remain, so a repeating
+                        // scheduleAtFixedRate (on a fresh, leaked executor) is neither needed nor
+                        // correct — it compounded into many orphaned non-daemon timers.
+                        ANNOUNCE_QUEUE_EXECUTOR.schedule(this::processAnnounceQueue, waitTime, TimeUnit.SECONDS);
                     }
                 }
             } catch (Exception e) {

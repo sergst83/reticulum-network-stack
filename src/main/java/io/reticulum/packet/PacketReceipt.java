@@ -206,11 +206,24 @@ public class PacketReceipt {
         }
     }
 
-    public synchronized void setDeliveryCallback(Consumer<PacketReceipt> deliveryCallback) {
+    /**
+     * Register (or clear) the delivery callback.
+     *
+     * NOT synchronized on purpose: setting a callback is one reference write to
+     * a volatile field in {@link PacketReceiptCallbacks}. Taking the PacketReceipt
+     * monitor here creates a real ABBA deadlock — every caller inside {@code
+     * Channel} sets/clears callbacks while holding {@code Channel.lock}, while
+     * the delivery-dispatch path holds the PacketReceipt monitor (via
+     * {@code validateProof} being synchronized) and then acquires
+     * {@code Channel.lock} inside {@code Channel.packetDelivered}. Observed:
+     * Synchronizer thread parked on Channel.lock, no chain sync progress.
+     */
+    public void setDeliveryCallback(Consumer<PacketReceipt> deliveryCallback) {
         callbacks.setDelivery(deliveryCallback);
     }
 
-    public synchronized void setTimeoutCallback(Consumer<PacketReceipt> timeoutCallback) {
+    /** See {@link #setDeliveryCallback(Consumer)} for why this is not synchronized. */
+    public void setTimeoutCallback(Consumer<PacketReceipt> timeoutCallback) {
         callbacks.setTimeout(timeoutCallback);
     }
 }

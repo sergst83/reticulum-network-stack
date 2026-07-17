@@ -5,16 +5,36 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
-import static java.util.concurrent.Executors.defaultThreadFactory;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 
 @UtilityClass
 @Slf4j
 public class Scheduler {
+
+    /**
+     * Daemon thread factory. The scheduler drives the core Transport.jobs() loop
+     * plus periodic persist/announce work; those must never keep the JVM alive
+     * once the host application is shutting down. Non-daemon scheduler threads were
+     * observed preventing clean process exit (the node "would not stop" and had to
+     * be killed) and kept the mesh recovering after shutdown had begun.
+     */
+    private static ThreadFactory daemonThreadFactory(String namePrefix) {
+        var counter = new AtomicInteger();
+        return runnable -> {
+            var thread = new Thread(runnable, namePrefix + "-" + counter.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        };
+    }
+
     public static final ScheduledExecutorService scheduler =
-            newScheduledThreadPool(Runtime.getRuntime().availableProcessors() * 2);
+            newScheduledThreadPool(Runtime.getRuntime().availableProcessors() * 2, daemonThreadFactory("rns-scheduler"));
+
+    private static final ThreadFactory watchdogThreadFactory = daemonThreadFactory("rns-scheduler-watchdog");
 
     public static void scheduleWithFixedDelaySafe(Runnable command, long delay, TimeUnit unite) {
         var future = scheduler.scheduleWithFixedDelay(
@@ -38,7 +58,7 @@ public class Scheduler {
                 }, 100, delay, unite);
 
         //watchdog
-        defaultThreadFactory().newThread(() -> {
+        var watchdog = watchdogThreadFactory.newThread(() -> {
             while (true) {
                 try {
                     future.get();
@@ -54,5 +74,16 @@ public class Scheduler {
                 }
             }
         });
+        watchdog.start();
+    }
+
+    /**
+     * Stops all scheduled work (Transport.jobs, periodic persist/announce, AutoInterface
+     * peerAnnounce/peerJob). Called from the Reticulum exit path so the mesh stops
+     * recovering once shutdown has begun and no scheduled task can keep the JVM alive.
+     * Safe to call more than once.
+     */
+    public static void shutdown() {
+        scheduler.shutdownNow();
     }
 }
