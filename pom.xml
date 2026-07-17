@@ -6,7 +6,7 @@
 
     <groupId>io.github.sergst83</groupId>
     <artifactId>reticulum-network-stack</artifactId>
-    <version>1.0.2</version>
+    <version>1.0.3</version>
 
     <name>JReticulum</name>
     <url>http://github.com/sergst83/reticulum-network-stack</url>
