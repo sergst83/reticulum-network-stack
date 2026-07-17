@@ -110,7 +110,7 @@ JReticulum is a **pure Java implementation** of this protocol, suitable for:
 <dependency>
   <groupId>io.github.sergst83</groupId>
   <artifactId>reticulum-network-stack</artifactId>
-  <version>1.0.1</version>
+  <version>1.0.3</version>
   <scope>compile</scope>
 </dependency>
 ```
