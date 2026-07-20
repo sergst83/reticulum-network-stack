@@ -171,7 +171,15 @@ public class Link extends AbstractDestination {
     private Ed25519PublicKeyParameters sigPub;
     private byte[] sigPubBytes;
     /**
-     * Timeout in seconds
+     * Timeout in <b>milliseconds</b>.
+     * <p>
+     * Both writers assign milliseconds — {@link #init()} from {@code firstHopTimeout()} (ms) plus
+     * {@code ESTABLISHMENT_TIMEOUT_PER_HOP} (6000 ms) per hop, and
+     * {@code LinkUtils.validateRequest()} for inbound links — and both log the value as "ms".
+     * This javadoc previously said "seconds", which is how the watchdog came to consume it via
+     * {@code plusSeconds()}: a 1000x overshoot that kept PENDING/HANDSHAKE watchdog threads
+     * parked for hours (outbound) or days (inbound) instead of seconds, leaking one thread per
+     * link attempt. Keep this unit and the watchdog's {@code plusMillis()} calls in agreement.
      */
     private int establishmentTimeout;
     private Fernet fernet;
@@ -848,7 +856,8 @@ public class Link extends AbstractDestination {
                     // Link was initiated, but no response from destination yet
                     switch (this.status) {
                         case PENDING:
-                            nextCheck = this.requestTime.plusSeconds(this.establishmentTimeout);
+                            // establishmentTimeout is in milliseconds - see its declaration.
+                            nextCheck = this.requestTime.plusMillis(this.establishmentTimeout);
                             sleepTime = Duration.between(Instant.now(), nextCheck).toMillis();
                             if (Instant.now().compareTo(nextCheck) >= 0) {
                                 log.info("Link establishment timed out");
@@ -859,7 +868,8 @@ public class Link extends AbstractDestination {
                             }
                             break;
                         case HANDSHAKE:
-                            nextCheck = this.requestTime.plusSeconds(this.establishmentTimeout);
+                            // establishmentTimeout is in milliseconds - see its declaration.
+                            nextCheck = this.requestTime.plusMillis(this.establishmentTimeout);
                             sleepTime = Duration.between(Instant.now(), nextCheck).toMillis();
                             if (Instant.now().compareTo(nextCheck) >= 0) {
                                 if (initiator) {
