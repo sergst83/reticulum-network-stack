@@ -250,10 +250,17 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
                             future.channel().closeFuture()
                                     .addListener((ChannelFutureListener) closeFeature -> {
                                         online.set(false);
+                                        // Always release this connection's EventLoopGroup once the
+                                        // channel closes. Previously it was shut down ONLY on the
+                                        // detached branch, so every reconnect orphaned a whole
+                                        // NioEventLoopGroup (1 epoll fd + thread). Under a reconnect
+                                        // storm this exhausted file descriptors → "Too many open
+                                        // files" (Qortal test-19 wadin: 5686 leaked groups). A
+                                        // reconnect creates a fresh group via connect(), so dropping
+                                        // the old one here is safe. Mirrors TCPClientInterface.
+                                        workerGroup.shutdownGracefully();
                                         if (isFalse(detached)) {
                                             startReconnecting();
-                                        } else {
-                                            workerGroup.shutdownGracefully();
                                         }
                                     })
                     ).sync();
@@ -263,6 +270,11 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
             log.debug("Backbone TCP connection for {} established.", this);
 
         } catch (Exception e) {
+            // Connection never became active, so its close-listener won't fire (or the connect
+            // threw before registering it) — release the EventLoopGroup here so a persistently
+            // refused gateway doesn't leak one group per attempt. shutdownGracefully() is
+            // idempotent, so a double call with the close-listener above is harmless.
+            workerGroup.shutdownGracefully();
             if (init) {
                 log.error("Initial connection for {} could not be established: {}", this, e.getMessage());
                 log.error("Leaving unconnected and retrying connection in {} seconds.", RECONNECT_WAIT);
