@@ -752,17 +752,6 @@ public class Link extends AbstractDestination {
      * be used if a new link to the same destination is established.
      */
     public synchronized void teardown() {
-        // DIAGNOSTIC (test-30): identify who initiates each Link teardown, to separate Channel
-        // retry-exceeded (LinkChannelOutlet.timedOut) from Transport path-cull, interface teardown,
-        // or an internal watchdog path. Qortal's closePeerLinkNonBlocking does NOT call teardown()
-        // (it sets status=CLOSED directly), so those won't appear here — this isolates the
-        // library-initiated teardowns. Grep "Link.teardown() initiator" and uniq the caller field.
-        if (log.isWarnEnabled()) {
-            var st = Thread.currentThread().getStackTrace();
-            var c1 = st.length > 2 ? st[2].getClassName() + "." + st[2].getMethodName() : "?";
-            var c2 = st.length > 3 ? st[3].getClassName() + "." + st[3].getMethodName() : "?";
-            log.warn("Link.teardown() initiator={} status={} caller={} <- {}", initiator, status, c1, c2);
-        }
         if (status != PENDING && status != CLOSED) {
             var teardownPacket = new Packet(this, this.linkId, LINKCLOSE);
             teardownPacket.send();
