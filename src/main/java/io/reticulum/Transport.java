@@ -2063,6 +2063,27 @@ public final class Transport implements ExitHandler {
             }
         }
 
+            // DIAGNOSTIC (test-29): when a LINK packet can't be routed here, outbound() returns
+            // false → "No interfaces could process (resend)" → after maxTries the Channel tears the
+            // Link down. This is the dominant Reticulum peer churn. Log WHY the resend can't route
+            // so the route-loss cause can be pinned: was the destination path in the table, and was
+            // the link's attachedInterface still present among the live interfaces? (Only fires on
+            // failure, so it does not spam the happy path.)
+            if (isFalse(sent) && packet.getDestination().getType() == LINK) {
+                try {
+                    var diagLink = (Link) packet.getDestination();
+                    var attached = diagLink.getAttachedInterface();
+                    var attachedName = nonNull(attached) ? attached.getInterfaceName() : "null";
+                    boolean attachedPresent = nonNull(attached)
+                            && interfaces.stream().anyMatch(i -> Objects.equals(i, attached));
+                    boolean destInTable = destinationTable.containsKey(encodeHexString(packet.getDestinationHash()));
+                    log.warn("outbound: could not route LINK packet — linkStatus={}, destInTable={}, attachedIface={}, attachedIfacePresent={}, liveIfaceCount={}",
+                            diagLink.getStatus(), destInTable, attachedName, attachedPresent, interfaces.size());
+                } catch (Exception diagEx) {
+                    log.debug("outbound LINK-route diagnostic failed: {}", diagEx.getMessage());
+                }
+            }
+
             return sent;
         } catch (Exception e) {
             log.error("Exception in outbound() for packet type={} context={}: ",
