@@ -1070,7 +1070,12 @@ public class Link extends AbstractDestination {
             if (isFalse(packet.getReceivingInterface().equals(attachedInterface))) {
                 log.error("Link-associated packet received on unexpected interface! Someone might be trying to manipulate your communication!");
             } else {
-                lastOutbound = Instant.now();
+                // Receiving a link packet is INBOUND activity — refresh lastInbound, not
+                // lastOutbound (which hadOutbound() already maintains on every send). This was a
+                // typo: lastInbound was therefore never advanced past link-init (line ~202), so the
+                // watchdog's keepalive/staleness logic and getLastInbound() were both blind to
+                // actual traffic. Mirrors Python RNS Link.receive() (self.last_inbound = now).
+                lastInbound = Instant.now();
                 rx = rx.add(ONE);
                 rxBytes = rxBytes.add(BigInteger.valueOf(packet.getData().length));
                 if (status == STALE) {
