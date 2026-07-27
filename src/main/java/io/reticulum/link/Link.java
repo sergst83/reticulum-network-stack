@@ -171,7 +171,15 @@ public class Link extends AbstractDestination {
     private Ed25519PublicKeyParameters sigPub;
     private byte[] sigPubBytes;
     /**
-     * Timeout in seconds
+     * Timeout in <b>milliseconds</b>.
+     * <p>
+     * Both writers assign milliseconds — {@link #init()} from {@code firstHopTimeout()} (ms) plus
+     * {@code ESTABLISHMENT_TIMEOUT_PER_HOP} (6000 ms) per hop, and
+     * {@code LinkUtils.validateRequest()} for inbound links — and both log the value as "ms".
+     * This javadoc previously said "seconds", which is how the watchdog came to consume it via
+     * {@code plusSeconds()}: a 1000x overshoot that kept PENDING/HANDSHAKE watchdog threads
+     * parked for hours (outbound) or days (inbound) instead of seconds, leaking one thread per
+     * link attempt. Keep this unit and the watchdog's {@code plusMillis()} calls in agreement.
      */
     private int establishmentTimeout;
     private Fernet fernet;
@@ -820,7 +828,13 @@ public class Link extends AbstractDestination {
     }
 
     public void startWatchdog() {
-        defaultThreadFactory().newThread(watchdogJob()).start();
+        // Watchdog must be a daemon thread: a Link whose watchdog is non-daemon keeps the
+        // whole JVM alive after shutdown (thousands leaked in Qortal test-14), preventing a
+        // clean stop and holding network ports until the OS reaps the process on reboot.
+        var watchdogThread = defaultThreadFactory().newThread(watchdogJob());
+        watchdogThread.setDaemon(true);
+        watchdogThread.setName("RNS-LinkWatchdog");
+        watchdogThread.start();
     }
 
     private Runnable watchdogJob() {
@@ -842,7 +856,8 @@ public class Link extends AbstractDestination {
                     // Link was initiated, but no response from destination yet
                     switch (this.status) {
                         case PENDING:
-                            nextCheck = this.requestTime.plusSeconds(this.establishmentTimeout);
+                            // establishmentTimeout is in milliseconds - see its declaration.
+                            nextCheck = this.requestTime.plusMillis(this.establishmentTimeout);
                             sleepTime = Duration.between(Instant.now(), nextCheck).toMillis();
                             if (Instant.now().compareTo(nextCheck) >= 0) {
                                 log.info("Link establishment timed out");
@@ -853,7 +868,8 @@ public class Link extends AbstractDestination {
                             }
                             break;
                         case HANDSHAKE:
-                            nextCheck = this.requestTime.plusSeconds(this.establishmentTimeout);
+                            // establishmentTimeout is in milliseconds - see its declaration.
+                            nextCheck = this.requestTime.plusMillis(this.establishmentTimeout);
                             sleepTime = Duration.between(Instant.now(), nextCheck).toMillis();
                             if (Instant.now().compareTo(nextCheck) >= 0) {
                                 if (initiator) {
@@ -1043,6 +1059,7 @@ public class Link extends AbstractDestination {
     @SneakyThrows
     public synchronized void receive(Packet packet) {
         watchdogLock.lock();
+        try {
         if (status != CLOSED
                 && isFalse(
                 initiator && packet.getContext() == PacketContextType.KEEPALIVE
@@ -1053,7 +1070,12 @@ public class Link extends AbstractDestination {
             if (isFalse(packet.getReceivingInterface().equals(attachedInterface))) {
                 log.error("Link-associated packet received on unexpected interface! Someone might be trying to manipulate your communication!");
             } else {
-                lastOutbound = Instant.now();
+                // Receiving a link packet is INBOUND activity — refresh lastInbound, not
+                // lastOutbound (which hadOutbound() already maintains on every send). This was a
+                // typo: lastInbound was therefore never advanced past link-init (line ~202), so the
+                // watchdog's keepalive/staleness logic and getLastInbound() were both blind to
+                // actual traffic. Mirrors Python RNS Link.receive() (self.last_inbound = now).
+                lastInbound = Instant.now();
                 rx = rx.add(ONE);
                 rxBytes = rxBytes.add(BigInteger.valueOf(packet.getData().length));
                 if (status == STALE) {
@@ -1279,7 +1301,13 @@ public class Link extends AbstractDestination {
                 }
             }
         }
-        watchdogLock.unlock();
+        } finally {
+            // Always release: if any packet-processing step above throws (e.g. the known
+            // PacketReceipt/validateProof ClassCastException), an unreleased watchdogLock
+            // would trap this Link's watchdog in its isLocked() spin loop forever, so it
+            // could never observe status==CLOSED and would leak as a live thread.
+            watchdogLock.unlock();
+        }
     }
 
     public byte[] encrypt(@NonNull final byte[] plaintext) {

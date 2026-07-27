@@ -88,8 +88,21 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
     protected byte[] ifacSignature;
     protected final Instant created = Instant.now();
 
+    /**
+     * Rolling windows of recent outgoing/incoming announce timestamps, newest first,
+     * used only to estimate announce frequency. These MUST stay bounded: Python RNS
+     * declares them as {@code deque(maxlen=...)}, but this port used an unbounded
+     * CopyOnWriteArrayList. On a server interface the parent aggregates announces from
+     * every spawned client interface, so an untrimmed list grew without bound — driving
+     * an OutOfMemoryError (and O(n^2) array copies) on transport/server nodes. Always
+     * add via {@link #recordSentAnnounce()} / {@link #recordReceivedAnnounce()} so the
+     * cap is enforced.
+     */
     protected List<Instant> oaFreqDeque = new CopyOnWriteArrayList<>();
     protected List<Instant> iaFreqDeque = new CopyOnWriteArrayList<>();
+
+    /** Max entries kept in {@link #oaFreqDeque}/{@link #iaFreqDeque}. Bounds the frequency window. */
+    protected static final int FREQ_DEQUE_MAXLEN = 128;
 
     @JsonAlias({"interface_mode", "mode"})
     protected InterfaceMode interfaceMode = MODE_FULL;
@@ -281,7 +294,7 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
 
     @Override
     public void sentAnnounce(boolean fromSpawned) {
-        oaFreqDeque.add(0, Instant.now());
+        recordSentAnnounce();
         if (nonNull(getParentInterface())) {
             getParentInterface().sentAnnounce(true);
         }
@@ -289,9 +302,28 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
 
     @Override
     public void receivedAnnounce(boolean fromSpawned) {
-        iaFreqDeque.add(0, Instant.now());
+        recordReceivedAnnounce();
         if (nonNull(getParentInterface())) {
             getParentInterface().receivedAnnounce(true);
+        }
+    }
+
+    /** Prepend now() to the outgoing-announce window and trim it to {@link #FREQ_DEQUE_MAXLEN}. */
+    protected void recordSentAnnounce() {
+        oaFreqDeque.add(0, Instant.now());
+        trimFreqDeque(oaFreqDeque);
+    }
+
+    /** Prepend now() to the incoming-announce window and trim it to {@link #FREQ_DEQUE_MAXLEN}. */
+    protected void recordReceivedAnnounce() {
+        iaFreqDeque.add(0, Instant.now());
+        trimFreqDeque(iaFreqDeque);
+    }
+
+    private static void trimFreqDeque(List<Instant> deque) {
+        // Newest entries are prepended at index 0, so drop from the tail (oldest first).
+        while (deque.size() > FREQ_DEQUE_MAXLEN) {
+            deque.remove(deque.size() - 1);
         }
     }
 
@@ -359,7 +391,10 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
             for (int i = 1; i < dqLen; i++) {
                 deltaSum += Duration.between(iaFreqDeque.get(i), iaFreqDeque.get(i - 1)).getSeconds();
             }
-            deltaSum += Duration.between(Instant.now(), oaFreqDeque.get(dqLen - 1)).getSeconds();
+            // Was oaFreqDeque.get(dqLen - 1) — a copy-paste from outgoingAnnounceFrequency().
+            // dqLen is the INCOMING deque's size, so indexing the OUTGOING deque threw
+            // IndexOutOfBounds whenever oaFreqDeque was shorter. Use the incoming deque.
+            deltaSum += Duration.between(Instant.now(), iaFreqDeque.get(dqLen - 1)).getSeconds();
 
             return deltaSum == 0 ? 0 : (double) 1 / deltaSum / dqLen;
         }

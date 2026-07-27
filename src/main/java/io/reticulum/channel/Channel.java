@@ -377,6 +377,14 @@ public class Channel {
         final boolean[] shouldTeardown = { false };
 
         Function<Envelope, Boolean> retryEnvelope = envelope -> {
+            if (outlet.isClosed()) {
+                // Link is already CLOSED (torn down by us, the remote, or a prior retry-exceeded).
+                // Resends can't route (outbound() returns false), so they only produce
+                // "No interfaces could process (resend)" noise and burn retries. Drop the in-flight
+                // packet and stop — no teardown needed, the Link is already gone.
+                log.debug("Channel: link CLOSED, dropping in-flight packet resend");
+                return true; // remove envelope from TX ring; leave shouldTeardown false
+            }
             if (envelope.getTries() >= maxTries) {
                 log.error("Channel: Retry count exceeded, tearing down Link.");
                 shouldTeardown[0] = true;
