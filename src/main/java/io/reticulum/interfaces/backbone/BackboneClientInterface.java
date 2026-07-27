@@ -25,6 +25,7 @@ import java.time.Duration;
 import java.util.Optional;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
@@ -108,6 +109,14 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
     private volatile boolean reconnecting  = false;
     private volatile boolean neverConnected = true;
     private volatile boolean detached      = false;
+    /**
+     * Guards {@link #startReconnecting()} so at most one reconnect timer runs per interface. The
+     * close-listener in {@link #connect} fires on every channel close, and it used to schedule a
+     * fresh recurring TimerTask each time — overlapping timers then multiplied doReconnect()/
+     * connect() calls into a storm (test-20: a gateway going down spiked one client to 1806
+     * concurrent NioEventLoopGroups before draining). Mirrors TCPClientInterface.reconnectScheduled.
+     */
+    private final AtomicBoolean reconnectScheduled = new AtomicBoolean(false);
 
     /** Set for spawned interfaces created by a {@link BackboneServerInterface}. */
     private BackboneServerInterface parentInterface;
@@ -250,10 +259,17 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
                             future.channel().closeFuture()
                                     .addListener((ChannelFutureListener) closeFeature -> {
                                         online.set(false);
+                                        // Always release this connection's EventLoopGroup once the
+                                        // channel closes. Previously it was shut down ONLY on the
+                                        // detached branch, so every reconnect orphaned a whole
+                                        // NioEventLoopGroup (1 epoll fd + thread). Under a reconnect
+                                        // storm this exhausted file descriptors → "Too many open
+                                        // files" (Qortal test-19 wadin: 5686 leaked groups). A
+                                        // reconnect creates a fresh group via connect(), so dropping
+                                        // the old one here is safe. Mirrors TCPClientInterface.
+                                        workerGroup.shutdownGracefully();
                                         if (isFalse(detached)) {
                                             startReconnecting();
-                                        } else {
-                                            workerGroup.shutdownGracefully();
                                         }
                                     })
                     ).sync();
@@ -263,6 +279,11 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
             log.debug("Backbone TCP connection for {} established.", this);
 
         } catch (Exception e) {
+            // Connection never became active, so its close-listener won't fire (or the connect
+            // threw before registering it) — release the EventLoopGroup here so a persistently
+            // refused gateway doesn't leak one group per attempt. shutdownGracefully() is
+            // idempotent, so a double call with the close-listener above is harmless.
+            workerGroup.shutdownGracefully();
             if (init) {
                 log.error("Initial connection for {} could not be established: {}", this, e.getMessage());
                 log.error("Leaving unconnected and retrying connection in {} seconds.", RECONNECT_WAIT);
@@ -276,6 +297,12 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
     }
 
     private void startReconnecting() {
+        // Idempotent: only one reconnect cycle may run per interface at a time. Re-entrant calls
+        // from the close-listener (which fires on every failed/closed connection) return here, so
+        // reconnect timers can no longer accumulate and multiply into a NioEventLoopGroup storm.
+        if (isFalse(reconnectScheduled.compareAndSet(false, true))) {
+            return;
+        }
         timer.schedule(new TimerTask() {
             int attempts = 0;
 
@@ -283,11 +310,13 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
             public void run() {
                 if (!initiator) {
                     log.error("Attempt to reconnect on a non-initiator Backbone interface. This should not happen.");
+                    reconnectScheduled.set(false);
                     cancel();
                     return;
                 }
 
                 if (online.get()) {
+                    reconnectScheduled.set(false);
                     cancel();
                     return;
                 }
@@ -297,6 +326,7 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
                 } else {
                     if (maxReconnectTries != null && attempts > maxReconnectTries) {
                         log.error("Max reconnection attempts reached for {}", BackboneClientInterface.this);
+                        reconnectScheduled.set(false);
                         teardown();
                         cancel();
                         return;

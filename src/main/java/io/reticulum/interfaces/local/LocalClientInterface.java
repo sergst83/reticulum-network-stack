@@ -263,14 +263,14 @@ public class LocalClientInterface extends AbstractConnectionInterface implements
     @Override
     public void sentAnnounce(boolean fromSpawned) {
         if (fromSpawned) {
-            oaFreqDeque.add(0, Instant.now());
+            recordSentAnnounce();
         }
     }
 
     @Override
     public void receivedAnnounce(boolean fromSpawned) {
         if (fromSpawned) {
-            iaFreqDeque.add(0, Instant.now());
+            recordReceivedAnnounce();
         }
     }
 }

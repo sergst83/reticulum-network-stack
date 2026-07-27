@@ -64,6 +64,11 @@ public class LinkChannelOutlet {
         return true; // had issues looking at Link.status
     }
 
+    /** True once the underlying Link is CLOSED — used by Channel to stop resending on a dead link. */
+    public boolean isClosed() {
+        return link.getStatus() == LinkStatus.CLOSED;
+    }
+
     public MessageState getPacketState(TPacket packet) {
         if (isNull(packet.getReceipt())) {
             return MSGSTATE_FAILED;

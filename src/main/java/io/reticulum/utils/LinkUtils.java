@@ -41,7 +41,11 @@ public class LinkUtils {
                 link.setHash(linkId);
 
                 link.setDestination((Destination) packet.getDestination());
-                link.setEstablishmentTimeout(ESTABLISHMENT_TIMEOUT_PER_HOP + Math.max(1, packet.getHops()) + KEEPALIVE * 1_000);
+                // Per-hop timeout SCALES with hop count - the '+' here was a typo, which made the
+                // hop term contribute a handful of milliseconds instead of 6s per hop. Mirrors the
+                // initiator-side computation in Link.init(). All terms are milliseconds:
+                // ESTABLISHMENT_TIMEOUT_PER_HOP is 6000ms, KEEPALIVE is 360s hence the * 1_000.
+                link.setEstablishmentTimeout(ESTABLISHMENT_TIMEOUT_PER_HOP * Math.max(1, packet.getHops()) + KEEPALIVE * 1_000);
                 link.addEstablishmentCost(packet.getRaw().length);
                 log.debug("Establishment timeout is {} ms for incoming link request {}", link.getEstablishmentTimeout(), link.getLinkId());
                 link.handshake();
