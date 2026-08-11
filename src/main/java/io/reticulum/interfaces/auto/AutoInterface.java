@@ -93,6 +93,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     @JsonIgnore
     private AtomicBoolean carrierChanged = new AtomicBoolean(false);
 
+    @JsonIgnore
     private Deque<String> mifDeque = new ConcurrentLinkedDeque<>();
 
     private String mcastDiscoveryAddress;
@@ -101,8 +102,13 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     private long peeringTimeout = PEERING_TIMEOUT * 5;
     private long multicastEchoTimeout = PEERING_TIMEOUT / 2;
 
+    // Live view of the OS network interfaces this interface is bound to, rebuilt at runtime by
+    // the peer job. Not config, and java.net.NetworkInterface has no accessible constructor for
+    // Jackson to target, so leaving it visible breaks deserialization of the whole interface.
+    @JsonIgnore
     private List<NetworkInterface> interfaceList = new CopyOnWriteArrayList<>();
 
+    @JsonIgnore
     @Setter(PRIVATE)
     @Getter(PRIVATE)
     // Daemon threads: the discovery and listener threads below run blocking
@@ -115,6 +121,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
         return thread;
     };
 
+    @JsonIgnore
     private ScheduledExecutorService scheduledThreadPool = newScheduledThreadPool(2, defaultThreadFactory);
 
     @Override
