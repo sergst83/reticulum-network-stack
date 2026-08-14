@@ -367,7 +367,7 @@ public class Reticulum implements ExitHandler {
                 configDirLocal = ETC_DIR;
             } else if (
                     Files.isDirectory(Path.of(USER_HOME, ".config", "reticulum"))
-                            && Files.exists(Path.of(ETC_DIR, ".config", "reticulum", CONFIG_FILE_NAME))
+                            && Files.exists(Path.of(USER_HOME, ".config", "reticulum", CONFIG_FILE_NAME))
             ) {
                 configDirLocal = Path.of(USER_HOME, ".config", "reticulum").toString();
             } else {
