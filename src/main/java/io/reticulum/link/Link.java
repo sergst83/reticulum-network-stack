@@ -886,7 +886,14 @@ public class Link extends AbstractDestination {
                         case ACTIVE:
                             Instant time;
                             log.info("activatedAt: {}, lastInbound: {}, lastProof: {}", this.activatedAt, this.lastInbound, this.lastProof);
-                            if (nonNull(this.activatedAt) && this.activatedAt.compareTo(this.lastInbound) < 0) {
+                            // Use the MORE RECENT of activatedAt / lastInbound as the staleness
+                            // reference. Previously this took the older one (compareTo < 0), which
+                            // pinned `time` to activatedAt for the whole life of any healthy link
+                            // (lastInbound advances past activatedAt as soon as traffic/keepalive
+                            // flows). That made every ACTIVE link go STALE at activatedAt + STALE_TIME
+                            // (~12 min) regardless of ongoing keepalive/data. Taking the max means a
+                            // link only goes stale after STALE_TIME with genuinely no inbound.
+                            if (nonNull(this.activatedAt) && this.activatedAt.compareTo(this.lastInbound) > 0) {
                                 time = this.activatedAt;
                             } else {
                                 time = this.lastInbound;
@@ -1110,7 +1117,13 @@ public class Link extends AbstractDestination {
                     } else if (packet.getContext() == LINKIDENTIFY) {
                         var plaintext = decrypt(packet.getData());
                         if (nonNull(plaintext)) {
-                            if (isFalse(initiator) && getLength(plaintext) == KEYSIZE / 8 + SIGLENGTH) {
+                            // SIGLENGTH is in BITS; the payload is pubkey (KEYSIZE/8 bytes) + signature
+                            // (SIGLENGTH/8 bytes). The guard must compare byte lengths — previously it
+                            // used SIGLENGTH (bits), so it required KEYSIZE/8 + 512 = 576 bytes while the
+                            // real payload is KEYSIZE/8 + SIGLENGTH/8 = 128 bytes, silently dropping every
+                            // LINKIDENTIFY packet (remoteIdentity never set, remoteIdentified never fired).
+                            // Now matches the SIGLENGTH/8 already used for the signature subarray below.
+                            if (isFalse(initiator) && getLength(plaintext) == KEYSIZE / 8 + SIGLENGTH / 8) {
                                 var publicKey = subarray(plaintext, 0, KEYSIZE / 8);
                                 var signedData = concatArrays(linkId, publicKey);
                                 var signature = subarray(plaintext, KEYSIZE / 8, KEYSIZE / 8 + SIGLENGTH / 8);
