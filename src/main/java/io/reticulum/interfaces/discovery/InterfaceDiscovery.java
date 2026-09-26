@@ -154,7 +154,11 @@ public class InterfaceDiscovery {
         connectThread.start();
     }
 
-    /** Convenience constructor with default stamp value and no external callback. */
+    /**
+     * Convenience constructor with default stamp value and no external callback.
+     *
+     * @param storageBase directory the discovered-interface records are persisted under
+     */
     public InterfaceDiscovery(Path storageBase) {
         this(storageBase, InterfaceAnnouncer.DEFAULT_STAMP_VALUE, null);
     }
@@ -233,7 +237,11 @@ public class InterfaceDiscovery {
         return result;
     }
 
-    /** Returns all discovered interfaces regardless of availability or transport status. */
+    /**
+     * Returns all discovered interfaces regardless of availability or transport status.
+     *
+     * @return list of info maps, sorted by (status, stamp_value, last_heard) descending
+     */
     public List<Map<String, Object>> listDiscoveredInterfaces() {
         return listDiscoveredInterfaces(false, false);
     }

@@ -36,6 +36,9 @@ public final class Response {
 
     /**
      * A response carrying a byte payload.
+     *
+     * @param data the payload bytes
+     * @return a response wrapping {@code data}
      */
     public static Response of(final byte[] data) {
         return new Response(requireNonNull(data, "Response data cannot be null"), null, null);
@@ -43,6 +46,9 @@ public final class Response {
 
     /**
      * A file response with no metadata.
+     *
+     * @param file the file to stream to the requester
+     * @return a file response for {@code file}, with null metadata
      */
     public static Response ofFile(final File file) {
         return ofFile(file, null);
@@ -52,6 +58,10 @@ public final class Response {
      * A file response carrying metadata describing it. The metadata is
      * msgpack-encoded and delivered to the requester via
      * {@code RequestReceipt.getMetadata()}.
+     *
+     * @param file     the file to stream to the requester
+     * @param metadata an optional object describing the file, or null
+     * @return a file response for {@code file}, carrying {@code metadata}
      */
     public static Response ofFile(final File file, final Object metadata) {
         return new Response(null, requireNonNull(file, "Response file cannot be null"), metadata);

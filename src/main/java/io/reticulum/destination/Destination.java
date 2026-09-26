@@ -263,6 +263,9 @@ public class Destination extends AbstractDestination {
     /**
      * Sets the largest request this destination will accept, in bytes, or null
      * for no limit. Requests exceeding it are rejected before the handler runs.
+     *
+     * @param maxRequestSize the limit in bytes, or null for no limit
+     * @throws IllegalArgumentException if {@code maxRequestSize} is negative
      */
     public void setMaxRequestSize(final Integer maxRequestSize) {
         if (nonNull(maxRequestSize) && maxRequestSize < 0) {

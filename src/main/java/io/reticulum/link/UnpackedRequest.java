@@ -22,6 +22,8 @@ public class UnpackedRequest {
      * own Request example calls {@code request(path, data=None)}. Both
      * {@code newBinary(null)} and {@code asBinaryValue()} on a nil throw, so
      * the empty case is handled explicitly in each direction.
+     *
+     * @return the msgpack array form {@code [time, path_hash, data]}
      */
     public ImmutableArrayValue toValue() {
         return ValueFactory.newArray(

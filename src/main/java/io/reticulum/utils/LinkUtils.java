@@ -76,6 +76,9 @@ public class LinkUtils {
      * Compute the link ID (truncated hash) from a LINKREQUEST packet,
      * stripping any MTU signalling bytes before hashing — mirrors Python's
      * {@code Link.link_id_from_lr_packet(packet)}.
+     *
+     * @param packet the LINKREQUEST packet to derive the link ID from
+     * @return the truncated hash used as the link ID
      */
     public static byte[] linkIdFromLrPacket(Packet packet) {
         var hashablePart = packet.getHashablePart();

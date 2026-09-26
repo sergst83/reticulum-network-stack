@@ -56,6 +56,8 @@ public class DestinationUtils {
     }
 
     /**
+     * @param fullName {@link String}
+     * @param identity {@link Identity}
      * @return A destination name in adressable hash form, for a full name string and Identity instance
      */
     public static byte[] hashFromNameAndIdentity(@NonNull String fullName, Identity identity) {
@@ -65,6 +67,9 @@ public class DestinationUtils {
     }
 
     /**
+     * @param identity {@link Identity}
+     * @param appName {@link String}
+     * @param aspects {@link String}
      * @return A destination name in adressable hash form, for an app_name and a number of aspects
      */
     public static byte[] hash(Identity identity, @NonNull String appName, String... aspects) {

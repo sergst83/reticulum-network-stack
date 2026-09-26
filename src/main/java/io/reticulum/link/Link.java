@@ -492,6 +492,10 @@ public class Link extends AbstractDestination {
      * Used by {@code Transport} to clamp an advertised MTU down to what an
      * interface can carry ({@code RNS/Transport.py:2556,2082}).
      *
+     * @param data raw link-request data field
+     * @param mtu  the MTU to advertise instead of the interface default
+     * @param mode the cipher mode to signal alongside it
+     * @return a copy of {@code data} with its MTU signalling bytes replaced
      * @throws IllegalArgumentException if {@code mode} is not an enabled mode
      */
     public static byte[] withClampedMtu(byte[] data, int mtu, int mode) {
@@ -508,6 +512,9 @@ public class Link extends AbstractDestination {
      * <p>
      * Used by {@code Transport} where an interface declares no hardware MTU at
      * all ({@code RNS/Transport.py:2553,2071}).
+     *
+     * @param data raw link-request data field
+     * @return a copy of {@code data} with its MTU signalling bytes removed
      */
     public static byte[] withoutMtuSignalling(byte[] data) {
         return Arrays.copyOf(data, getLength(data) - LINK_MTU_SIZE);
@@ -678,9 +685,23 @@ public class Link extends AbstractDestination {
     }
 
     /**
+     * Sends a request to the remote peer, bounding the accepted response size.
+     *
+     * @param path              The request path.
+     * @param data              The binary content associated with your message.
+     * @param responseCallback  An optional callback invoked with the response
+     *                          receipt once the response arrives.
+     * @param failedCallback    An optional callback invoked when the request fails.
+     * @param progressCallback  An optional callback invoked as the response is
+     *                          received; progress is exposed as a float between
+     *                          0.0 and 1.0 on the receipt.
+     * @param timeout           An optional timeout in seconds for the request. If
+     *                          null it is calculated based on link RTT.
      * @param maxResponseSize largest accepted response in bytes, or null for no
      *                        limit. An oversized response fails the request
      *                        instead of being delivered.
+     * @return A {@link RequestReceipt} instance if the request was sent. Or null
+     *         if it was not.
      */
     @SneakyThrows
     public RequestReceipt request(

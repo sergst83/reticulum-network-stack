@@ -33,6 +33,7 @@ public class PathRequestEntry {
     /**
      * Record another peer as waiting on this request.
      *
+     * @param connectionInterface the interface waiting on this request
      * @return true if the interface was not already waiting
      */
     public boolean addRequestingInterface(ConnectionInterface connectionInterface) {

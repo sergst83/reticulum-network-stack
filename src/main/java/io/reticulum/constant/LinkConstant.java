@@ -102,6 +102,7 @@ public class LinkConstant {
     }
 
     /**
+     * @param mode the link cipher mode value
      * @return the human-readable name of a mode, or its hex value if unknown
      */
     public static String modeDescription(final int mode) {

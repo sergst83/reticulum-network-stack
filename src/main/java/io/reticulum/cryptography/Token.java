@@ -69,7 +69,11 @@ public class Token {
             this.keySize = keySize;
         }
 
-        /** Combined signing + encryption key length in bytes. */
+        /**
+         * Combined signing + encryption key length in bytes.
+         *
+         * @return the key length in bytes for this mode
+         */
         public int getKeySize() {
             return keySize;
         }

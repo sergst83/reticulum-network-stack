@@ -187,6 +187,8 @@ public class RawChannelReader extends InputStream {
      *
      * @param readyBytes the amount the caller expects to be ready
      * @return a freshly allocated array containing the drained bytes
+     * @throws IOException never thrown by this implementation; declared because
+     *                     the channel read contract allows it
      */
     public byte[] read(Integer readyBytes) throws IOException {
         lock.lock();

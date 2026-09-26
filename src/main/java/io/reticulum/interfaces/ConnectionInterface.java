@@ -113,6 +113,8 @@ public interface ConnectionInterface {
      * Preference weight for this interface when choosing between equally good
      * paths. A higher value wins. Mirrors {@code Interface.gravity}; the
      * reference default is 0.
+     *
+     * @return the gravity weight for this interface
      */
     default int getGravity() {
         return 0;
@@ -122,6 +124,9 @@ public interface ConnectionInterface {
      * Whether announces whose next hop is an internal-mode interface may be
      * propagated out of this interface. Mirrors
      * {@code Interface.announces_from_internal}; defaults to true.
+     *
+     * @return true if announces from internal-mode next hops may be propagated
+     *         out of this interface
      */
     default boolean isAnnouncesFromInternal() {
         return true;
@@ -131,6 +136,8 @@ public interface ConnectionInterface {
      * Whether announces arriving via this interface may be propagated into an
      * internal-mode interface. Mirrors {@code Interface.announces_to_internal};
      * null means "not configured", which is distinct from false.
+     *
+     * @return true or false as configured, or null if not configured
      */
     default Boolean getAnnouncesToInternal() {
         return null;
@@ -140,6 +147,8 @@ public interface ConnectionInterface {
      * Whether a path request arriving on this interface may trigger recursive
      * path requests on other interfaces, regardless of interface mode. Mirrors
      * {@code Interface.recursive_prs}; defaults to false.
+     *
+     * @return true if inbound path requests may trigger recursive path requests
      */
     default boolean isRecursivePrs() {
         return false;
@@ -155,6 +164,8 @@ public interface ConnectionInterface {
      * instance attribute seeded from a per-class ceiling and then recomputed by
      * {@link #optimiseMtu()} — hence nullable here too, since
      * {@code optimise_mtu()} yields {@code None} below 62.5 kbps.
+     *
+     * @return the hardware MTU in bytes, or null if this interface declares none
      */
     default Integer getHwMtu() {
         return ReticulumConstant.MTU;
@@ -166,6 +177,8 @@ public interface ConnectionInterface {
      * Mirrors {@code Interface.protocol_violation()}. The reference only counts
      * and logs; the counter is what a future traffic-class implementation would
      * act on.
+     *
+     * @param description a human-readable description of the violation
      */
     default void protocolViolation(String description) {
         //pass
@@ -188,6 +201,10 @@ public interface ConnectionInterface {
     /**
      * The hardware MTU a given bitrate supports, or {@code null} below
      * 62.5 kbps. Table transcribed from {@code Interface.optimise_mtu()}.
+     *
+     * @param bitrate interface bitrate in bits per second, or null if unknown
+     * @return the hardware MTU in bytes, or null if the bitrate is unknown or
+     *         below 62.5 kbps
      */
     static Integer optimisedMtu(Integer bitrate) {
         if (bitrate == null)              return null;
@@ -207,6 +224,8 @@ public interface ConnectionInterface {
     /**
      * Whether links over this interface may negotiate an MTU up to
      * {@link #getHwMtu()}. Mirrors {@code Interface.AUTOCONFIGURE_MTU}.
+     *
+     * @return true if links may negotiate their MTU up to {@link #getHwMtu()}
      */
     default boolean isAutoconfigureMtu() {
         return false;
@@ -215,6 +234,8 @@ public interface ConnectionInterface {
     /**
      * Whether this interface always operates at {@link #getHwMtu()}. Mirrors
      * {@code Interface.FIXED_MTU}.
+     *
+     * @return true if this interface always operates at {@link #getHwMtu()}
      */
     default boolean isFixedMtu() {
         return false;
@@ -356,6 +377,8 @@ public interface ConnectionInterface {
     /**
      * Whether inbound path requests on this interface should currently be rate
      * limited. Mirrors {@code Interface.should_ingress_limit_pr}.
+     *
+     * @return true if inbound path requests should currently be rate limited
      */
     default boolean shouldIngressLimitPr() {
         return false;
@@ -364,6 +387,8 @@ public interface ConnectionInterface {
     /**
      * Whether an outgoing path request should be suppressed to stay within this
      * interface's egress budget. Mirrors {@code Interface.should_egress_limit_pr}.
+     *
+     * @return true if the outgoing path request should be suppressed
      */
     default boolean shouldEgressLimitPr() {
         return false;

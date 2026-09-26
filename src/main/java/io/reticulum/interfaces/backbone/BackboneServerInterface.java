@@ -177,6 +177,9 @@ public class BackboneServerInterface extends AbstractConnectionInterface impleme
      * {@code true}), otherwise falls back to NIO selectors — matching the Python
      * reference which uses {@code select.epoll} on Linux and falls back to
      * {@code TCPServerInterface} on other platforms.
+     *
+     * @throws InterruptedException if the calling thread is interrupted while
+     *                              waiting for the bind to complete
      */
     public void startListening() throws InterruptedException {
         EventLoopGroup bossGroup   = BackboneTransport.newBossGroup();

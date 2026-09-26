@@ -311,6 +311,8 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
      * {@code ec_*} tunable, and {@code gravity} were silently discarded, so
      * configuring any of them on a TCPServerInterface or BackboneServerInterface
      * had no effect at all.
+     *
+     * @param parent the interface whose traffic-control settings are inherited
      */
     public void inheritTrafficControl(AbstractConnectionInterface parent) {
         this.ingressControl = parent.ingressControl;

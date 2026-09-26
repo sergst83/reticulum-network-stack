@@ -529,10 +529,21 @@ public class Resource {
     }
 
     /**
-     * @param metadata an optional object carried alongside the payload. It is
-     *                 msgpack-encoded, length-prefixed and prepended to the data,
-     *                 and surfaces on the receiving side via
-     *                 {@link #getUnpackedMetadata()}.
+     * @param data             the packed request or response payload
+     * @param link             the link to transfer over
+     * @param metadata         an optional object carried alongside the payload. It is
+     *                         msgpack-encoded, length-prefixed and prepended to the data,
+     *                         and surfaces on the receiving side via
+     *                         {@code getUnpackedMetadata()}.
+     * @param callback         invoked once the transfer concludes, or null
+     * @param progressCallback invoked as the transfer advances, or null
+     * @param requestId        ID of the associated request, or null
+     * @param isResponse       true if this resource carries a response
+     * @param timeout          transfer timeout in <b>milliseconds</b>, or {@code null} to
+     *                         derive it from link RTT
+     * @param autoCompress     true to compress the payload when that makes it smaller
+     * @param originalHash     the hash to advertise, or null to derive one from the payload
+     * @param advertise        true to advertise the resource as soon as it is initialised
      */
     public Resource(
             @NonNull final byte[] data,
@@ -619,7 +630,19 @@ public class Resource {
      * File-backed resource carrying optional metadata. This is the shape used for
      * file responses to a request, where the metadata describes the file.
      *
-     * @param metadata an optional object carried alongside the payload
+     * @param file             the backing file to send
+     * @param link             the link to transfer over
+     * @param metadata         an optional object carried alongside the payload
+     * @param callback         invoked once the transfer concludes, or null
+     * @param segmentIndex     1-based index of the segment to send
+     * @param progressCallback invoked as the transfer advances, or null
+     * @param requestId        ID of the associated request, or null
+     * @param isResponse       true if this resource carries a response
+     * @param timeout          transfer timeout in <b>milliseconds</b>, or {@code null} to
+     *                         derive it from link RTT
+     * @param autoCompress     true to compress the payload when that makes it smaller
+     * @param originalHash     the hash to advertise, or null to derive one from the payload
+     * @param advertise        true to advertise the resource as soon as it is initialised
      */
     public Resource(
             @NonNull final File file,

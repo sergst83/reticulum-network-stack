@@ -9,6 +9,8 @@ public abstract class MessageBase {
      *
      *     * Must be unique within all classes registered with a {@link Channel} <br>
      *     * Must be less than <strong>0xf000</strong>. Values greater than or equal to <strong>0xf000</strong> are reserved. <br>
+     *
+     * @return the message type identifier
      */
     public abstract Integer msgType();
 

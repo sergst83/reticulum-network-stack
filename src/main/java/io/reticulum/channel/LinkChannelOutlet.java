@@ -71,6 +71,8 @@ public class LinkChannelOutlet {
      * <p>
      * Returns a double for the same reason: seconds as an integer would truncate
      * every sub-second RTT to zero.
+     *
+     * @return the link round-trip time in <b>seconds</b>
      */
     public double rtt() {
         return link.getRtt() / 1000.0;
@@ -80,7 +82,12 @@ public class LinkChannelOutlet {
         return true; // had issues looking at Link.status
     }
 
-    /** True once the underlying Link is CLOSED — used by Channel to stop resending on a dead link. */
+    /**
+     * True once the underlying Link is CLOSED — used by Channel to stop resending
+     * on a dead link.
+     *
+     * @return true if the underlying link status is {@link LinkStatus#CLOSED}
+     */
     public boolean isClosed() {
         return link.getStatus() == LinkStatus.CLOSED;
     }

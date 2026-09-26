@@ -228,12 +228,20 @@ public class PacketReceipt {
      * {@code validateProof} being synchronized) and then acquires
      * {@code Channel.lock} inside {@code Channel.packetDelivered}. Observed:
      * Synchronizer thread parked on Channel.lock, no chain sync progress.
+     *
+     * @param deliveryCallback the callback to invoke on delivery, or null to clear
      */
     public void setDeliveryCallback(Consumer<PacketReceipt> deliveryCallback) {
         callbacks.setDelivery(deliveryCallback);
     }
 
-    /** See {@link #setDeliveryCallback(Consumer)} for why this is not synchronized. */
+    /**
+     * Register (or clear) the timeout callback.
+     *
+     * See {@link #setDeliveryCallback(Consumer)} for why this is not synchronized.
+     *
+     * @param timeoutCallback the callback to invoke on timeout, or null to clear
+     */
     public void setTimeoutCallback(Consumer<PacketReceipt> timeoutCallback) {
         callbacks.setTimeout(timeoutCallback);
     }
