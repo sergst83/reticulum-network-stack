@@ -3,13 +3,19 @@ package io.reticulum;
 import io.reticulum.config.ConfigObj;
 import io.reticulum.interfaces.AbstractConnectionInterface;
 import io.reticulum.interfaces.ConnectionInterface;
+import io.reticulum.interfaces.InterfaceMode;
+import io.reticulum.interfaces.discovery.InterfaceAnnouncer;
+import io.reticulum.interfaces.discovery.InterfaceDiscovery;
 import io.reticulum.interfaces.local.LocalClientInterface;
 import io.reticulum.interfaces.local.LocalServerInterface;
 import io.reticulum.storage.Storage;
 import io.reticulum.utils.IdentityUtils;
 import io.reticulum.utils.InterfaceUtils;
 import io.reticulum.utils.Scheduler;
+import org.apache.commons.codec.binary.Hex;
+
 import lombok.Getter;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.MapUtils;
 
@@ -22,10 +28,12 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static io.reticulum.constant.ReticulumConstant.*;
+import static io.reticulum.constant.TransportConstant.DEFAULT_GRAVITY;
 import static io.reticulum.identity.IdentityKnownDestination.loadKnownDestinations;
 import static io.reticulum.utils.CommonUtils.panic;
 import static io.reticulum.utils.Scheduler.scheduler;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
+import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
@@ -77,6 +85,77 @@ public class Reticulum implements ExitHandler {
     private boolean transportEnabled = false;
     @Getter
     private boolean useImplicitProof = true;
+    /** Whether links may negotiate an MTU above the Reticulum default. */
+    @Getter
+    private boolean linkMtuDiscovery = true;
+    /**
+     * Whether auto-connected discovered interfaces permit announces into
+     * internal-mode interfaces. Null means "not configured".
+     */
+    @Getter
+    private Boolean autoconnectAnnouncesToInternal;
+
+    /** Whether to look for interfaces announced on the network. Reference default is off. */
+    @Getter
+    private boolean discoverInterfaces = false;
+    /** Minimum stamp value for a discovered interface to be remembered; null uses the default. */
+    @Getter
+    private Integer requiredDiscoveryValue;
+    /**
+     * Maximum number of auto-connected discovered interfaces. Zero disables
+     * auto-connection, which is the reference default — a node does not dial out
+     * to interfaces it finds on the network unless told to.
+     */
+    @Getter
+    private int autoconnectDiscoveredInterfaces = 0;
+    /** Interface mode for auto-connected discovered interfaces, or null for unset. */
+    @Getter
+    private InterfaceMode autoconnectInterfaceMode;
+    /** Identity hashes from which interface discoveries are accepted. */
+    @Getter
+    private List<byte[]> interfaceDiscoverySources = new ArrayList<>();
+    /** Name distinguishing this instance when several run on one system. */
+    @Getter
+    private String instanceName = "default";
+    /** Running discovery manager, or null when discovery is not enabled. */
+    @Getter
+    private InterfaceDiscovery interfaceDiscovery;
+
+    @Getter
+    private Integer defaultArTarget;
+    @Getter
+    private Integer defaultArPenalty;
+    @Getter
+    private Integer defaultArGrace;
+
+    @Getter
+    private Integer defaultIcMaxHeldAnnounces;
+    @Getter
+    private Double defaultIcBurstHold;
+    @Getter
+    private Double defaultIcBurstFreqNew;
+    @Getter
+    private Double defaultIcBurstFreq;
+    @Getter
+    private Long defaultIcNewTime;
+    @Getter
+    private Long defaultIcBurstPenalty;
+    @Getter
+    private Long defaultIcHeldReleaseInterval;
+    @Getter
+    private Double defaultIcPrBurstFreqNew;
+    @Getter
+    private Double defaultIcPrBurstFreq;
+    @Getter
+    private Boolean defaultEgressControl;
+    @Getter
+    private Double defaultEcPrFreq;
+    /** Gravity applied to interfaces that do not configure their own. */
+    @Getter
+    private Integer defaultGravity;
+    /** Gravity applied to auto-connected discovered interfaces. */
+    @Getter
+    private Integer autoconnectInterfaceGravity;
     @Getter
     private boolean allowProbes = false;
     @Getter
@@ -120,6 +199,11 @@ public class Reticulum implements ExitHandler {
         ifList.stream()
                 .filter(ConnectionInterface::isEnabled)
                 .forEach(ConnectionInterface::launch);
+
+        // Order interfaces by preference once they are all registered
+        transport.prioritizeInterfaces();
+
+        startInterfaceDiscovery();
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             transport.detachInterfaces();
@@ -170,6 +254,71 @@ public class Reticulum implements ExitHandler {
      */
     public static boolean shouldUseImplicitProof() {
         return Transport.getInstance().getOwner().isUseImplicitProof();
+    }
+
+    /**
+     * Returns whether automatic link MTU discovery is enabled for the running
+     * instance. When enabled, a link initiator advertises the next-hop
+     * interface's hardware MTU instead of the Reticulum default, which
+     * significantly increases throughput over fast links.
+     *
+     * @return true if link MTU discovery is enabled
+     */
+    public static boolean linkMtuDiscovery() {
+        return Transport.getInstance().getOwner().isLinkMtuDiscovery();
+    }
+
+    /**
+     * Whether auto-connected discovered interfaces should permit their announces
+     * to be propagated into internal-mode interfaces.
+     *
+     * @return true when configured on, otherwise null (meaning unconfigured)
+     */
+    /**
+     * @return gravity for auto-connected discovered interfaces, or null if unset
+     */
+    public static Integer autoconnectInterfaceGravity() {
+        return Transport.getInstance().getOwner().getAutoconnectInterfaceGravity();
+    }
+
+    public static Boolean autoconnectAnnouncesToInternal() {
+        return Transport.getInstance().getOwner().getAutoconnectAnnouncesToInternal();
+    }
+
+    /**
+     * @return whether discovered interfaces should be auto-connected. Off unless
+     *         {@code autoconnect_discovered_interfaces} is configured above zero.
+     */
+    public static boolean shouldAutoconnectDiscoveredInterfaces() {
+        return Transport.getInstance().getOwner().getAutoconnectDiscoveredInterfaces() > 0;
+    }
+
+    /**
+     * @return the maximum number of auto-connected discovered interfaces
+     */
+    public static int maxAutoconnectedInterfaces() {
+        return Transport.getInstance().getOwner().getAutoconnectDiscoveredInterfaces();
+    }
+
+    /**
+     * @return the interface mode for auto-connected discovered interfaces, or null
+     */
+    public static InterfaceMode autoconnectInterfaceMode() {
+        return Transport.getInstance().getOwner().getAutoconnectInterfaceMode();
+    }
+
+    /**
+     * @return the required stamp value for a discovered interface, or null for none
+     */
+    public static Integer requiredDiscoveryValue() {
+        return Transport.getInstance().getOwner().getRequiredDiscoveryValue();
+    }
+
+    /**
+     * @return identity hashes from which interface discoveries are accepted
+     */
+    public static List<byte[]> interfaceDiscoverySources() {
+        return Transport.getInstance().getOwner().getInterfaceDiscoverySources();
     }
 
     /**
@@ -257,6 +406,50 @@ public class Reticulum implements ExitHandler {
     }
 
     /**
+     * Returns the bitrate of the slowest currently online interface.
+     *
+     * @return lowest online interface bitrate in bits per second, or null if
+     *         no online interface reports one.
+     */
+    public Integer getLowestInterfaceBitrate() {
+        return transport.lowestInterfaceBitrate();
+    }
+
+    /**
+     * Returns an estimate of a reasonable minimum path request timeout, covering
+     * a full round trip for one MTU on the slowest currently online interface
+     * plus per-hop grace.
+     *
+     * @return timeout in milliseconds, or 0 if it is unknown.
+     */
+    public long getMediumPathTimeout() {
+        return transport.mediumPathTimeout();
+    }
+
+    /**
+     * Requests a path to the destination and blocks until it is available or the
+     * default path request timeout elapses.
+     *
+     * @param destinationHash destination hash as byte[].
+     * @return true if a path to the destination is available.
+     */
+    public boolean awaitPath(byte[] destinationHash) {
+        return transport.awaitPath(destinationHash);
+    }
+
+    /**
+     * Requests a path to the destination and blocks until it is available or the
+     * given timeout elapses.
+     *
+     * @param destinationHash destination hash as byte[].
+     * @param timeoutMs       timeout in milliseconds.
+     * @return true if a path to the destination is available.
+     */
+    public boolean awaitPath(byte[] destinationHash, long timeoutMs) {
+        return transport.awaitPath(destinationHash, timeoutMs, null);
+    }
+
+    /**
      * Returns the number of currently tracked links (both pending and active).
      *
      * @return link count.
@@ -327,6 +520,90 @@ public class Reticulum implements ExitHandler {
         }
     }
 
+    /**
+     * Starts on-network interface discovery when {@code discover_interfaces} is
+     * configured. Off by default, matching the reference — a node does not look
+     * for or dial out to interfaces it finds unless asked to.
+     */
+    private void startInterfaceDiscovery() {
+        if (isFalse(discoverInterfaces)) {
+            return;
+        }
+        if (isConnectedToSharedInstance) {
+            return;
+        }
+
+        try {
+            var stampValue = nonNull(requiredDiscoveryValue)
+                    ? requiredDiscoveryValue
+                    : InterfaceAnnouncer.DEFAULT_STAMP_VALUE;
+            // The constructor registers the announce handler, reconnects known
+            // interfaces and starts the monitor job itself.
+            this.interfaceDiscovery = new InterfaceDiscovery(storagePath, stampValue, null);
+            log.info("Interface discovery enabled, required stamp value is {}", stampValue);
+        } catch (Exception e) {
+            log.error("Could not start interface discovery", e);
+        }
+    }
+
+    /**
+     * Applies instance-wide announce rate and ingress control defaults to an
+     * interface that did not configure its own.
+     * <p>
+     * The announce rate fields default to null on an interface, so an
+     * instance-level value fills them in. The ingress control fields already
+     * carry the reference defaults, so an instance-level value overrides them
+     * only when explicitly configured.
+     */
+    private void applyInterfaceDefaults(final AbstractConnectionInterface iface) {
+        if (isNull(iface.getAnnounceRateTarget()) && nonNull(defaultArTarget)) {
+            iface.setAnnounceRateTarget(defaultArTarget);
+        }
+        if (isNull(iface.getAnnounceRatePenalty()) && nonNull(defaultArPenalty)) {
+            iface.setAnnounceRatePenalty(defaultArPenalty);
+        }
+        if (isNull(iface.getAnnounceRateGrace()) && nonNull(defaultArGrace)) {
+            iface.setAnnounceRateGrace(defaultArGrace);
+        }
+
+        if (nonNull(defaultIcMaxHeldAnnounces)) {
+            iface.setIcMaxHeldAnnounces(defaultIcMaxHeldAnnounces);
+        }
+        if (nonNull(defaultIcBurstHold)) {
+            iface.setIcBurstHold(defaultIcBurstHold);
+        }
+        if (nonNull(defaultIcBurstFreqNew)) {
+            iface.setIcBurstFreqNew(defaultIcBurstFreqNew);
+        }
+        if (nonNull(defaultIcBurstFreq)) {
+            iface.setIcBurstFreq(defaultIcBurstFreq);
+        }
+        if (nonNull(defaultIcNewTime)) {
+            iface.setIcNewTime(defaultIcNewTime);
+        }
+        if (nonNull(defaultIcBurstPenalty)) {
+            iface.setIcBurstPenalty(defaultIcBurstPenalty);
+        }
+        if (nonNull(defaultIcHeldReleaseInterval)) {
+            iface.setIcHeldReleaseInterval(defaultIcHeldReleaseInterval);
+        }
+        if (nonNull(defaultIcPrBurstFreqNew)) {
+            iface.setIcPrBurstFreqNew(defaultIcPrBurstFreqNew);
+        }
+        if (nonNull(defaultIcPrBurstFreq)) {
+            iface.setIcPrBurstFreq(defaultIcPrBurstFreq);
+        }
+        if (nonNull(defaultEgressControl)) {
+            iface.setEgressControl(defaultEgressControl);
+        }
+        if (nonNull(defaultEcPrFreq)) {
+            iface.setEcPrFreq(defaultEcPrFreq);
+        }
+        if (iface.getGravity() == DEFAULT_GRAVITY && nonNull(defaultGravity)) {
+            iface.setGravity(defaultGravity);
+        }
+    }
+
     private List<ConnectionInterface> initInterfaces() {
         var interfaceList = new ArrayList<ConnectionInterface>();
         if (isFalse(isSharedInstance || isStandaloneInnstance)) {
@@ -350,6 +627,11 @@ public class Reticulum implements ExitHandler {
                     continue;
                 }
 
+                applyInterfaceDefaults(iface);
+                // Derive the hardware MTU from the (possibly config-overridden)
+                // bitrate, as the reference does once an interface is configured
+                // (RNS/Reticulum.py:948).
+                iface.optimiseMtu();
                 interfaceList.add(iface);
             }
             log.info("System interfaces are ready");
@@ -419,6 +701,85 @@ public class Reticulum implements ExitHandler {
         transportEnabled = Optional.ofNullable(reticulumConfig.getEnableTransport()).orElse(transportEnabled);
         panicOnIntefaceError = Optional.ofNullable(reticulumConfig.getPanicOnInterfaceError()).orElse(panicOnIntefaceError);
         useImplicitProof = Optional.ofNullable(reticulumConfig.getUseImplicitProof()).orElse(useImplicitProof);
+        linkMtuDiscovery = Optional.ofNullable(reticulumConfig.getLinkMtuDiscovery()).orElse(linkMtuDiscovery);
+        autoconnectAnnouncesToInternal = Optional.ofNullable(reticulumConfig.getAutoconnectAnnouncesToInternal())
+                .orElse(autoconnectAnnouncesToInternal);
+
+        discoverInterfaces = Optional.ofNullable(reticulumConfig.getDiscoverInterfaces()).orElse(discoverInterfaces);
+        instanceName = Optional.ofNullable(reticulumConfig.getInstanceName()).orElse(instanceName);
+
+        // A stamp value of zero or less means "no requirement", as in the reference
+        var configuredStampValue = reticulumConfig.getRequiredDiscoveryValue();
+        requiredDiscoveryValue = nonNull(configuredStampValue) && configuredStampValue > 0 ? configuredStampValue : null;
+
+        // Absent or non-positive leaves auto-connection disabled
+        autoconnectDiscoveredInterfaces = Optional.ofNullable(reticulumConfig.getAutoconnectDiscoveredInterfaces())
+                .filter(count -> count > 0)
+                .orElse(0);
+
+        autoconnectInterfaceMode = parseInterfaceMode(reticulumConfig.getAutoconnectInterfaceMode());
+        interfaceDiscoverySources = parseIdentityHashes(
+                reticulumConfig.getInterfaceDiscoverySources(), "interface_discovery_sources");
+
+        defaultArTarget = reticulumConfig.getDefaultArTarget();
+        defaultArPenalty = reticulumConfig.getDefaultArPenalty();
+        defaultArGrace = reticulumConfig.getDefaultArGrace();
+
+        defaultIcMaxHeldAnnounces = reticulumConfig.getIcMaxHeldAnnounces();
+        defaultIcBurstHold = reticulumConfig.getIcBurstHold();
+        defaultIcBurstFreqNew = reticulumConfig.getIcBurstFreqNew();
+        defaultIcBurstFreq = reticulumConfig.getIcBurstFreq();
+        defaultIcNewTime = reticulumConfig.getIcNewTime();
+        defaultIcBurstPenalty = reticulumConfig.getIcBurstPenalty();
+        defaultIcHeldReleaseInterval = reticulumConfig.getIcHeldReleaseInterval();
+        defaultIcPrBurstFreqNew = reticulumConfig.getIcPrBurstFreqNew();
+        defaultIcPrBurstFreq = reticulumConfig.getIcPrBurstFreq();
+        defaultEgressControl = reticulumConfig.getEgressControl();
+        defaultEcPrFreq = reticulumConfig.getEcPrFreq();
+        defaultGravity = reticulumConfig.getDefaultGravity();
+        autoconnectInterfaceGravity = reticulumConfig.getAutoconnectInterfaceGravity();
+    }
+
+    /**
+     * Parses a configured interface mode name, returning null when unset or
+     * unrecognised — the reference leaves the mode unset rather than failing.
+     */
+    private static InterfaceMode parseInterfaceMode(final String modeName) {
+        if (isNull(modeName) || modeName.isBlank()) {
+            return null;
+        }
+
+        try {
+            return InterfaceMode.parseName(modeName);
+        } catch (Exception e) {
+            log.warn("Unrecognised interface mode '{}' in configuration, ignoring", modeName);
+
+            return null;
+        }
+    }
+
+    /**
+     * Parses a list of hex identity hashes, rejecting anything of the wrong
+     * length rather than silently accepting it (mirrors RNS/Reticulum.py:598-605).
+     */
+    @SneakyThrows
+    private static List<byte[]> parseIdentityHashes(final List<String> hexHashes, final String option) {
+        var hashes = new ArrayList<byte[]>();
+        if (isNull(hexHashes)) {
+            return hashes;
+        }
+
+        var expectedLength = TRUNCATED_HASHLENGTH / 8 * 2;
+        for (var hexHash : hexHashes) {
+            if (isNull(hexHash) || hexHash.length() != expectedLength) {
+                throw new IllegalArgumentException(String.format(
+                        "Identity hash '%s' for %s is invalid, must be %d hexadecimal characters (%d bytes)",
+                        hexHash, option, expectedLength, expectedLength / 2));
+            }
+            hashes.add(Hex.decodeHex(hexHash));
+        }
+
+        return hashes;
     }
 
     private void startLocalInterface() {

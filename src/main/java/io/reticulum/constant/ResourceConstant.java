@@ -23,6 +23,10 @@ public class ResourceConstant {
      */
     public static final int WINDOW_MAX_SLOW = 10;
     /**
+     * The maximum window size for transfers on very slow links
+     */
+    public static final int WINDOW_MAX_VERY_SLOW = 4;
+    /**
      * The maximum window size for transfers on fast links
      */
     public static final int WINDOW_MAX_FAST = 75;
@@ -41,6 +45,16 @@ public class ResourceConstant {
      * bytes per second, hence the "/ 8").
      */
     public static final int RATE_FAST = (50 * 1000) / 8;
+    /**
+     * If the very slow rate is sustained for this many request rounds,
+     * the window will be capped to the very slow limit.
+     */
+    public static final int VERY_SLOW_RATE_THRESHOLD = 2;
+    /**
+     * If the RTT rate is lower than this value, the window size will be capped.
+     * The default is 2 Kbps (the value is stored in bytes per second, hence the "/ 8").
+     */
+    public static final int RATE_VERY_SLOW = (2 * 1000) / 8;
     /**
      * The minimum allowed flexibility of the window size.
      * The difference between window_max and window_min
@@ -66,13 +80,35 @@ public class ResourceConstant {
      * Capped at 16777215 (0xFFFFFF) per segment to
      * fit in 3 bytes in resource advertisements.
      */
-    public static final int MAX_EFFICIENT_SIZE = 16 * 1024 * 1024 - 1;
-    public static final int AUTO_COMPRESS_MAX_SIZE = MAX_EFFICIENT_SIZE;
+    public static final int MAX_EFFICIENT_SIZE = 1 * 1024 * 1024 - 1;
+    /**
+     * Maximum size of resource metadata: 16777215 (0xFFFFFF) bytes.
+     */
+    public static final int METADATA_MAX_SIZE = 16 * 1024 * 1024 - 1;
+    /**
+     * The maximum size to auto-compress with bzip2 before sending.
+     */
+    public static final int AUTO_COMPRESS_MAX_SIZE = 64 * 1024 * 1024;
     public static final int PART_TIMEOUT_FACTOR = 4;
     public static final int PART_TIMEOUT_FACTOR_AFTER_RTT = 2;
+    /**
+     * Timeout factor while awaiting a resource proof. Lower than the traffic
+     * timeout factor because proof packets are significantly smaller than a
+     * full request/response roundtrip.
+     */
+    public static final int PROOF_TIMEOUT_FACTOR = 3;
+    /**
+     * Factor applied when estimating how long to wait for a hashmap update.
+     */
+    public static final double HMU_WAIT_FACTOR = 3.5;
     public static final int MAX_RETRIES = 16;
     public static final int MAX_ADV_RETRIES = 4;
     public static final long SENDER_GRACE_TIME = 10_000;
+    /**
+     * Grace period added to the advertisement timeout to allow the receiver
+     * time to process it. Milliseconds; the reference constant is 1.0 seconds.
+     */
+    public static final long PROCESSING_GRACE = 1_000;
     public static final long RETRY_GRACE_TIME = 250;
     public static final long PER_RETRY_DELAY = 500;
 

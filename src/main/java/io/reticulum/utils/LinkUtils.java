@@ -35,6 +35,9 @@ public class LinkUtils {
                     link.setMode(Link.modeFromLrPacket(data));
                 }
 
+                // Derive the MDU from whatever MTU was agreed, default or not
+                link.updateMdu();
+
                 // Compute link ID stripping signalling bytes (mirrors Python link_id_from_lr_packet)
                 var linkId = linkIdFromLrPacket(packet);
                 link.setLinkId(linkId);

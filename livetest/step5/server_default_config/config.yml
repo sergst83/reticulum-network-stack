@@ -1,0 +1,15 @@
+# Step 5a/5c responder: a Java TCP listener at the reference's default bitrate
+# guess, so optimiseMtu() puts its hardware MTU at 16384.
+reticulum:
+  enable_transport: false
+  share_instance: false
+  panic_on_interface_error: false
+interfaces:
+  "Default Interface":
+    type: AutoInterface
+    enabled: false
+  "Step5 TCP Server":
+    type: TCPServerInterface
+    enabled: true
+    listen_ip: 127.0.0.1
+    listen_port: 42504

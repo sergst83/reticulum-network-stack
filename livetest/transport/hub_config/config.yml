@@ -1,0 +1,20 @@
+# The transport hub: a Java TCPServerInterface that both peers dial into and
+# route through. This is the topology CLAUDE.md records as broken — "links go
+# PENDING when clients try to connect through a TCP server".
+reticulum:
+  enable_transport: true
+  share_instance: false
+  panic_on_interface_error: false
+interfaces:
+  "Default Interface":
+    type: AutoInterface
+    enabled: false
+  "Hub TCP Server":
+    type: TCPServerInterface
+    enabled: true
+    listen_ip: 127.0.0.1
+    listen_port: 42508
+    # Recursive path discovery on behalf of peers only runs for interfaces in
+    # DISCOVER_PATHS_FOR (access point, gateway, roaming, internal). A plain
+    # "full" interface just forwards, so nothing would ever be batched.
+    mode: gateway

@@ -3,10 +3,14 @@ package io.reticulum.message;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.msgpack.core.MessagePack;
+import org.msgpack.value.Value;
 import org.msgpack.value.ValueFactory;
 
 import java.io.IOException;
 import java.time.Instant;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.isNull;
 
 /**
  *      The MSGTYPE class variable needs to be assigned a
@@ -16,6 +20,11 @@ import java.time.Instant;
  *      MSGTYPE must be unique across all message types we
  *      register with the channel. MSGTYPEs ;gt= 0xf000 are
  *      reserved for the system.
+ * <p>
+ * Wire format is a two-element array of the string payload and a msgpack
+ * timestamp, matching {@code Examples/Channel.py}'s {@code StringMessage}, which
+ * packs {@code (self.data, self.timestamp)} where {@code data} is a Python
+ * {@code str}.
  */
 @Data
 @NoArgsConstructor
@@ -36,13 +45,22 @@ public class StringMessage extends MessageBase{
         //return stringType.getMsgType();
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The payload goes on the wire as a msgpack <em>str</em>, not <em>bin</em>.
+     * The reference packs a Python {@code str}, so emitting bin gave a Python
+     * peer {@code bytes} where it expected a string. Nil is used for an absent
+     * payload or timestamp: {@code newBinary(null)} throws, and the no-argument
+     * constructor exists precisely so the channel can build an empty instance.
+     */
     @Override
     public byte[] pack() {
         try (var packer = MessagePack.newDefaultBufferPacker()) {
             packer.packValue(
                     ValueFactory.newArray(
-                            ValueFactory.newBinary(data),
-                            ValueFactory.newTimestamp(timestamp)
+                            isNull(data) ? ValueFactory.newNil() : ValueFactory.newString(new String(data, UTF_8)),
+                            isNull(timestamp) ? ValueFactory.newNil() : ValueFactory.newTimestamp(timestamp)
                     )
             );
 
@@ -52,14 +70,28 @@ public class StringMessage extends MessageBase{
         }
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Accepts the payload as either msgpack str or bin. {@code asBinaryValue()}
+     * throws on a str, so every message from a reference peer failed here.
+     */
     @Override
     public void unpack(byte[] raw) {
         try (var unpacker = MessagePack.newDefaultUnpacker(raw)) {
             var arr = unpacker.unpackValue().asArrayValue();
-            this.data = arr.get(0).asBinaryValue().asByteArray();
-            this.timestamp = arr.get(1).asTimestampValue().toInstant();
+            this.data = payloadBytes(arr.get(0));
+            this.timestamp = arr.get(1).isNilValue() ? null : arr.get(1).asTimestampValue().toInstant();
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private static byte[] payloadBytes(Value value) {
+        if (isNull(value) || value.isNilValue()) {
+            return null;
+        }
+
+        return value.asRawValue().asByteArray();
     }
 }

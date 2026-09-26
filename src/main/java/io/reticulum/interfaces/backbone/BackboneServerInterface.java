@@ -59,7 +59,9 @@ public class BackboneServerInterface extends AbstractConnectionInterface impleme
     /** Maximum hardware MTU – 1 MiB, matching Python's {@code HW_MTU}. */
     public static final int HW_MTU = 1_048_576;
 
-    private static final int BITRATE_GUESS    = 1_000_000_000; // 1 Gbit/s
+    // Matches BackboneInterface.BITRATE_GUESS in the reference. With optimiseMtu()
+    // this yields a hardware MTU of 32768, not the 1 MiB class ceiling.
+    private static final int BITRATE_GUESS    = 100_000_000; // 100 Mbit/s
     private static final int DEFAULT_IFAC_SIZE = 16;
 
     // ── Network binding ──────────────────────────────────────────────────────
@@ -145,6 +147,7 @@ public class BackboneServerInterface extends AbstractConnectionInterface impleme
         // processOutgoing is a no-op; actual sending is done by spawned BackboneClientInterfaces.
         this.interfaceMode = InterfaceMode.MODE_FULL;
         this.bitrate = BITRATE_GUESS;
+        this.hwMtu = HW_MTU;
 
         if (isNull(ifacSize)) {
             ifacSize = DEFAULT_IFAC_SIZE;
@@ -266,5 +269,9 @@ public class BackboneServerInterface extends AbstractConnectionInterface impleme
     @Override
     public String toString() {
         return getInterfaceName() + "/" + listenIp + ":" + listenPort;
+    }
+    @Override
+    public boolean isAutoconfigureMtu() {
+        return true;
     }
 }

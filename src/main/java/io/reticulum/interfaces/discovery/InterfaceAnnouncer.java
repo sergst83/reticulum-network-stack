@@ -63,7 +63,7 @@ public class InterfaceAnnouncer {
     public static final int JOB_INTERVAL = 60;
 
     /** Default proof-of-work difficulty (leading zero bits). */
-    public static final int DEFAULT_STAMP_VALUE = 14;
+    public static final int DEFAULT_STAMP_VALUE = 16;
 
     /** {@code FLAG_ENCRYPTED} bit in the first byte of the app_data payload. */
     public static final byte FLAG_ENCRYPTED = 0x02;

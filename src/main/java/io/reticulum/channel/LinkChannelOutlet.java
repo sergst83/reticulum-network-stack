@@ -53,11 +53,27 @@ public class LinkChannelOutlet {
     }
 
     public double mdu() {
-        return LinkConstant.MDU;
+        // Delegate so this cannot drift from getMdu()
+        return getMdu();
     }
 
-    public long rtt() {
-        return link.getRtt();
+    /**
+     * Round-trip time of the underlying link, <em>in seconds</em>.
+     * <p>
+     * Seconds, not milliseconds, because every threshold it is compared against
+     * ({@code RTT_FAST} 0.18, {@code RTT_MEDIUM} 0.75, {@code RTT_SLOW} 1.45) is
+     * transcribed from the reference in seconds, as is the retry timeout formula.
+     * {@code Link.getRtt()} is milliseconds, so returning it unconverted made
+     * every link read as slower than {@code RTT_SLOW} — any RTT above 1.45 ms,
+     * which is to say all of them. The channel was then pinned to a window of 1
+     * for its whole life and could never promote to the medium or fast rate
+     * classes, so nothing was ever pipelined.
+     * <p>
+     * Returns a double for the same reason: seconds as an integer would truncate
+     * every sub-second RTT to zero.
+     */
+    public double rtt() {
+        return link.getRtt() / 1000.0;
     }
 
     public boolean isUsable() {
@@ -120,6 +136,6 @@ public class LinkChannelOutlet {
     }
 
     public int getMdu() {
-        return LinkConstant.MDU;
+        return link.getMdu();
     }
 }

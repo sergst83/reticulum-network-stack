@@ -18,7 +18,8 @@ import static org.apache.commons.lang3.SystemUtils.OS_NAME;
 @NoArgsConstructor(access = PRIVATE)
 @Slf4j
 public final class AutoInterfaceConstant {
-    static final int HW_MTU = 1064;
+    /** Matches AutoInterface.HW_MTU in the reference implementation. */
+    public static final int HW_MTU = 1196;
     static final long PEERING_TIMEOUT = 8_000;
     static final int DEFAULT_DISCOVERY_PORT = 29716;
     static final int DEFAULT_DATA_PORT = 42671;

@@ -1,9 +1,10 @@
 package io.reticulum.link;
 
+import io.reticulum.Reticulum;
 import io.reticulum.Transport;
 import io.reticulum.channel.Channel;
 import io.reticulum.channel.LinkChannelOutlet;
-import io.reticulum.cryptography.Fernet;
+import io.reticulum.cryptography.Token;
 import io.reticulum.destination.AbstractDestination;
 import io.reticulum.destination.Destination;
 import io.reticulum.destination.DestinationType;
@@ -60,13 +61,20 @@ import static io.reticulum.constant.LinkConstant.ESTABLISHMENT_TIMEOUT_PER_HOP;
 import static io.reticulum.constant.LinkConstant.KEEPALIVE;
 import static io.reticulum.constant.LinkConstant.KEEPALIVE_TIMEOUT_FACTOR;
 import static io.reticulum.constant.LinkConstant.LINK_MTU_SIZE;
+import static io.reticulum.constant.LinkConstant.ENABLED_MODES;
 import static io.reticulum.constant.LinkConstant.MDU;
 import static io.reticulum.constant.LinkConstant.MODE_BYTEMASK;
 import static io.reticulum.constant.LinkConstant.MODE_DEFAULT;
 import static io.reticulum.constant.LinkConstant.MTU_BYTEMASK;
 import static io.reticulum.constant.LinkConstant.STALE_GRACE;
+import static io.reticulum.constant.LinkConstant.derivedKeyLength;
+import static io.reticulum.constant.LinkConstant.modeDescription;
 import static io.reticulum.constant.LinkConstant.STALE_TIME;
 import static io.reticulum.constant.LinkConstant.TRAFFIC_TIMEOUT_FACTOR;
+import static io.reticulum.constant.IdentityConstant.AES128_BLOCKSIZE;
+import static io.reticulum.constant.IdentityConstant.TOKEN_OVERHEAD;
+import static io.reticulum.constant.ReticulumConstant.HEADER_MINSIZE;
+import static io.reticulum.constant.ReticulumConstant.IFAC_MIN_SIZE;
 import static io.reticulum.constant.ReticulumConstant.MTU;
 import static io.reticulum.constant.ResourceConstant.HASHMAP_IS_EXHAUSTED;
 import static io.reticulum.constant.ResourceConstant.MAPHASH_LEN;
@@ -156,14 +164,28 @@ public class Link extends AbstractDestination {
     private Destination owner;
     private Destination destination;
     private Integer expectedHops;
+    /** When this link's path was re-balanced, or null if it has not been. */
+    private Instant rebalanced;
     private Identity remoteIdentity;
     private boolean trackPhyStats = false;
     private Channel channel;
     private boolean initiator;
+    /**
+     * {@code RESPONSE_MAX_GRACE_TIME * 1.125} expressed in milliseconds, for the
+     * default request timeout calculation. The reference constant is in seconds.
+     */
+    private static final long RESPONSE_MAX_GRACE_TIME_MS_SCALED = Math.round(RESPONSE_MAX_GRACE_TIME * 1.125 * 1000);
+
     /** Link cipher mode — one of the MODE_* constants in LinkConstant. */
     private int mode = MODE_DEFAULT;
     /** Negotiated link MTU; defaults to the global MTU until confirmed by handshake. */
     private int mtu = MTU;
+    /**
+     * Maximum data unit for this link, derived from the negotiated {@link #mtu}.
+     * Starts at the value implied by the default MTU and is recomputed by
+     * {@link #updateMdu()} once the MTU is agreed.
+     */
+    private int mdu = MDU;
     private X25519PrivateKeyParameters prv;
     private X25519PublicKeyParameters pub;
     private byte[] pubBytes;
@@ -182,7 +204,7 @@ public class Link extends AbstractDestination {
      * link attempt. Keep this unit and the watchdog's {@code plusMillis()} calls in agreement.
      */
     private int establishmentTimeout;
-    private Fernet fernet;
+    private Token token;
     private byte[] peerPubBytes;
     private X25519PublicKeyParameters peerPub;
     private byte[] peerSigPubBytes;
@@ -236,6 +258,16 @@ public class Link extends AbstractDestination {
         }
 
         if (this.initiator) {
+            // Advertise the next-hop interface's hardware MTU when link MTU
+            // discovery is enabled and that interface declares one; otherwise
+            // stay at the Reticulum default (RNS/Link.py:304-310).
+            var nextHopHwMtu = Transport.getInstance().nextHopInterfaceHwMtu(destination.getHash());
+            if (Reticulum.linkMtuDiscovery() && nonNull(nextHopHwMtu)) {
+                this.mtu = nextHopHwMtu;
+                log.debug("Signalling link MTU of {} bytes for link", nextHopHwMtu);
+            }
+            updateMdu();
+
             // Always include signalling bytes in the link request (mirrors Python behaviour)
             var sb = signallingBytes(this.mtu, this.mode);
             this.requestData = concatArrays(pubBytes, sigPubBytes, sb);
@@ -334,8 +366,44 @@ public class Link extends AbstractDestination {
         setLinkId(packet.getTruncatedHash());
     }
 
+    /**
+     * Recomputes {@link #mdu} from the negotiated {@link #mtu}.
+     * <p>
+     * Mirrors {@code Link.update_mdu} (RNS/Link.py:512). Until this existed the
+     * link kept the MDU implied by the default MTU, so a negotiated increase
+     * bought no extra payload per packet.
+     */
+    public void updateMdu() {
+        this.mdu = mduForMtu(this.mtu);
+    }
+
+    /**
+     * The MDU implied by a given link MTU. Split out from {@link #updateMdu()}
+     * so the formula can be exercised without constructing a Link.
+     *
+     * @param mtu the negotiated link MTU
+     * @return the maximum data unit for that MTU
+     */
+    public static int mduForMtu(final int mtu) {
+        return (int) (Math.floor(
+                (mtu - IFAC_MIN_SIZE - HEADER_MINSIZE - TOKEN_OVERHEAD) / (double) AES128_BLOCKSIZE)
+                * AES128_BLOCKSIZE - 1);
+    }
+
+    /**
+     * @return the link MDU once the link is active, or the default MDU otherwise
+     */
+    public int getMdu() {
+        return status == ACTIVE ? this.mdu : MDU;
+    }
+
     public synchronized void handshake() {
         if (status == PENDING && nonNull(this.prv)) {
+            // Derived key length is selected by the negotiated cipher mode: 32 bytes
+            // for AES-128-CBC, 64 for AES-256-CBC. Throws for any unsupported mode,
+            // mirroring the TypeError raised by the reference implementation.
+            var derivedKeyLength = derivedKeyLength(this.mode);
+
             this.status = LinkStatus.HANDSHAKE;
 
             var agreement = new X25519Agreement();
@@ -346,7 +414,7 @@ public class Link extends AbstractDestination {
 
             var hkdf = new HKDFBytesGenerator(new SHA256Digest());
             hkdf.init(new HKDFParameters(sharedKey, getSalt(), getContext()));
-            var derivedKey = new byte[32];
+            var derivedKey = new byte[derivedKeyLength];
             hkdf.generateBytes(derivedKey, 0, derivedKey.length);
             this.derivedKey = derivedKey;
         } else {
@@ -363,6 +431,9 @@ public class Link extends AbstractDestination {
      * @return 3 big-endian bytes encoding the combined signalling value
      */
     public static byte[] signallingBytes(int mtu, int mode) {
+        if (!ENABLED_MODES.contains(mode)) {
+            throw new IllegalArgumentException("Requested link mode " + modeDescription(mode) + " not enabled");
+        }
         int value = (mtu & MTU_BYTEMASK) | (((mode << 5) & MODE_BYTEMASK) << 16);
         return new byte[]{(byte) (value >> 16), (byte) (value >> 8), (byte) value};
     }
@@ -415,6 +486,34 @@ public class Link extends AbstractDestination {
     }
 
     /**
+     * Return a copy of a link-request data field with its MTU signalling bytes
+     * replaced, so the request advertises {@code mtu} instead.
+     * <p>
+     * Used by {@code Transport} to clamp an advertised MTU down to what an
+     * interface can carry ({@code RNS/Transport.py:2556,2082}).
+     *
+     * @throws IllegalArgumentException if {@code mode} is not an enabled mode
+     */
+    public static byte[] withClampedMtu(byte[] data, int mtu, int mode) {
+        var clamped = signallingBytes(mtu, mode);
+        var rewritten = Arrays.copyOf(data, getLength(data));
+        System.arraycopy(clamped, 0, rewritten, getLength(data) - LINK_MTU_SIZE, LINK_MTU_SIZE);
+
+        return rewritten;
+    }
+
+    /**
+     * Return a copy of a link-request data field with its MTU signalling bytes
+     * removed, so the link falls back to the Reticulum default MTU.
+     * <p>
+     * Used by {@code Transport} where an interface declares no hardware MTU at
+     * all ({@code RNS/Transport.py:2553,2071}).
+     */
+    public static byte[] withoutMtuSignalling(byte[] data) {
+        return Arrays.copyOf(data, getLength(data) - LINK_MTU_SIZE);
+    }
+
+    /**
      * Extract the cipher mode from a link-request packet's data.
      *
      * @param data raw link-request data field
@@ -464,9 +563,17 @@ public class Link extends AbstractDestination {
                 // Strip and remember signalling bytes if the proof is extended-size
                 byte[] sb = new byte[0];
                 if (getLength(data) == extLen) {
+                    // The responder must confirm the mode we requested; a mismatch
+                    // means the peers would derive different key lengths.
+                    var proofMode = modeFromLpPacket(data);
+                    if (proofMode != this.mode) {
+                        throw new IllegalStateException(
+                                "Invalid link mode " + modeDescription(proofMode) + " in link request proof");
+                    }
                     Integer confirmedMtu = mtuFromLpPacket(data);
                     if (confirmedMtu != null) {
                         this.mtu = confirmedMtu;
+                        updateMdu();
                     }
                     sb   = signallingBytes(this.mtu, this.mode);
                     data = subarray(data, 0, baseLen);
@@ -559,7 +666,6 @@ public class Link extends AbstractDestination {
      * @param timeout An optional timeout in seconds for the request. If *None* is supplied it will be calculated based on link RTT.
      * @return A {@link RequestReceipt} instance if the request was sent. Or null if it was not.
      */
-    @SneakyThrows
     public RequestReceipt request(
             String path,
             byte[] data,
@@ -567,6 +673,24 @@ public class Link extends AbstractDestination {
             Consumer<RequestReceipt> failedCallback,
             Consumer<RequestReceipt> progressCallback,
             Long timeout
+    ) {
+        return request(path, data, responseCallback, failedCallback, progressCallback, timeout, null);
+    }
+
+    /**
+     * @param maxResponseSize largest accepted response in bytes, or null for no
+     *                        limit. An oversized response fails the request
+     *                        instead of being delivered.
+     */
+    @SneakyThrows
+    public RequestReceipt request(
+            String path,
+            byte[] data,
+            Consumer<RequestReceipt> responseCallback,
+            Consumer<RequestReceipt> failedCallback,
+            Consumer<RequestReceipt> progressCallback,
+            Long timeout,
+            Integer maxResponseSize
     ) {
         byte[] requestPathHash = truncatedHash(path.getBytes(UTF_8));
         var unpackedRequest = new UnpackedRequest(Instant.now(), requestPathHash, data);
@@ -576,10 +700,14 @@ public class Link extends AbstractDestination {
             packedRequest = packer.toByteArray();
         }
 
-        long localTimeout = Optional.of(timeout)
-                .orElse(this.rtt * this.trafficTimeoutFactor * RESPONSE_MAX_GRACE_TIME / 4);
+        // RNS/Link.py:491 — rtt*traffic_timeout_factor + RESPONSE_MAX_GRACE_TIME*1.125.
+        // Python works in seconds, this class in milliseconds, so the grace term is
+        // scaled accordingly. Optional.ofNullable, not Optional.of: a null timeout is
+        // the documented "derive from RTT" case, and Optional.of would throw on it.
+        long localTimeout = Optional.ofNullable(timeout)
+                .orElse(this.rtt * this.trafficTimeoutFactor + RESPONSE_MAX_GRACE_TIME_MS_SCALED);
 
-        if (packedRequest.length < MDU) {
+        if (packedRequest.length <= this.mdu) {
             var requestPacket = new Packet(this, packedRequest, DATA, REQUEST);
             var packetReceipt = requestPacket.send();
 
@@ -588,7 +716,7 @@ public class Link extends AbstractDestination {
             } else {
                 packetReceipt.setTimeout(localTimeout);
 
-                return new RequestReceipt(
+                var receipt = new RequestReceipt(
                         this,
                         packetReceipt,
                         responseCallback,
@@ -597,13 +725,16 @@ public class Link extends AbstractDestination {
                         localTimeout,
                         packedRequest.length
                 );
+                receipt.setMaxResponseSize(maxResponseSize);
+
+                return receipt;
             }
         } else {
             var requestId = truncatedHash(packedRequest);
             log.debug("Sending request {} as resource.", requestId);
             var requestResource = new Resource(packedRequest, this, requestId, false, localTimeout);
 
-            return new RequestReceipt(
+            var receipt = new RequestReceipt(
                     this,
                     requestResource,
                     responseCallback,
@@ -612,6 +743,9 @@ public class Link extends AbstractDestination {
                     localTimeout,
                     packedRequest.length
             );
+            receipt.setMaxResponseSize(maxResponseSize);
+
+            return receipt;
         }
     }
 
@@ -944,6 +1078,16 @@ public class Link extends AbstractDestination {
         };
     }
 
+    /**
+     * @return true if a request of this packed size is within the destination's
+     *         configured limit, or if no limit is set
+     */
+    private boolean requestSizeAccepted(final int packedRequestSize) {
+        var maxRequestSize = destination.getMaxRequestSize();
+
+        return isNull(maxRequestSize) || packedRequestSize <= maxRequestSize;
+    }
+
     private void sendKeepalive() {
         var keepalivePacket = new Packet(this, new byte[]{(byte) 0xFF}, PacketContextType.KEEPALIVE);
         keepalivePacket.send();
@@ -977,16 +1121,27 @@ public class Link extends AbstractDestination {
 
                 if (allowed) {
                     log.debug("Handling request {}  for: {}", Hex.encodeHexString(requestId), path);
-                    var response = responseGenerator.apply(new Request(path, requestData, requestId, linkId, remoteIdentity, requestedAt));
-                    if (nonNull(response)) {
-                        try (var packer = MessagePack.newDefaultBufferPacker()) {
-                            packer.packValue(new PackedResponse(requestId, response).toValue());
-                            var packedResponse = packer.toByteArray();
+                    var autoCompress = requestHandler.isAutoCompress();
+                    var response = responseGenerator.generate(
+                            new Request(path, requestData, requestId, linkId, remoteIdentity, requestedAt));
 
-                            if (packedResponse.length <= MDU) {
-                                new Packet(this, packedResponse, DATA, RESPONSE).send();
-                            } else {
-                                 var responseResource = new Resource(packedResponse, this, requestId, true);
+                    if (nonNull(response)) {
+                        if (response.isFileResponse()) {
+                            // A file response streams as a resource, with any metadata
+                            // riding along inside it (RNS/Link.py:846).
+                            new Resource(response.getFile(), this, response.getMetadata(), null, 1, null,
+                                    requestId, true, null, autoCompress, null, true);
+                        } else {
+                            try (var packer = MessagePack.newDefaultBufferPacker()) {
+                                packer.packValue(new PackedResponse(requestId, response.getData()).toValue());
+                                var packedResponse = packer.toByteArray();
+
+                                if (packedResponse.length <= this.mdu) {
+                                    new Packet(this, packedResponse, DATA, RESPONSE).send();
+                                } else {
+                                    new Resource(packedResponse, this, null, null, null, requestId, true, null,
+                                            autoCompress, null, true);
+                                }
                             }
                         }
                     }
@@ -1001,6 +1156,25 @@ public class Link extends AbstractDestination {
     }
 
     private void handleResponse(byte[] requestId, byte[] responseData, int responseSize, int responseTransferSize) {
+        handleResponse(requestId, responseData, responseSize, responseTransferSize, null, false, false);
+    }
+
+    /**
+     * Delivers a response to its pending request.
+     *
+     * @param metadata     metadata from a file response, or null
+     * @param updateSizes  whether to record the response and transfer sizes
+     * @param checkSize    whether to enforce the requester's max response size
+     */
+    private void handleResponse(
+            byte[] requestId,
+            byte[] responseData,
+            int responseSize,
+            int responseTransferSize,
+            Object metadata,
+            boolean updateSizes,
+            boolean checkSize
+    ) {
         if (status == ACTIVE) {
             pendingRequests.stream()
                     .filter(pendingRequest -> Arrays.equals(pendingRequest.getRequestId(), requestId))
@@ -1008,9 +1182,25 @@ public class Link extends AbstractDestination {
                     .flatMap(
                             pendingRequest -> {
                                 try {
-                                    pendingRequest.setResponseSize(responseSize);
-                                    pendingRequest.setResponseTransferSize(responseTransferSize);
-                                    pendingRequest.responseReceived(responseData);
+                                    var maxResponseSize = pendingRequest.getMaxResponseSize();
+                                    var sizeOk = isFalse(checkSize) || isNull(maxResponseSize)
+                                            || responseSize <= maxResponseSize;
+
+                                    if (updateSizes) {
+                                        pendingRequest.setResponseSize(responseSize);
+                                        pendingRequest.setResponseTransferSize(
+                                                pendingRequest.getResponseTransferSize() + responseTransferSize);
+                                    } else {
+                                        pendingRequest.setResponseSize(responseSize);
+                                        pendingRequest.setResponseTransferSize(responseTransferSize);
+                                    }
+
+                                    if (sizeOk) {
+                                        pendingRequest.responseReceived(responseData, metadata);
+                                    } else {
+                                        log.debug("Rejected response with excessive size {} on {}", responseSize, this);
+                                        pendingRequest.responseRejected();
+                                    }
                                 } catch (Exception e) {
                                     log.error("Error occurred while handling response.", e);
                                 }
@@ -1038,10 +1228,21 @@ public class Link extends AbstractDestination {
     @SneakyThrows
     private void responseResourceConcluded(@NonNull Resource resource) {
         if (resource.getStatus() == ResourceStatus.COMPLETE) {
+            // A response resource carrying metadata is a file response: hand the
+            // payload over as-is rather than unpacking a [request_id, response]
+            // structure that is not there (RNS/Link.py:899-903).
+            if (resource.isHasMetadata()) {
+                handleResponse(resource.getRequestId(), resource.getData(), resource.getTotalSize(),
+                        resource.getSize(), resource.getUnpackedMetadata(), true, true);
+
+                return;
+            }
+
             try (var unpacker = MessagePack.newDefaultUnpacker(resource.getData())) {
                 var unpackedResponseValue = unpacker.unpackValue().asArrayValue();
                 var unpackedResponse = UnpackedResponse.fromValue(unpackedResponseValue);
-                handleResponse(unpackedResponse.getRequestId(), unpackedResponse.getResponseData(), resource.getTotalSize(), resource.getSize());
+                handleResponse(unpackedResponse.getRequestId(), unpackedResponse.getResponseData(),
+                        resource.getTotalSize(), resource.getSize(), null, true, true);
             }
         } else {
             log.debug("Incoming response resource failed with status: {}", resource.getStatus());
@@ -1148,9 +1349,14 @@ public class Link extends AbstractDestination {
                             var requestId = packet.getTruncatedHash();
                             var packetRequest = decrypt(packet.getData());
                             if (nonNull(packetRequest)) {
-                                try (var unpacker = MessagePack.newDefaultUnpacker(packetRequest)) {
-                                    var unpackedRequestValue = unpacker.unpackValue().asArrayValue();
-                                    handleRequest(requestId, UnpackedRequest.fromValue(unpackedRequestValue));
+                                if (requestSizeAccepted(packetRequest.length)) {
+                                    try (var unpacker = MessagePack.newDefaultUnpacker(packetRequest)) {
+                                        var unpackedRequestValue = unpacker.unpackValue().asArrayValue();
+                                        handleRequest(requestId, UnpackedRequest.fromValue(unpackedRequestValue));
+                                    }
+                                } else {
+                                    log.debug("Ignored request with excessive size {} on {}",
+                                            packetRequest.length, destination);
                                 }
                                 updatePhyStats(packet);
                             }
@@ -1195,11 +1401,29 @@ public class Link extends AbstractDestination {
                             updatePhyStats(packet);
 
                             if (ResourceAdvertisement.isRequest(packet)) {
-                                Resource.accept(packet, this::requestResourceConcluded);
+                                if (requestSizeAccepted(ResourceAdvertisement.readSize(packet))) {
+                                    Resource.accept(packet, this::requestResourceConcluded);
+                                } else {
+                                    Resource.reject(packet);
+                                    log.debug("Rejected request with excessive size {} on {}",
+                                            ResourceAdvertisement.readSize(packet), this);
+                                }
                             } else if (ResourceAdvertisement.isResponse(packet)) {
                                 var requestId = ResourceAdvertisement.readRequestId(packet);
                                 for (RequestReceipt pendingRequest : pendingRequests) {
                                     if (Arrays.equals(pendingRequest.getRequestId(), requestId)) {
+                                        // Refuse an oversized response before transferring it
+                                        var maxResponseSize = pendingRequest.getMaxResponseSize();
+                                        if (nonNull(maxResponseSize)
+                                                && ResourceAdvertisement.readSize(packet) > maxResponseSize) {
+                                            Resource.reject(packet);
+                                            pendingRequest.responseRejected();
+                                            log.debug("Rejected response with excessive size {} on {}",
+                                                    ResourceAdvertisement.readSize(packet), this);
+
+                                            continue;
+                                        }
+
                                         var responseResource = Resource.accept(packet, this::responseResourceConcluded, pendingRequest::responseResourceProgress, requestId);
                                         pendingRequest.setResponseSize(ResourceAdvertisement.readSize(packet));
                                         pendingRequest.setResponseTransferSize(ResourceAdvertisement.readTransferSize(packet));
@@ -1325,17 +1549,17 @@ public class Link extends AbstractDestination {
 
     public byte[] encrypt(@NonNull final byte[] plaintext) {
         try {
-            if (isNull(fernet)) {
+            if (isNull(token)) {
                 try {
-                    fernet = new Fernet(derivedKey);
+                    token = new Token(derivedKey);
                 } catch (Exception e) {
-                    log.error("Could not {}  instantiate Fernet while performin encryption on link.", this, e);
+                    log.error("Could not instantiate token while performing encryption on link {}.", this, e);
                     throw e;
                 }
             }
 
-            return fernet.encrypt(plaintext);
-        } catch (IOException e) {
+            return token.encrypt(plaintext);
+        } catch (Exception e) {
             log.error("Encryption on link {} failed.", this, e);
             throw new RuntimeException(e);
         }
@@ -1343,14 +1567,19 @@ public class Link extends AbstractDestination {
 
     public byte[] decrypt(byte[] data) {
         try {
-            if (isNull(fernet)) {
-                fernet = new Fernet(derivedKey);
+            if (isNull(token)) {
+                token = new Token(derivedKey);
             }
 
-            return fernet.decrypt(data);
+            return token.decrypt(data);
 
         } catch (Exception e) {
-            log.error("Decryption failed on link {}", this, e);
+            // Message only, no stack trace. This fires once per packet on any link
+            // whose peer derived a different key — an old peer that still uses
+            // AES-128 produces one per packet for the life of the link — and the
+            // trace is the same 30-odd Netty frames every time. The reference logs
+            // a single line here too (RNS/Link.py decrypt).
+            log.error("Decryption failed on link {}. The contained exception was: {}", this, e.toString());
         }
 
         return null;

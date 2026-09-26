@@ -2,7 +2,7 @@ package io.reticulum.destination;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.reticulum.Transport;
-import io.reticulum.cryptography.Fernet;
+import io.reticulum.cryptography.Token;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.ConnectionInterface;
 import io.reticulum.link.Link;
@@ -120,7 +120,9 @@ public class Destination extends AbstractDestination {
     private byte[] defaultAppData;
     private Object callback;
     private Object proofcallback;
-    private Fernet prv;
+    /** Largest accepted request in bytes, or null for no limit. */
+    private Integer maxRequestSize;
+    private Token prv;
     private byte[] prvBytes;
 
     @SneakyThrows
@@ -218,14 +220,56 @@ public class Destination extends AbstractDestination {
             final RequestPolicy allow,
             final List<byte[]> allowedList
     ) {
+        registerRequestHandler(
+                path,
+                request -> {
+                    var data = responseGenerator.apply(request);
+
+                    return isNull(data) ? null : Response.of(data);
+                },
+                allow,
+                allowedList,
+                true
+        );
+    }
+
+    /**
+     * Registers a request handler whose generator may return either a byte
+     * payload or a file with metadata.
+     *
+     * @param path              the request path
+     * @param responseGenerator produces the response, or null to send nothing
+     * @param allow             who may call this handler
+     * @param allowedList       identity hashes permitted when allow is ALLOW_LIST
+     * @param autoCompress      whether resource responses are auto-compressed
+     */
+    public void registerRequestHandler(
+            @NonNull final String path,
+            final ResponseGenerator responseGenerator,
+            final RequestPolicy allow,
+            final List<byte[]> allowedList,
+            final boolean autoCompress
+    ) {
         if (path.isEmpty()) {
             throw new IllegalArgumentException("Invalid path specified");
         }
 
         requestHandlers.put(
                 Hex.encodeHexString(truncatedHash(path.getBytes(UTF_8))),
-                new RequestHandler(path, responseGenerator, allow, allowedList)
+                new RequestHandler(path, responseGenerator, allow, allowedList, autoCompress)
         );
+    }
+
+    /**
+     * Sets the largest request this destination will accept, in bytes, or null
+     * for no limit. Requests exceeding it are rejected before the handler runs.
+     */
+    public void setMaxRequestSize(final Integer maxRequestSize) {
+        if (nonNull(maxRequestSize) && maxRequestSize < 0) {
+            throw new IllegalArgumentException("Maximum request size cannot be negative");
+        }
+
+        this.maxRequestSize = maxRequestSize;
     }
 
     /**
@@ -260,8 +304,8 @@ public class Destination extends AbstractDestination {
      */
     public void createKeys() {
         if (type == GROUP) {
-            prvBytes = Fernet.generateFernetKey();
-            prv = new Fernet(prvBytes);
+            prvBytes = Token.generateKey();
+            prv = new Token(prvBytes);
         } else {
             throw new IllegalStateException("Only for DestinationType.GROUP");
         }
@@ -270,7 +314,7 @@ public class Destination extends AbstractDestination {
     /**
      * For a DestinationType.GROUP type destination, returns the symmetric private key.
      *
-     * @return {@link Fernet} key as byte[]
+     * @return {@link Token} key as byte[]
      */
     public byte[] getPrivateKey() {
         if (type == GROUP) {
@@ -288,7 +332,7 @@ public class Destination extends AbstractDestination {
     public void loadPrivateKey(@NonNull byte[] key) {
         if (type == GROUP) {
             this.prvBytes = key;
-            this.prv = new Fernet(this.prvBytes);
+            this.prv = new Token(this.prvBytes);
         } else {
             throw new IllegalStateException("Only for DestinationType.GROUP");
         }
@@ -320,7 +364,7 @@ public class Destination extends AbstractDestination {
                 if (nonNull(prv)) {
                     try {
                         return prv.encrypt(plaintext);
-                    } catch (IOException e) {
+                    } catch (Exception e) {
                         log.error("The GROUP destination could not encrypt data.", e);
                     }
                 } else {

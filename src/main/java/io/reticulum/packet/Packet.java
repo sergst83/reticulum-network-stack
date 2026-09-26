@@ -265,7 +265,17 @@ public class Packet implements TPacket {
             this.createReceipt = false;
         }
 
-        this.mtu = ReticulumConstant.MTU;
+        // A packet bound for a link is sized by that link's negotiated MTU, not the
+        // global default (RNS/Packet.py:154-157). Without this, once link MTU
+        // discovery started negotiating anything above 500 bytes, Resource sliced
+        // parts at the negotiated SDU and pack() then rejected every one of them
+        // as exceeding the MTU.
+        if (nonNull(destination) && destination.getType() == DestinationType.LINK
+                && destination instanceof Link) {
+            this.mtu = ((Link) destination).getMtu();
+        } else {
+            this.mtu = ReticulumConstant.MTU;
+        }
         this.sentAt = null;
         this.packetHash = null;
 

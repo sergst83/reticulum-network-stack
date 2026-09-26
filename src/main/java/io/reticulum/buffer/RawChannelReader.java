@@ -10,6 +10,8 @@ import java.io.InputStream;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 
@@ -26,6 +28,29 @@ public class RawChannelReader extends InputStream {
      */
     public static final int MAX_BUFFER_SIZE =
             Integer.getInteger("io.reticulum.buffer.maxSize", 8 * 1024 * 1024); // 8 MiB
+
+    /**
+     * Shared pool for listener notifications.
+     * <p>
+     * This used to be {@code new Thread(...).start()} per listener per message,
+     * transcribed from the reference ({@code RNS/Buffer.py:161}). Python's message
+     * rates make that survivable; Qortal's do not. One production node reached
+     * {@code Thread-2948623} — nearly three million threads created in under two
+     * days, about eighteen a second sustained — and it was a thread from this site
+     * that reported the heap exhaustion which then wedged the node.
+     * <p>
+     * A cached pool keeps the semantics that matter: notification is still
+     * asynchronous, never blocks the caller (which holds the buffer lock here), and
+     * a slow listener still cannot stall another, because the pool grows on demand.
+     * The only thing that changes is that idle threads are reused for 60 seconds
+     * instead of being created and destroyed per message.
+     */
+    private static final ExecutorService NOTIFIER = Executors.newCachedThreadPool(runnable -> {
+        var thread = new Thread(runnable, "RNS-BufferNotify");
+        thread.setDaemon(true);
+
+        return thread;
+    });
 
     private final int streamId;
     private final Channel channel;
@@ -116,7 +141,15 @@ public class RawChannelReader extends InputStream {
 
                     int readable = bufferedBytes();
                     for (Consumer<Integer> listener : listeners) {
-                        new Thread(() -> listener.accept(readable)).start();
+                        NOTIFIER.execute(() -> {
+                            try {
+                                listener.accept(readable);
+                            } catch (Exception e) {
+                                // A pool thread must not die on a listener's exception,
+                                // or the pool slowly loses capacity.
+                                log.error("Error in RawChannelReader listener (streamId={})", streamId, e);
+                            }
+                        });
                     }
                 } finally {
                     lock.unlock();

@@ -1,0 +1,17 @@
+# Step 5b responder: same listener, but a 1 Mbps bitrate so optimiseMtu() puts
+# its hardware MTU at 2048 — well below what the client will advertise. This is
+# what forces the inbound clamp in Transport to engage.
+reticulum:
+  enable_transport: false
+  share_instance: false
+  panic_on_interface_error: false
+interfaces:
+  "Default Interface":
+    type: AutoInterface
+    enabled: false
+  "Step5 TCP Server":
+    type: TCPServerInterface
+    enabled: true
+    listen_ip: 127.0.0.1
+    listen_port: 42505
+    bitrate: 1000000

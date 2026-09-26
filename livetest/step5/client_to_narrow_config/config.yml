@@ -1,0 +1,15 @@
+# Step 5b initiator: default bitrate (advertises 16384), pointed at the narrow
+# responder on 42505 whose interface can only carry 2048.
+reticulum:
+  enable_transport: false
+  share_instance: false
+  panic_on_interface_error: false
+interfaces:
+  "Default Interface":
+    type: AutoInterface
+    enabled: false
+  "Step5 TCP Client":
+    type: TCPClientInterface
+    enabled: true
+    target_host: 127.0.0.1
+    target_port: 42505

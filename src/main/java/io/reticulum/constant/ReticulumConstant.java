@@ -30,8 +30,8 @@ public class ReticulumConstant {
      * the default value.
      */
     public static final int MTU = 500;
-    public static final int MAX_QUEUED_ANNOUNCES = 16384;
-    public static final int QUEUED_ANNOUNCE_LIFE = 60 * 60 * 24;
+    public static final int MAX_QUEUED_ANNOUNCES = 4096;
+    public static final int QUEUED_ANNOUNCE_LIFE = 60 * 60 * 3;
 
     /**
      * The maximum percentage of interface bandwidth that, at any given time,

@@ -1,0 +1,23 @@
+# Step 6 victim, Java side. Ingress-control timings are scaled down so a full
+# engage -> hold -> release cycle completes in seconds rather than minutes; the
+# reference-side config carries exactly the same values.
+reticulum:
+  enable_transport: true
+  share_instance: false
+  panic_on_interface_error: false
+interfaces:
+  "Default Interface":
+    type: AutoInterface
+    enabled: false
+  "Step6 TCP Server":
+    type: TCPServerInterface
+    enabled: true
+    listen_ip: 127.0.0.1
+    listen_port: 42506
+    ingress_control: true
+    ic_burst_freq_new: 3
+    ic_burst_freq: 3
+    ic_burst_hold: 4
+    ic_burst_penalty: 4
+    ic_held_release_interval: 1
+    ic_max_held_announces: 20

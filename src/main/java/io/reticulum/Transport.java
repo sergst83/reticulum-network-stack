@@ -1,10 +1,13 @@
 package io.reticulum;
 
+import io.reticulum.constant.ReticulumConstant;
 import io.reticulum.constant.TransportConstant;
 import io.reticulum.destination.Destination;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.ConnectionInterface;
+import io.reticulum.interfaces.InterfaceMode;
 import io.reticulum.link.Link;
+import io.reticulum.link.LinkStatus;
 import io.reticulum.packet.Packet;
 import io.reticulum.packet.PacketReceipt;
 import io.reticulum.packet.PacketReceiptStatus;
@@ -49,6 +52,7 @@ import java.math.BigInteger;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Arrays;
 import java.util.Deque;
 import java.util.HashMap;
@@ -56,6 +60,7 @@ import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Queue;
@@ -65,6 +70,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
@@ -81,11 +87,15 @@ import static io.reticulum.constant.ReticulumConstant.ANNOUNCE_CAP;
 import static io.reticulum.constant.ReticulumConstant.DEFAULT_PER_HOP_TIMEOUT;
 import static io.reticulum.constant.ReticulumConstant.HEADER_MINSIZE;
 import static io.reticulum.constant.ReticulumConstant.MAX_QUEUED_ANNOUNCES;
+import static io.reticulum.constant.ReticulumConstant.MINIMUM_BITRATE;
 import static io.reticulum.constant.ReticulumConstant.MTU;
 import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
 import static io.reticulum.constant.TransportConstant.ANNOUNCES_CHECK_INTERVAL;
 import static io.reticulum.constant.TransportConstant.APP_NAME;
+import static io.reticulum.constant.TransportConstant.ALLOW_LINK_PATH_REBALANCE;
 import static io.reticulum.constant.TransportConstant.AP_PATH_TIME;
+import static io.reticulum.constant.TransportConstant.BOUNDARY_SEARCH_MODES;
+import static io.reticulum.constant.TransportConstant.AWAIT_PATH_POLL_INTERVAL;
 import static io.reticulum.constant.TransportConstant.DESTINATION_TIMEOUT;
 import static io.reticulum.constant.TransportConstant.DISCOVER_PATHS_FOR;
 import static io.reticulum.constant.TransportConstant.HASHLIST_MAXSIZE;
@@ -106,7 +116,7 @@ import static io.reticulum.constant.TransportConstant.PATH_REQUEST_GRACE;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_MI;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_RG;
 import static io.reticulum.constant.TransportConstant.PATH_REQUEST_TIMEOUT;
-import static io.reticulum.constant.TransportConstant.RANDOM_BLOBS_MAX_PER_DESTINATION;
+import static io.reticulum.constant.TransportConstant.MAX_RANDOM_BLOBS;
 import static io.reticulum.constant.TransportConstant.RECEIPTS_CHECK_INTERVAL;
 import static io.reticulum.constant.TransportConstant.REVERSE_TIMEOUT;
 import static io.reticulum.constant.TransportConstant.ROAMING_PATH_TIME;
@@ -124,6 +134,7 @@ import static io.reticulum.identity.IdentityKnownDestination.recallAppData;
 import static io.reticulum.identity.IdentityKnownDestination.validateAnnounce;
 import static io.reticulum.interfaces.InterfaceMode.MODE_ACCESS_POINT;
 import static io.reticulum.interfaces.InterfaceMode.MODE_BOUNDARY;
+import static io.reticulum.interfaces.InterfaceMode.MODE_INTERNAL;
 import static io.reticulum.interfaces.InterfaceMode.MODE_ROAMING;
 import static io.reticulum.link.LinkStatus.ACTIVE;
 import static io.reticulum.link.LinkStatus.CLOSED;
@@ -155,6 +166,7 @@ import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.utils.IdentityUtils.getRandomHash;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
+import static java.util.Objects.requireNonNullElse;
 import static java.util.concurrent.Executors.newSingleThreadScheduledExecutor;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.apache.commons.codec.binary.Hex.decodeHex;
@@ -170,6 +182,25 @@ public final class Transport implements ExitHandler {
     private final ReentrantLock savingPathTableLock = new ReentrantLock();
     private final ReentrantLock savingTunnelTableLock = new ReentrantLock();
     private final ReentrantLock jobsLock = new ReentrantLock(true);
+
+    /**
+     * How long {@link #outbound} waits for {@code jobsLock} before dropping the
+     * packet. Generous, because legitimate holders can be slow (a table cull under
+     * announce flooding has been measured in tens of seconds); the point is only to
+     * put a ceiling on a wait that was previously unbounded.
+     */
+    private static final long OUTBOUND_LOCK_TIMEOUT_MS =
+            Long.getLong("io.reticulum.outboundLockTimeoutMs", 120_000L);
+
+    /**
+     * The shorter budget used once the lock looks leaked. Without it, every caller
+     * would burn the full timeout on every packet and the node would crawl rather
+     * than degrade.
+     */
+    private static final long OUTBOUND_LOCK_TIMEOUT_DEGRADED_MS = 1_000L;
+
+    /** Set when a wait for {@code jobsLock} timed out; cleared when one succeeds. */
+    private final AtomicBoolean jobsLockSuspectedLeaked = new AtomicBoolean();
 
     private final AtomicReference<Instant> linksLastChecked = new AtomicReference<>(Instant.EPOCH);
     private final AtomicReference<Instant> announcesLastChecked = new AtomicReference<>(Instant.EPOCH);
@@ -267,7 +298,21 @@ public final class Transport implements ExitHandler {
     /**
      * A list of packet hashes for duplicate detection
      */
-    private final Map<String, byte[]> packetHashMap = new ConcurrentHashMap<>();
+    /**
+     * Rolling duplicate-detection window, as hex packet hashes.
+     * <p>
+     * Two generations, mirroring the reference's {@code packet_hashlist} /
+     * {@code packet_hashlist_prev} ({@code RNS/Transport.py:172-173}): at the cull
+     * point the current set becomes the previous one and a fresh set starts, so
+     * dedup keeps working across the rotation. Clearing outright, as this used to,
+     * dropped the whole window at once and let every duplicate through until it
+     * refilled.
+     * <p>
+     * A set of hashes, not a map to the same bytes: the value was the decoded key
+     * and cost an extra byte[] and reference per entry.
+     */
+    private volatile Set<String> packetHashList = ConcurrentHashMap.newKeySet();
+    private volatile Set<String> packetHashListPrev = ConcurrentHashMap.newKeySet();
     /**
      * A table for keeping track of tagged path requests
      */
@@ -306,7 +351,8 @@ public final class Transport implements ExitHandler {
             // behaviour) and is no longer persisted. Do not load it from storage —
             // a multi-GB legacy collection would be read into memory here and risk
             // OOM at startup. Drop any legacy on-disk collection instead.
-            packetHashMap.clear();
+            packetHashList.clear();
+            packetHashListPrev.clear();
             storage.clearPacketHashList();
             reloadBlacklist();
         }
@@ -767,6 +813,22 @@ public final class Transport implements ExitHandler {
             return;
         }
 
+        // Drop frames larger than the receiving interface ever promised to carry
+        // (RNS/Transport.py:1790). This is the backstop behind MTU negotiation: if
+        // a link ends up over-negotiated, oversized frames are reported here rather
+        // than being silently truncated by the interface (as UDP would do on
+        // AutoInterface). Checked before taking jobsLock — a frame this size is
+        // going nowhere.
+        if (nonNull(iface) && nonNull(iface.getHwMtu())) {
+            var ifacSlack = nonNull(iface.getIfacSize()) ? iface.getIfacSize() : 0;
+            if (getLength(localRaw) > iface.getHwMtu() + ifacSlack) {
+                iface.protocolViolation(
+                        "Frame size exceeded MTU of " + iface.getHwMtu() + " on " + iface);
+
+                return;
+            }
+        }
+
         // tryLock(2ms) enters the fair queue, preventing starvation of outbound() callers.
         // Plain tryLock() barges past waiting threads; with high inbound rate this starves announce.
         try {
@@ -865,7 +927,7 @@ public final class Transport implements ExitHandler {
             }
 
             if (rememberPacketHash) {
-                packetHashMap.put(encodeHexString(packet.getPacketHash()), packet.getPacketHash());
+                packetHashList.add(encodeHexString(packet.getPacketHash()));
                 cache(packet, false);
             }
 
@@ -961,6 +1023,10 @@ public final class Transport implements ExitHandler {
                             var outboundInterface = destinationTable.get(encodeHexString(packet.getDestinationHash())).getInterface();
 
                             if (packet.getPacketType() == LINKREQUEST) {
+                                if (isFalse(clampRelayedLinkRequest(packet, dataPacket, outboundInterface))) {
+                                    return;
+                                }
+
                                 var now = Instant.now();
                                 var proofTimeout =  now
                                         .plusMillis((long) ESTABLISHMENT_TIMEOUT_PER_HOP * Math.max(1, remainingHops))
@@ -1141,13 +1207,37 @@ public final class Transport implements ExitHandler {
 
                             //If we already have a path to the announced destination, but the hop count is equal or less, we'll update our tables.
                             if (packet.getHops() <= hopsEntry.getHops()) {
-                                //Make sure we haven't heard the random blob before, so announces can't be replayed to forge paths.
-                                // TODO: 11.05.2023 Check whether this approach works under all circumstances
-                                if (randomBlobs.stream().noneMatch(bytes -> Arrays.equals(bytes, randomBlob))) {
+                                var pathTimebase = timebaseFromRandomBlobs(randomBlobs);
+                                var unheardBlob = randomBlobs.stream().noneMatch(bytes -> Arrays.equals(bytes, randomBlob));
+
+                                // The announce must be both unheard AND newer than the
+                                // path we hold. Without the timebase comparison an
+                                // announce carrying a fresh blob but an older emission
+                                // timestamp would still displace a newer path
+                                // (RNS/Transport.py:2237).
+                                if (unheardBlob && announceEmitted > pathTimebase) {
                                     markPathUnknownState(packet.getDestinationHash());
                                     shouldAdd = true;
-                                } else {
+                                } else if (announceEmitted != pathTimebase) {
                                     shouldAdd = false;
+                                } else {
+                                    // The same announce arriving again: prefer the
+                                    // interface with higher gravity (RNS/Transport.py:2243).
+                                    var currentGravity = nonNull(hopsEntry.getInterface())
+                                            ? hopsEntry.getInterface().getGravity()
+                                            : null;
+                                    var announceGravity = nonNull(packet.getReceivingInterface())
+                                            ? packet.getReceivingInterface().getGravity()
+                                            : null;
+
+                                    if (isNull(currentGravity) || isNull(announceGravity)
+                                            || announceGravity <= currentGravity) {
+                                        shouldAdd = false;
+                                    } else {
+                                        log.debug("Replacing path table entry for {} with new announce due to higher gravity ({}->{})",
+                                                encodeHexString(packet.getDestinationHash()), currentGravity, announceGravity);
+                                        shouldAdd = true;
+                                    }
                                 }
                             } else {
                                 //If an announce arrives with a larger hop count than we already have in the table,
@@ -1282,7 +1372,7 @@ public final class Transport implements ExitHandler {
                             // unique announce) and is fully serialized on every 12h
                             // savePathTable() dump, which on transport-enabled public
                             // nodes has driven jreticulum.db into multi-GB territory.
-                            while (randomBlobs.size() > RANDOM_BLOBS_MAX_PER_DESTINATION) {
+                            while (randomBlobs.size() > MAX_RANDOM_BLOBS) {
                                 randomBlobs.remove(0);
                             }
 
@@ -1389,34 +1479,38 @@ public final class Transport implements ExitHandler {
                                 }
                             }
 
-                            //If we have any waiting discovery path requests for this destination, we retransmit to that
-                            // interface immediately
-                            if (discoveryPathRequests.containsKey(encodeHexString(packet.getDestinationHash()))) {
-                                var prEntry = discoveryPathRequests.get(encodeHexString(packet.getDestinationHash()));
-                                attachedInterface = prEntry.getRequestingInterface();
+                            // If we have any waiting discovery path requests for this
+                            // destination, answer every interface waiting on it, not just
+                            // the first — several peers behind a transport node routinely
+                            // ask for the same destination, and the reference batches them
+                            // onto one request (RNS/Transport.py:2433-2454). The entry is
+                            // removed as it is served, as the reference pops it.
+                            var prEntry = discoveryPathRequests.remove(encodeHexString(packet.getDestinationHash()));
+                            if (nonNull(prEntry)) {
+                                for (ConnectionInterface requestingInterface : prEntry.getRequestingInterfaces()) {
+                                    log.debug("Got matching announce, answering waiting discovery path request for {} on {}",
+                                            encodeHexString(packet.getDestinationHash()), requestingInterface.getInterfaceName()
+                                    );
+                                    var announceIdentity = recall(packet.getDestinationHash());
+                                    var announceDestination = new Destination(announceIdentity, OUT, SINGLE, "unknown", "unknown");
+                                    announceDestination.setHash(packet.getDestinationHash());
+                                    announceDestination.setHexHash(encodeHexString(announceDestination.getHash()));
+                                    var announceData = packet.getData();
 
-                                log.debug("Got matching announce, answering waiting discovery path request for {} on {}",
-                                        encodeHexString(packet.getDestinationHash()), attachedInterface.getInterfaceName()
-                                );
-                                var announceIdentity = recall(packet.getDestinationHash());
-                                var announceDestination = new Destination(announceIdentity, OUT, SINGLE, "unknown", "unknown");
-                                announceDestination.setHash(packet.getDestinationHash());
-                                announceDestination.setHexHash(encodeHexString(announceDestination.getHash()));
-                                var announceData = packet.getData();
-
-                                var newAnnounce = new Packet(
-                                        announceDestination,
-                                        announceData,
-                                        ANNOUNCE,
-                                        PATH_RESPONSE,
-                                        HEADER_2,
-                                        TRANSPORT,
-                                        identity.getHash(),
-                                        attachedInterface
-                                );
-                                newAnnounce.setHops(packet.getHops());
-                                final var _a3 = newAnnounce;
-                                deferredIO.add(_a3::send);
+                                    var newAnnounce = new Packet(
+                                            announceDestination,
+                                            announceData,
+                                            ANNOUNCE,
+                                            PATH_RESPONSE,
+                                            HEADER_2,
+                                            TRANSPORT,
+                                            identity.getHash(),
+                                            requestingInterface
+                                    );
+                                    newAnnounce.setHops(packet.getHops());
+                                    final var _a3 = newAnnounce;
+                                    deferredIO.add(_a3::send);
+                                }
                             }
 
                             var destinationTableEntry = Hops.builder()
@@ -1515,7 +1609,6 @@ public final class Transport implements ExitHandler {
                 if (isNull(packet.getTransportId()) || Arrays.equals(packet.getTransportId(), identity.getHash())) {
                     Destination linkRequestDest = null;
                     for (Destination destination : destinations) {
-                        // Note: TODO - implement python path_mtu, mode part
                         if (
                                 Arrays.equals(destination.getHash(), packet.getDestinationHash())
                                         && destination.getType() == packet.getDestinationType()
@@ -1525,7 +1618,7 @@ public final class Transport implements ExitHandler {
                             break;
                         }
                     }
-                    if (linkRequestDest != null) {
+                    if (linkRequestDest != null && clampInboundLinkRequest(packet)) {
                         // Release jobsLock before dispatch to prevent ABBA deadlock:
                         // destination.receive() on a link request triggers Link establishment
                         // which may acquire channel.lock, while channel.send() holds channel.lock
@@ -1660,11 +1753,17 @@ public final class Transport implements ExitHandler {
                                 // be discarded without major issues, but it is kept
                                 // for now to ensure backwards compatibility.
 
+                                if (packet.getHops() != link.getExpectedHops()
+                                        && link.getStatus() == LinkStatus.PENDING
+                                        && ALLOW_LINK_PATH_REBALANCE) {
+                                    rebalanceLinkPath(link, packet);
+                                }
+
                                 if ((packet.getHops() <= link.getExpectedHops()) || (link.getExpectedHops() == TransportConstant.PATHFINDER_M)) {
                                     // Add this packet to the filter hashlist if we
                                     // have determined that it's actually destined
                                     // for this system, and then validate the proof
-                                    packetHashMap.put(encodeHexString(packet.getHash()), packet.getHash());
+                                    packetHashList.add(encodeHexString(packet.getHash()));
                                     link.validateProof(packet);
                                 }
                             }
@@ -1760,6 +1859,10 @@ public final class Transport implements ExitHandler {
     // TODO: 12.05.2023 подлежит рефакторингу. (subject to refactoring)
     public boolean outbound(@NonNull final Packet packet) {
         var outboundSpinStart = System.currentTimeMillis();
+        var waitBudgetMs = jobsLockSuspectedLeaked.get()
+                ? OUTBOUND_LOCK_TIMEOUT_DEGRADED_MS
+                : OUTBOUND_LOCK_TIMEOUT_MS;
+
         while (isFalse(jobsLock.tryLock())) {
             try {
                 MILLISECONDS.sleep(5);
@@ -1772,6 +1875,27 @@ public final class Transport implements ExitHandler {
                 return false;
             }
             long outboundWaitedMs = System.currentTimeMillis() - outboundSpinStart;
+
+            // Give up rather than wait forever. The reference blocks indefinitely on
+            // its jobs_lock, which is safe there because Python's `with` always
+            // releases it. Java's finally does not offer that guarantee: an
+            // OutOfMemoryError can abort at an arbitrary bytecode index — including
+            // during the deoptimisation that materialises scalar-replaced objects —
+            // and leave the lock held by a thread that has since gone back to its
+            // pool. Observed in production: a node OOMed, a scheduler thread kept
+            // jobsLock while idle, and every outbound() here spun for ten hours until
+            // the node was killed. Dropping packets degrades the node; spinning
+            // forever ends it.
+            if (outboundWaitedMs > waitBudgetMs) {
+                if (jobsLockSuspectedLeaked.compareAndSet(false, true)) {
+                    log.error("outbound() gave up after {}ms waiting for jobsLock — it appears "
+                                    + "to be leaked. Holder: {}. Dropping outbound packets and "
+                                    + "retrying briefly until it is released.",
+                            outboundWaitedMs, jobsLock);
+                }
+
+                return false;
+            }
             if (outboundWaitedMs > 1000 && outboundWaitedMs % 5000 < 10) {
                 log.warn("outbound() spin-waited {}ms for jobsLock; lock state: {}", outboundWaitedMs, jobsLock);
             }
@@ -1786,6 +1910,10 @@ public final class Transport implements ExitHandler {
                     }
                 });
             }
+        }
+
+        if (jobsLockSuspectedLeaked.compareAndSet(true, false)) {
+            log.warn("jobsLock is available again — resuming normal outbound processing");
         }
 
         var sent = false;
@@ -1904,67 +2032,25 @@ public final class Transport implements ExitHandler {
 
                     if (packet.getPacketType() == ANNOUNCE) {
                         if (isNull(packet.getAttachedInterface())) {
-                            if (anInterface.getMode() == MODE_ACCESS_POINT) {
-                                log.debug("Blocking announce broadcast on {} due to AP mode", anInterface.getInterfaceName());
+                            // Mirrors the branch order of RNS/Transport.py:1458-1517.
+                            // Both of these are needed by every branch below, so they
+                            // are resolved once rather than per branch.
+                            var fromInterface = nextHopInterface(packet.getDestinationHash());
+                            var localDestination = destinations.stream()
+                                    .filter(destination -> Arrays.equals(destination.getHash(), packet.getDestinationHash()))
+                                    .findFirst()
+                                    .orElse(null);
+
+                            var gate = announceModeGate(anInterface, fromInterface, nonNull(localDestination));
+                            if (nonNull(gate)) {
+                                log.debug("Blocking announce broadcast on {}: {}",
+                                        anInterface.getInterfaceName(), gate);
                                 shouldTransmit = false;
-                            } else if (anInterface.getMode() == MODE_ROAMING) {
-                                var localDestination = destinations.stream()
-                                        .filter(destination -> Arrays.equals(destination.getHash(), packet.getDestinationHash()))
-                                        .findFirst()
-                                        .orElse(null);
-                                if (nonNull(localDestination)) {
-                                    //log.debug("Allowing announce broadcast on roaming-mode interface from instance-local destination")
-                                    //pass
-                                } else {
-                                    var fromInterface = nextHopInterface(packet.getDestinationHash());
-                                    if (isNull(fromInterface) || isNull(fromInterface.getMode())) {
-                                        shouldTransmit = false;
-                                        if (isNull(fromInterface)) {
-                                            log.debug("Blocking announce broadcast on {} since next hop interface doesn't exist",
-                                                    anInterface.getInterfaceName());
-                                        } else if (isNull(fromInterface.getMode())) {
-                                            log.debug("Blocking announce broadcast on {} since next hop interface has no mode configured",
-                                                    anInterface.getInterfaceName());
-                                        }
-                                    } else {
-                                        if (fromInterface.getMode() == MODE_ROAMING) {
-                                            log.debug("Blocking announce broadcast on {} due to roaming-mode next-hop interface",
-                                                    anInterface.getInterfaceName());
-                                            shouldTransmit = false;
-                                        } else if (fromInterface.getMode() == MODE_BOUNDARY) {
-                                            log.debug("Blocking announce broadcast on {}  due to boundary-mode next-hop interfacee",
-                                                    anInterface.getInterfaceName());
-                                            shouldTransmit = false;
-                                        }
-                                    }
-                                }
-                            } else if (anInterface.getMode() == MODE_BOUNDARY) {
-                                var localDestination = destinations.stream()
-                                        .filter(destination -> Arrays.equals(destination.getHash(), packet.getDestinationHash()))
-                                        .findFirst()
-                                        .orElse(null);
-                                if (nonNull(localDestination)) {
-                                    //log.debug("Allowing announce broadcast on boundary-mode interface from instance-local destination")
-                                    //pass
-                                } else {
-                                    var fromInterface = nextHopInterface(packet.getDestinationHash());
-                                    if (isNull(fromInterface) || isNull(fromInterface.getMode())) {
-                                        shouldTransmit = false;
-                                        if (isNull(fromInterface)) {
-                                            log.debug("Blocking announce broadcast on {} since next hop interface doesn't exist",
-                                                    anInterface.getInterfaceName());
-                                        } else if (isNull(fromInterface.getMode())) {
-                                            log.debug("Blocking announce broadcast on {} since next hop interface has no mode configured",
-                                                    anInterface.getInterfaceName());
-                                        }
-                                    } else {
-                                        if (fromInterface.getMode() == MODE_ROAMING) {
-                                            log.debug("Blocking announce broadcast on {} due to roaming-mode next-hop interface",
-                                                    anInterface.getInterfaceName());
-                                            shouldTransmit = false;
-                                        }
-                                    }
-                                }
+                            } else if (anInterface.getMode() == MODE_ACCESS_POINT
+                                    || anInterface.getMode() == MODE_INTERNAL
+                                    || anInterface.getMode() == MODE_ROAMING
+                                    || anInterface.getMode() == MODE_BOUNDARY) {
+                                // Permitted by the mode gate above; no announce cap applies
                             } else {
                                 // Currently, annouces originating locally are always
                                 // allowed, and do not conform to bandwidth caps.
@@ -2040,7 +2126,7 @@ public final class Transport implements ExitHandler {
 
                     if (shouldTransmit) {
                         if (isFalse(storedHash)) {
-                            packetHashMap.put(encodeHexString(packet.getPacketHash()), packet.getPacketHash());
+                            packetHashList.add(encodeHexString(packet.getPacketHash()));
                             storedHash = true;
                         }
 
@@ -2109,13 +2195,25 @@ public final class Transport implements ExitHandler {
         return nonNull(nextHopInterface) ? nextHopInterface.getBitrate() : null;
     }
 
-    private Integer nextHopPerBitLatency(byte[] destinationHash) {
+    /**
+     * Seconds required to transmit one bit over the next-hop interface.
+     * <p>
+     * This used to be {@code 1 / bitrate} in integer arithmetic, which is 0 for
+     * every bitrate above 1 bit/s. Every timeout derived from it therefore
+     * ignored link speed entirely — {@link #firstHopTimeout} collapsed to a flat
+     * {@code DEFAULT_PER_HOP_TIMEOUT}, which is far too short to establish a
+     * link over a slow radio interface.
+     */
+    private Double nextHopPerBitLatency(byte[] destinationHash) {
         var nextHopInterfaceBitrate = nextHopInterfaceBitrate(destinationHash);
 
-        return nonNull(nextHopInterfaceBitrate) ? 1 / nextHopInterfaceBitrate : null;
+        return nonNull(nextHopInterfaceBitrate) && nextHopInterfaceBitrate > 0
+                ? 1.0 / nextHopInterfaceBitrate
+                : null;
     }
 
-    private Integer nextHopPerByteLatency(byte[] destinationHash) {
+    /** Seconds required to transmit one byte over the next-hop interface. */
+    private Double nextHopPerByteLatency(byte[] destinationHash) {
         var perBitLatency = nextHopPerBitLatency(destinationHash);
 
         return nonNull(perBitLatency) ? perBitLatency * 8 : null;
@@ -2125,10 +2223,327 @@ public final class Transport implements ExitHandler {
      * @param destinationHash A Destination object's Hash property
      * @return milliseconds
      */
+    /**
+     * Time to allow for the first hop towards a destination, in
+     * <b>milliseconds</b>: one MTU across the next-hop interface plus the
+     * per-hop grace.
+     */
     public int firstHopTimeout(byte[] destinationHash) {
-        var latency = nextHopPerByteLatency(destinationHash);
+        return firstHopTimeoutForLatency(nextHopPerByteLatency(destinationHash));
+    }
 
-        return nonNull(latency) ? MTU * latency * 1_000 + DEFAULT_PER_HOP_TIMEOUT : DEFAULT_PER_HOP_TIMEOUT;
+    /**
+     * The first hop timeout formula, split out so it can be exercised without a
+     * running Transport.
+     *
+     * @param perByteLatency seconds per byte on the next-hop interface, or null
+     * @return timeout in milliseconds
+     */
+    public static int firstHopTimeoutForLatency(final Double perByteLatency) {
+        return nonNull(perByteLatency)
+                ? (int) Math.round(MTU * perByteLatency * 1_000) + DEFAULT_PER_HOP_TIMEOUT
+                : DEFAULT_PER_HOP_TIMEOUT;
+    }
+
+    /**
+     * Seconds per byte for a given interface bitrate, or null if unknown.
+     */
+    public static Double perByteLatency(final Integer bitrate) {
+        return nonNull(bitrate) && bitrate > 0 ? 8.0 / bitrate : null;
+    }
+
+    /**
+     * Decides whether an announce may be broadcast out of one interface, given
+     * the interface its destination's next hop lies on.
+     * <p>
+     * Mirrors the branch chain at {@code RNS/Transport.py:1458-1517}, in the same
+     * order — the order matters, since several conditions overlap.
+     *
+     * @param outInterface     the interface the announce would go out on
+     * @param fromInterface    the next-hop interface towards the destination, or null
+     * @param localDestination whether the announce is for an instance-local destination
+     * @return null if the announce may be transmitted, otherwise the reason it is blocked
+     */
+    public static String announceModeGate(
+            final ConnectionInterface outInterface,
+            final ConnectionInterface fromInterface,
+            final boolean localDestination
+    ) {
+        if (isFalse(localDestination) && isNull(fromInterface)) {
+            return "next hop interface doesn't exist";
+        }
+
+        if (isFalse(localDestination)
+                && isFalse(outInterface.isAnnouncesFromInternal())
+                && fromInterface.getMode() == MODE_INTERNAL) {
+            return "internal-mode next hop interface";
+        }
+
+        if (outInterface.getMode() == MODE_ACCESS_POINT) {
+            return "AP mode";
+        }
+
+        if (isFalse(localDestination) && outInterface.getMode() == MODE_INTERNAL) {
+            if (isNull(fromInterface.getMode())) {
+                return "next hop interface has no mode configured";
+            }
+            if (Boolean.TRUE.equals(fromInterface.getAnnouncesToInternal())) {
+                return null;
+            }
+            if (fromInterface.getMode() == MODE_BOUNDARY) {
+                return "boundary-mode next-hop interface";
+            }
+
+            return null;
+        }
+
+        if (outInterface.getMode() == MODE_ROAMING) {
+            if (localDestination) {
+                return null;
+            }
+            if (isNull(fromInterface.getMode())) {
+                return "next hop interface has no mode configured";
+            }
+            if (fromInterface.getMode() == MODE_ROAMING) {
+                return "roaming-mode next-hop interface";
+            }
+            if (fromInterface.getMode() == MODE_BOUNDARY) {
+                return "boundary-mode next-hop interface";
+            }
+
+            return null;
+        }
+
+        if (outInterface.getMode() == MODE_BOUNDARY) {
+            if (localDestination) {
+                return null;
+            }
+            if (isNull(fromInterface.getMode())) {
+                return "next hop interface has no mode configured";
+            }
+            if (fromInterface.getMode() == MODE_ROAMING) {
+                return "roaming-mode next-hop interface";
+            }
+
+            return null;
+        }
+
+        return null;
+    }
+
+    /**
+     * Largest frame the next-hop interface towards a destination can carry, or
+     * null when that interface does not declare one.
+     * <p>
+     * Only interfaces that autoconfigure or fix their MTU report a value; for
+     * anything else the link stays at the Reticulum default
+     * ({@code RNS/Transport.py:3173}).
+     */
+    /**
+     * Clamp a relayed link request's MTU signalling to what this hop can carry
+     * end to end, rewriting the outgoing packet's data.
+     * <p>
+     * Mirrors {@code RNS/Transport.py:2062-2087}. A transport node sits between
+     * two interfaces that may have very different widths, so the advertised MTU
+     * has to come down to the narrower of the two before it is passed on —
+     * otherwise the far end negotiates an MTU this hop cannot forward.
+     * <p>
+     * One deliberate deviation: where the previous hop declares no hardware MTU,
+     * the reference evaluates {@code min(nh_mtu, None)}, which raises and drops
+     * the request. Here that case simply clamps to the next-hop MTU, which is
+     * evidently the intent.
+     *
+     * @return true if the packet should be forwarded, false if it was dropped
+     */
+    private boolean clampRelayedLinkRequest(Packet packet, DataPacket outgoing, ConnectionInterface outboundInterface) {
+        var pathMtu = Link.mtuFromLrPacket(outgoing.getData());
+        if (isNull(pathMtu) || pathMtu == 0) {
+            return true;
+        }
+        var mode = Link.modeFromLrPacket(outgoing.getData());
+
+        var prevHopMtu = nonNull(packet.getReceivingInterface())
+                ? packet.getReceivingInterface().getHwMtu()
+                : null;
+        var nextHopMtu = nonNull(outboundInterface) ? outboundInterface.getHwMtu() : null;
+
+        if (isNull(nextHopMtu)) {
+            log.debug("No next-hop HW MTU, disabling link MTU upgrade");
+            outgoing.setData(Link.withoutMtuSignalling(outgoing.getData()));
+
+            return true;
+        }
+        if (isFalse(outboundInterface.isAutoconfigureMtu()) && isFalse(outboundInterface.isFixedMtu())) {
+            log.debug("Outbound interface doesn't support MTU autoconfiguration, disabling link MTU upgrade");
+            outgoing.setData(Link.withoutMtuSignalling(outgoing.getData()));
+
+            return true;
+        }
+
+        if (nextHopMtu < pathMtu || (nonNull(prevHopMtu) && prevHopMtu < pathMtu)) {
+            var clampedMtu = nonNull(prevHopMtu) ? Math.min(nextHopMtu, prevHopMtu) : nextHopMtu;
+            try {
+                outgoing.setData(Link.withClampedMtu(outgoing.getData(), clampedMtu, mode));
+                log.debug("Clamping link MTU to {}", clampedMtu);
+            } catch (Exception e) {
+                log.debug("Dropping link request packet: {}", e.getMessage());
+                if (nonNull(packet.getReceivingInterface())) {
+                    packet.getReceivingInterface().protocolViolation("Undecodable path MTU signalling bytes");
+                }
+
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Add a requester to a path request already in flight, so it is answered
+     * along with the peer that started the search.
+     */
+    private void batchOntoWaitingPathRequest(
+            PathRequestEntry waiting, byte[] destinationHash, ConnectionInterface attachedInterface) {
+        if (waiting.addRequestingInterface(attachedInterface)) {
+            log.debug("Batching path request for {} onto the one already waiting, now {} requester(s)",
+                    encodeHexString(destinationHash), waiting.getRequestingInterfaces().size());
+        } else {
+            log.debug("There is already a waiting path request for {} on behalf of path request on {}",
+                    encodeHexString(destinationHash), attachedInterface);
+        }
+    }
+
+    /**
+     * Whether this packet hash is in either generation of the dedup window.
+     */
+    private boolean seenBefore(String packetHashHex) {
+        return packetHashList.contains(packetHashHex) || packetHashListPrev.contains(packetHashHex);
+    }
+
+    /**
+     * Clamp an inbound link request's MTU signalling to what the receiving
+     * interface can actually carry, rewriting the packet's data in place.
+     * <p>
+     * The reference does this in Transport rather than in Link
+     * ({@code RNS/Transport.py:2544-2565}), which is why
+     * {@code Link.validate_request} has no clamp of its own — by the time it
+     * runs, the signalling bytes have already been corrected. Without this a
+     * responder confirms whatever MTU it is offered, and both ends then emit
+     * frames larger than the interface ever promised to carry. Java↔Python only
+     * appeared to work because the reference clamps on our behalf.
+     *
+     * @return true if the packet should be dispatched to the destination,
+     *         false if it was dropped as a protocol violation
+     */
+    private boolean clampInboundLinkRequest(Packet packet) {
+        var receivingInterface = packet.getReceivingInterface();
+        if (isNull(receivingInterface)) {
+            return true;
+        }
+
+        var pathMtu = Link.mtuFromLrPacket(packet.getData());
+        if (isNull(pathMtu) || pathMtu == 0) {
+            return true;
+        }
+        var mode = Link.modeFromLrPacket(packet.getData());
+
+        var ifaceMtu = receivingInterface.getHwMtu();
+        if (isNull(ifaceMtu)) {
+            // The interface declares no hardware MTU at all: strip the
+            // signalling bytes so the link falls back to the Reticulum default.
+            packet.setData(Link.withoutMtuSignalling(packet.getData()));
+
+            return true;
+        }
+
+        var nextHopMtu = receivingInterface.isAutoconfigureMtu() || receivingInterface.isFixedMtu()
+                ? ifaceMtu
+                : ReticulumConstant.MTU;
+
+        if (nextHopMtu < pathMtu) {
+            try {
+                packet.setData(Link.withClampedMtu(packet.getData(), nextHopMtu, mode));
+                log.debug("Clamped inbound link request MTU from {} to {} on {}",
+                        pathMtu, nextHopMtu, receivingInterface);
+            } catch (Exception e) {
+                log.warn("Dropping link request packet to local destination: {}", e.getMessage());
+                receivingInterface.protocolViolation("Undecodable path MTU signalling bytes");
+
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public Integer nextHopInterfaceHwMtu(byte[] destinationHash) {
+        var nextHopInterface = nextHopInterface(destinationHash);
+        if (isNull(nextHopInterface)) {
+            return null;
+        }
+
+        return nextHopInterface.isAutoconfigureMtu() || nextHopInterface.isFixedMtu()
+                ? nextHopInterface.getHwMtu()
+                : null;
+    }
+
+    /**
+     * Bitrate of the slowest currently online interface, in bits per second, or
+     * null if no online interface reports one.
+     * <p>
+     * Computed on demand rather than cached on interface changes as the
+     * reference does, so it cannot go stale.
+     */
+    public Integer lowestInterfaceBitrate() {
+        return interfaces.stream()
+                .filter(ConnectionInterface::isOnline)
+                .map(ConnectionInterface::getBitrate)
+                .filter(bitrate -> nonNull(bitrate) && bitrate > 0)
+                .min(Integer::compareTo)
+                .orElse(null);
+    }
+
+    /**
+     * Bitrate of the fastest currently online interface, in bits per second, or
+     * null if no online interface reports one.
+     */
+    public Integer highestInterfaceBitrate() {
+        return interfaces.stream()
+                .filter(ConnectionInterface::isOnline)
+                .map(ConnectionInterface::getBitrate)
+                .filter(bitrate -> nonNull(bitrate) && bitrate > 0)
+                .max(Integer::compareTo)
+                .orElse(null);
+    }
+
+    /**
+     * A reasonable minimum path request timeout, in <b>milliseconds</b>: a full
+     * round trip for one MTU on the slowest currently online interface, plus the
+     * per-hop grace.
+     *
+     * @return the timeout in milliseconds, or 0 if no online interface bitrate
+     *         is known
+     */
+    public long mediumPathTimeout() {
+        return mediumPathTimeout(lowestInterfaceBitrate());
+    }
+
+    /**
+     * The medium path timeout formula, split out so it can be exercised without
+     * a running Transport.
+     *
+     * @param lowestBitrate slowest online interface bitrate in bits per second,
+     *                      or null if unknown
+     * @return timeout in milliseconds, or 0 when the bitrate is unknown
+     */
+    public static long mediumPathTimeout(final Integer lowestBitrate) {
+        if (isNull(lowestBitrate)) {
+            return 0;
+        }
+
+        var effectiveBitrate = Math.max(lowestBitrate, MINIMUM_BITRATE);
+
+        return Math.round(2 * (MTU * 8 * 1_000L / (double) effectiveBitrate)) + DEFAULT_PER_HOP_TIMEOUT;
     }
 
     private boolean fromLocalClient(Packet packet) {
@@ -2200,7 +2615,7 @@ public final class Transport implements ExitHandler {
             }
         }
 
-        if (isFalse(packetHashMap.containsKey(encodeHexString(packet.getPacketHash())))) {
+        if (isFalse(seenBefore(encodeHexString(packet.getPacketHash())))) {
             return true;
         } else {
             if (packet.getPacketType() == ANNOUNCE) {
@@ -2269,6 +2684,119 @@ public final class Transport implements ExitHandler {
                 }
             }
         }
+    }
+
+    /**
+     * Re-balances the recorded path to a link's destination when its proof
+     * arrives over a different number of hops than expected.
+     * <p>
+     * Mirrors {@code RNS/Transport.py:2680-2711}. The proof signature is
+     * validated first — the hop count is attacker-influenceable, so an unsigned
+     * hop count must never be allowed to rewrite the path table. Re-balancing
+     * happens at most once per link.
+     */
+    private void rebalanceLinkPath(final Link link, final Packet packet) {
+        log.debug("Unbalanced link path ({}/{}) detected on link {}, validating signature for re-balancing",
+                packet.getHops(), link.getExpectedHops(), link);
+
+        try {
+            var baseLength = SIGLENGTH / 8 + ECPUBSIZE / 2;
+            var dataLength = getLength(packet.getData());
+            if (dataLength != baseLength && dataLength != baseLength + LINK_MTU_SIZE) {
+                return;
+            }
+
+            var mode = io.reticulum.link.Link.modeFromLpPacket(packet.getData());
+            if (mode != link.getMode()) {
+                throw new IllegalStateException("Invalid link mode " + mode + " in link request proof");
+            }
+
+            byte[] signallingBytes = new byte[0];
+            var packetData = packet.getData();
+            if (dataLength == baseLength + LINK_MTU_SIZE) {
+                var confirmedMtu = io.reticulum.link.Link.mtuFromLpPacket(packetData);
+                signallingBytes = io.reticulum.link.Link.signallingBytes(
+                        nonNull(confirmedMtu) ? confirmedMtu : MTU, mode);
+                packetData = subarray(packetData, 0, baseLength);
+            }
+
+            var peerPubBytes = subarray(packetData, SIGLENGTH / 8, baseLength);
+            var peerSigPubBytes = subarray(
+                    link.getDestination().getIdentity().getPublicKey(), ECPUBSIZE / 2, ECPUBSIZE);
+            var signedData = concatArrays(link.getLinkId(), peerPubBytes, peerSigPubBytes, signallingBytes);
+            var signature = subarray(packetData, 0, SIGLENGTH / 8);
+
+            if (isFalse(link.getDestination().getIdentity().validate(signature, signedData))) {
+                log.debug("Aborting path re-balancing at link terminus for {} on link {} due to invalid signature",
+                        encodeHexString(link.getDestination().getHash()), link);
+
+                return;
+            }
+
+            if (nonNull(link.getRebalanced())) {
+                return;
+            }
+
+            log.debug("Re-balancing path to {} at link terminus ({}->{})",
+                    encodeHexString(link.getDestination().getHash()), link.getExpectedHops(), packet.getHops());
+            link.setRebalanced(Instant.now());
+            link.setExpectedHops(packet.getHops());
+
+            var pathEntry = destinationTable.get(encodeHexString(link.getDestination().getHash()));
+            if (nonNull(pathEntry)) {
+                pathEntry.setHops(packet.getHops());
+                log.debug("Path table re-balanced for {}", encodeHexString(link.getDestination().getHash()));
+            }
+        } catch (Exception e) {
+            log.debug("Error while validating link request proof for path re-balancing at link terminus", e);
+        }
+    }
+
+    /**
+     * Orders interfaces by descending gravity, then descending bitrate, so the
+     * most preferred interface is considered first. Mirrors
+     * {@code Transport.prioritize_interfaces} (RNS/Transport.py:564).
+     */
+    public void prioritizeInterfaces() {
+        try {
+            var sorted = interfaces.stream()
+                    .sorted(Comparator
+                            .comparingInt(ConnectionInterface::getGravity).reversed()
+                            .thenComparing(Comparator.comparingInt(
+                                    (ConnectionInterface i) -> requireNonNullElse(i.getBitrate(), 0)).reversed()))
+                    .collect(java.util.stream.Collectors.toList());
+
+            interfaces.clear();
+            interfaces.addAll(sorted);
+        } catch (Exception e) {
+            log.error("Could not prioritize interfaces", e);
+        }
+    }
+
+    /**
+     * Emission timestamp encoded in an announce random blob
+     * ({@code RNS/Transport.py:3725}).
+     */
+    public static long timebaseFromRandomBlob(byte[] randomBlob) {
+        var timebase = 0L;
+        for (int i = 5; i < 10; i++) {
+            timebase = (timebase << 8) | (randomBlob[i] & 0xFF);
+        }
+
+        return timebase;
+    }
+
+    /**
+     * Most recent emission timestamp across a set of random blobs — the age of
+     * the freshest announce behind a path table entry.
+     */
+    public static long timebaseFromRandomBlobs(List<byte[]> randomBlobs) {
+        var timebase = 0L;
+        for (var randomBlob : randomBlobs) {
+            timebase = Math.max(timebase, timebaseFromRandomBlob(randomBlob));
+        }
+
+        return timebase;
     }
 
     public long announceEmitted(Packet packet) {
@@ -2423,6 +2951,13 @@ public final class Transport implements ExitHandler {
 
     private void pathRequestHandler(byte[] data, Packet packet) {
         try {
+            // Account the inbound request before doing anything with it, so the
+            // ingress rate reflects the offered load rather than the accepted
+            // load (RNS/Transport.py:1858).
+            if (nonNull(packet.getReceivingInterface())) {
+                packet.getReceivingInterface().receivedPathRequest();
+            }
+
             // If there is at least bytes enough for a destination
             // hash in the packet, we assume those bytes are the
             // destination being requested.
@@ -2445,6 +2980,12 @@ public final class Transport implements ExitHandler {
                 if (nonNull(tagBytes)) {
                     if (tagBytes.length > (TRUNCATED_HASHLENGTH / 8)) {
                         tagBytes = subarray(tagBytes, 0, TRUNCATED_HASHLENGTH / 8);
+                        // Truncating is enough to carry on with, but an oversized tag
+                        // is still a malformed request and the reference counts it
+                        // (RNS/Transport.py:1845).
+                        if (nonNull(packet.getReceivingInterface())) {
+                            packet.getReceivingInterface().protocolViolation("Excessive path request tag size");
+                        }
                     }
 
                     var uniqueTag = concatArrays(destinationHash, tagBytes);
@@ -2463,7 +3004,13 @@ public final class Transport implements ExitHandler {
                                 encodeHexString(destinationHash), encodeHexString(uniqueTag));
                     }
                 } else {
+                    // A path request with no tag cannot be de-duplicated, so the
+                    // reference treats it as a protocol violation rather than merely
+                    // ignoring it (RNS/Transport.py:1840).
                     log.debug("Ignoring tagless path request for {}.", encodeHexString(destinationHash));
+                    if (nonNull(packet.getReceivingInterface())) {
+                        packet.getReceivingInterface().protocolViolation("Tagless path request");
+                    }
                 }
             }
         } catch (Exception e) {
@@ -2479,10 +3026,22 @@ public final class Transport implements ExitHandler {
             byte[] tag
     ) {
         var shouldSearchForUnknown = false;
+        var shouldIngressLimit = false;
+        // When set, recursive path requests only go out on interfaces in these
+        // modes (RNS/Transport.py:3429-3433).
+        List<InterfaceMode> searchModeFilter = null;
 
         if (nonNull(attachedInterface)) {
-            if (owner.isTransportEnabled() && DISCOVER_PATHS_FOR.contains(attachedInterface.getMode())) {
-                shouldSearchForUnknown = true;
+            shouldIngressLimit = attachedInterface.shouldIngressLimitPr();
+            if (owner.isTransportEnabled()) {
+                if (attachedInterface.isRecursivePrs()) {
+                    shouldSearchForUnknown = true;
+                } else if (DISCOVER_PATHS_FOR.contains(attachedInterface.getMode())) {
+                    shouldSearchForUnknown = true;
+                } else if (attachedInterface.getMode() == MODE_BOUNDARY) {
+                    shouldSearchForUnknown = true;
+                    searchModeFilter = BOUNDARY_SEARCH_MODES;
+                }
             }
         }
 
@@ -2606,24 +3165,58 @@ public final class Transport implements ExitHandler {
                 }
             }
         } else if (shouldSearchForUnknown) {
-            if (discoveryPathRequests.containsKey(encodeHexString(destinationHash))) {
-                log.debug("There is already a waiting path request for {} on behalf of path request on {}",
-                        encodeHexString(destinationHash), attachedInterface);
+            // Batch onto a request already in flight rather than starting a second
+            // search — but record this requester too, or it never receives the path
+            // response when the announce arrives (RNS/Transport.py:3563-3572).
+            //
+            // The reference holds discovery_pr_lock across the whole read-modify-
+            // write. A plain get-then-put is not enough here: two peers routinely
+            // ask in the same millisecond on different interface threads, both see
+            // an empty table, and the second put discards the first requester. So
+            // claim the slot with putIfAbsent and let the loser batch onto the
+            // winner's entry.
+            var waiting = discoveryPathRequests.get(encodeHexString(destinationHash));
+            if (nonNull(waiting)) {
+                batchOntoWaitingPathRequest(waiting, destinationHash, attachedInterface);
 
             } else {
+                // Abort the recursive path request if the receiving interface has a
+                // path request burst active (RNS/Transport.py:3547).
+                if (shouldIngressLimit) {
+                    log.debug("Not sending recursive path request for {} due to active ingress limiting on {}",
+                            encodeHexString(destinationHash), attachedInterface);
+
+                    return;
+                }
+
                 //Forward path request on all interfaces except the requestor interface
                 log.debug("Attempting to discover unknown path to {} on behalf of path request on {}",
                         encodeHexString(destinationHash), attachedInterface);
 
-                discoveryPathRequests.put(encodeHexString(destinationHash),
-                        PathRequestEntry.builder()
-                                .destinationHash(destinationHash)
-                                .timeout(Instant.now().plusSeconds(PATH_REQUEST_TIMEOUT))
-                                .requestingInterface(attachedInterface)
-                                .build()
-                );
+                var newEntry = PathRequestEntry.builder()
+                        .destinationHash(destinationHash)
+                        .timeout(Instant.now().plusSeconds(PATH_REQUEST_TIMEOUT))
+                        .requestingInterfaces(new CopyOnWriteArrayList<>())
+                        .build();
+                newEntry.addRequestingInterface(attachedInterface);
+
+                var raced = discoveryPathRequests.putIfAbsent(encodeHexString(destinationHash), newEntry);
+                if (nonNull(raced)) {
+                    // Another interface thread claimed it between the get above and
+                    // here. Join theirs and leave the fan-out to them.
+                    batchOntoWaitingPathRequest(raced, destinationHash, attachedInterface);
+
+                    return;
+                }
 
                 for (ConnectionInterface connectionInterface : interfaces) {
+                    if (nonNull(searchModeFilter)
+                            && isFalse(searchModeFilter.contains(connectionInterface.getMode()))) {
+                        continue;
+                    }
+                    if (isFalse(connectionInterface.isOnline())) {
+                        continue;
+                    }
                     if (isFalse(Objects.equals(connectionInterface, attachedInterface))) {
                         //Use the previously extracted tag from this path request
                         // on the new path requests as well, to avoid potential loops
@@ -2663,6 +3256,52 @@ public final class Transport implements ExitHandler {
     }
 
     /**
+     * Requests a path to the destination and blocks until it is available or the
+     * default {@code PATH_REQUEST_TIMEOUT} elapses.
+     *
+     * @param destinationHash the destination to find a path to
+     * @return true if a path is available
+     */
+    public boolean awaitPath(@NonNull byte[] destinationHash) {
+        return awaitPath(destinationHash, null, null);
+    }
+
+    /**
+     * Requests a path to the destination from the network and blocks until the
+     * path is available, or the timeout is reached.
+     *
+     * @param destinationHash the destination to find a path to
+     * @param timeoutMs       timeout in <b>milliseconds</b>, or null for
+     *                        {@code PATH_REQUEST_TIMEOUT}
+     * @param onInterface     if given, the path request is sent only on this
+     *                        interface. Reticulum normally handles this itself
+     *                        and callers should leave it null.
+     * @return true if a path to the destination is available
+     */
+    public boolean awaitPath(@NonNull byte[] destinationHash, Long timeoutMs, ConnectionInterface onInterface) {
+        if (hasPath(destinationHash)) {
+            return true;
+        }
+
+        var deadline = Instant.now().plusMillis(
+                isNull(timeoutMs) ? PATH_REQUEST_TIMEOUT * 1_000L : timeoutMs);
+
+        requestPath(destinationHash, onInterface, null, false);
+
+        while (isFalse(hasPath(destinationHash)) && Instant.now().isBefore(deadline)) {
+            try {
+                Thread.sleep(AWAIT_PATH_POLL_INTERVAL);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+
+                return hasPath(destinationHash);
+            }
+        }
+
+        return hasPath(destinationHash);
+    }
+
+    /**
      * Requests a path to the destination from the network. If
      * another reachable peer on the network knows a path, it
      * will announce it.
@@ -2679,6 +3318,15 @@ public final class Transport implements ExitHandler {
             byte[] tag,
             boolean recursive
     ) {
+        // A recursive request must not push an already-saturated interface
+        // further over its egress budget (RNS/Transport.py:3286-3288).
+        if (nonNull(onInterface) && recursive && onInterface.shouldEgressLimitPr()) {
+            log.trace("Blocking recursive path request on {} due to active egress limiting",
+                    onInterface.getInterfaceName());
+
+            return;
+        }
+
         var requestTag = Objects.requireNonNullElseGet(tag, IdentityUtils::getRandomHash);
         var pathRequestData = owner.isTransportEnabled()
                 ? concatArrays(destinationHash, identity.getHash(), requestTag)
@@ -2706,6 +3354,13 @@ public final class Transport implements ExitHandler {
         }
 
         packet.send();
+        // Account the outgoing request so egress limiting has something to
+        // measure (RNS/Transport.py:1601).
+        if (nonNull(onInterface)) {
+            onInterface.sentPathRequest();
+        } else {
+            interfaces.forEach(ConnectionInterface::sentPathRequest);
+        }
         pathRequests.put(encodeHexString(destinationHash), Instant.now());
     }
 
@@ -2961,9 +3616,15 @@ public final class Transport implements ExitHandler {
                 // blocking all traffic). Since packet-dedup works in a rolling window (not a
                 // full multi-day history), a simple in-memory
                 // clear is sufficient and matches Python RNS behaviour (in-memory only).
-                if (packetHashMap.size() > HASHLIST_MAXSIZE) {
-                    log.warn("packetHashMap reached {} entries — clearing in-memory dedup table", packetHashMap.size());
-                    packetHashMap.clear();
+                // Rotate at half the maximum, as the reference does
+                // (RNS/Transport.py:832-834): the current window becomes the previous
+                // one and a fresh one starts, so the two together still cover a full
+                // HASHLIST_MAXSIZE of history and no duplicate slips through at the
+                // boundary. Peak memory is the same as one full-size window.
+                if (packetHashList.size() > HASHLIST_MAXSIZE / 2) {
+                    log.debug("Rotating packet dedup window at {} entries", packetHashList.size());
+                    packetHashListPrev = packetHashList;
+                    packetHashList = ConcurrentHashMap.newKeySet();
                 }
 
                 //Cull the path request tags list if it has reached its max size
@@ -3220,7 +3881,13 @@ public final class Transport implements ExitHandler {
                 }
 
                 if (Instant.now().isAfter(interfaceLastJobs.get().plusSeconds(interfaceJobsInterval.get().toSeconds()))) {
+                    prioritizeInterfaces();
                     for (ConnectionInterface anInterface : interfaces) {
+                        // Evaluating the limit here advances the burst state machine
+                        // even when no traffic is arriving, which is what lets a burst
+                        // release once a storm stops (RNS/Transport.py:1151-1154).
+                        anInterface.shouldIngressLimit();
+                        anInterface.shouldIngressLimitPr();
                         anInterface.processHeldAnnounces();
                     }
                     interfaceLastJobs.set(Instant.now());

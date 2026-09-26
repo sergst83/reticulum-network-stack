@@ -54,6 +54,7 @@ import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.stream.Collectors.toList;
 import static lombok.AccessLevel.PRIVATE;
+import static java.util.Objects.isNull;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 import static org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS;
 
@@ -66,6 +67,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     {
         ifacSize = DEFAULT_IFAC_SIZE;
         bitrate = BITRATE_GUESS;
+        hwMtu = AutoInterfaceConstant.HW_MTU;
         IN = true;
         OUT = true;
     }
@@ -102,6 +104,14 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     private long multicastEchoTimeout = PEERING_TIMEOUT / 2;
 
     private List<NetworkInterface> interfaceList = new CopyOnWriteArrayList<>();
+
+    /**
+     * Interfaces whose last announce failed, so the condition is reported once
+     * rather than on every attempt. Mirrors the reference's
+     * {@code timed_out_interfaces}.
+     */
+    @JsonIgnore
+    private final Map<String, Boolean> announceFailedInterfaces = new ConcurrentHashMap<>();
 
     @Setter(PRIVATE)
     @Getter(PRIVATE)
@@ -177,7 +187,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
     private void initNetworkInterfaceServer() {
         try (var socket = new DatagramSocket(dataPort)) {
             while (true) {
-                byte[] buf = new byte[1024];
+                byte[] buf = new byte[AutoInterfaceConstant.HW_MTU];
                 var packet = new DatagramPacket(buf, buf.length);
                 socket.receive(packet);
                 processIncoming(Arrays.copyOf(packet.getData(), packet.getLength()));
@@ -190,34 +200,62 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
         }
     }
 
+    /**
+     * Multicast a discovery token on every adopted interface.
+     * <p>
+     * The outgoing interface has to be selected explicitly. The discovery
+     * address is link-local scope multicast, which carries no routing
+     * information of its own, so a socket that has not been told which
+     * interface to use has nothing to send on: the kernel answers
+     * {@code EADDRNOTAVAIL}, surfacing here as
+     * {@code BindException: Cannot assign requested address}. A host with one
+     * obvious interface gets away with it via the default multicast route; a
+     * host with several (bridges, VPNs, USB adapters) does not, and announces
+     * then fail on every attempt. The reference sets {@code IPV6_MULTICAST_IF}
+     * per adopted interface for exactly this reason
+     * ({@code RNS/Interfaces/AutoInterface.py:507}).
+     */
     private void peerAnnounce() {
-        try (var socket = new DatagramSocket()) {
-            getLinkLocalAddresses()
-                    .forEach(
-                            inetAddress -> {
-                                var localAddress = getLocalIpv6Address((Inet6Address) inetAddress);
-                                var token = fullHash(
-                                        concatArrays(
-                                                getGroupId().getBytes(UTF_8),
-                                                localAddress.getBytes(UTF_8)
-                                        )
-                                );
-                                DatagramPacket packet = null;
-                                try {
-                                    packet = new DatagramPacket(
-                                            token,
-                                            token.length,
-                                            InetAddress.getByName(getMcastDiscoveryAddress()),
-                                            discoveryPort
-                                    );
-                                    socket.send(packet);
-                                } catch (IOException e) {
-                                    log.error("Error while send announce packet {} from address {}", packet, inetAddress, e);
-                                }
-                            }
-                    );
-        } catch (SocketException e) {
-            log.error("Can not establish DatagramSocket to send announce", e);
+        for (var networkInterface : interfaceList) {
+            Inet6Address linkLocal;
+            try {
+                linkLocal = getInet6Address(networkInterface);
+            } catch (Exception e) {
+                continue;
+            }
+            if (isNull(linkLocal) || isFalse(linkLocal.isLinkLocalAddress())) {
+                continue;
+            }
+
+            var token = fullHash(
+                    concatArrays(
+                            getGroupId().getBytes(UTF_8),
+                            getLocalIpv6Address(linkLocal).getBytes(UTF_8)
+                    )
+            );
+
+            try (var socket = new MulticastSocket()) {
+                socket.setNetworkInterface(networkInterface);
+                socket.send(new DatagramPacket(
+                        token,
+                        token.length,
+                        InetAddress.getByName(getMcastDiscoveryAddress()),
+                        discoveryPort
+                ));
+                announceFailedInterfaces.remove(networkInterface.getName());
+            } catch (IOException e) {
+                // The reference treats this as possible carrier loss and reports it
+                // once per interface rather than on every announce, which otherwise
+                // produces a stack trace every few seconds for the lifetime of the
+                // node (RNS/Interfaces/AutoInterface.py:511-514).
+                if (isNull(announceFailedInterfaces.putIfAbsent(networkInterface.getName(), Boolean.TRUE))) {
+                    log.warn("{} detected possible carrier loss on {}: {}",
+                            this, networkInterface.getName(), e.getMessage());
+                } else {
+                    log.debug("{} announce still failing on {}: {}",
+                            this, networkInterface.getName(), e.getMessage());
+                }
+            }
         }
     }
 
@@ -226,7 +264,7 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
         var group = InetAddress.getByName(getMcastDiscoveryAddress());
         try (var discoverySocket = new MulticastSocket(discoveryPort)) {
             discoverySocket.joinGroup(group);
-            var buf = new byte[1024];
+            var buf = new byte[AutoInterfaceConstant.HW_MTU];
             while (true) {
                 var packet = new DatagramPacket(buf, buf.length);
                 try {
@@ -261,6 +299,11 @@ public class AutoInterface extends AbstractConnectionInterface implements AutoIn
             log.debug("{} added peer {}", this, peerAddress);
         }
         peers.put(peerAddress, Instant.now());
+    }
+
+    @Override
+    public boolean isFixedMtu() {
+        return true;
     }
 
     @Override

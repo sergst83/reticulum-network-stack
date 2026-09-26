@@ -1,0 +1,14 @@
+# Step 5a/5b initiator at the default bitrate guess: advertises 16384.
+reticulum:
+  enable_transport: false
+  share_instance: false
+  panic_on_interface_error: false
+interfaces:
+  "Default Interface":
+    type: AutoInterface
+    enabled: false
+  "Step5 TCP Client":
+    type: TCPClientInterface
+    enabled: true
+    target_host: 127.0.0.1
+    target_port: 42504

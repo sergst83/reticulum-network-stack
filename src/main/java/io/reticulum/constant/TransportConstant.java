@@ -6,12 +6,21 @@ import java.util.List;
 
 import static io.reticulum.constant.LinkConstant.STALE_TIME;
 import static io.reticulum.interfaces.InterfaceMode.MODE_ACCESS_POINT;
+import static io.reticulum.interfaces.InterfaceMode.MODE_BOUNDARY;
 import static io.reticulum.interfaces.InterfaceMode.MODE_GATEWAY;
+import static io.reticulum.interfaces.InterfaceMode.MODE_INTERNAL;
 import static io.reticulum.interfaces.InterfaceMode.MODE_ROAMING;
 
 public class TransportConstant {
 
-    public static final List<InterfaceMode> DISCOVER_PATHS_FOR = List.of(MODE_ACCESS_POINT, MODE_GATEWAY, MODE_ROAMING);
+    public static final List<InterfaceMode> DISCOVER_PATHS_FOR =
+            List.of(MODE_ACCESS_POINT, MODE_GATEWAY, MODE_ROAMING, MODE_INTERNAL);
+
+    /**
+     * Interface modes a boundary-mode path request may be recursed onto.
+     * Mirrors {@code Interface.BOUNDARY_SEARCH_MODES}.
+     */
+    public static final List<InterfaceMode> BOUNDARY_SEARCH_MODES = List.of(MODE_BOUNDARY, MODE_GATEWAY);
 
     public static final byte REACHABILITY_UNREACHABLE = 0x00;
     public static final byte REACHABILITY_DIRECT = 0x01;
@@ -41,13 +50,21 @@ public class TransportConstant {
     /**
      * milliseconds
      */
-    public static final long PATH_REQUEST_GRACE = 350;     // Grace time before a path announcement is made, allows directly reachable peers to respond first
-    public static final long PATH_REQUEST_RG = 1500;     // Extra grace time [ms] for roaming-ode interfaces to allow more suitable peers to respond first
-    public static final int PATH_REQUEST_RW = 2;         // Path request random window
-    public static final int PATH_REQUEST_MI = 5;       // Minimum interval in seconds for automated path requests
+    public static final long PATH_REQUEST_GRACE = 400;     // Grace time before a path announcement is made, allows directly reachable peers to respond first
+    public static final long PATH_REQUEST_RG = 1500;     // Extra grace time [ms] for roaming-mode interfaces to allow more suitable peers to respond first
+    public static final int PATH_REQUEST_MI = 20;       // Minimum interval in seconds for automated path requests
+    /** Poll interval [ms] while awaiting a path in Transport.awaitPath. */
+    public static final long AWAIT_PATH_POLL_INTERVAL = 50;
 
+    /**
+     * Whether a link proof arriving over an unexpected hop count may re-balance
+     * the recorded path. Mirrors {@code Transport.ALLOW_LINK_PATH_REBALANCE}.
+     */
+    public static final boolean ALLOW_LINK_PATH_REBALANCE = true;
+    /** Default interface gravity. */
+    public static final int DEFAULT_GRAVITY = 0;
     public static final long LINK_TIMEOUT = (long) (STALE_TIME * 1.25);
-    public static final int REVERSE_TIMEOUT = 30 * 60;     // Reverse table entries are removed after 30 minutes
+    public static final int REVERSE_TIMEOUT = 8 * 60;      // Reverse table entries are removed after 8 minutes
     public static final int DESTINATION_TIMEOUT = 60 * 60 * 24 * 7;   // Destination table entries are removed if unused for one week
     public static final int MAX_RECEIPTS = 1024;   // Maximum number of receipts to keep track of
     public static final int MAX_RATE_TIMESTAMPS = 16;  // Maximum number of announce timestamps to keep per destination
@@ -69,6 +86,6 @@ public class TransportConstant {
      * comfortably covers any realistic announce rate while bounding
      * per-destination footprint to ~1 KB.
      */
-    public static final int RANDOM_BLOBS_MAX_PER_DESTINATION = 128;
+    public static final int MAX_RANDOM_BLOBS = 64;
 
 }

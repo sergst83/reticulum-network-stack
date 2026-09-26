@@ -1,0 +1,17 @@
+# Python requester for step 4b, connecting to the Java listener.
+
+[reticulum]
+  enable_transport = False
+  share_instance = No
+  panic_on_interface_error = No
+
+[logging]
+  loglevel = 4
+
+[interfaces]
+
+  [[Step4 TCP Client]]
+    type = TCPClientInterface
+    interface_enabled = True
+    target_host = 127.0.0.1
+    target_port = 42503

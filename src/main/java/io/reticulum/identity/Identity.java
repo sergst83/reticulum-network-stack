@@ -1,7 +1,7 @@
 package io.reticulum.identity;
 
 import io.reticulum.Transport;
-import io.reticulum.cryptography.Fernet;
+import io.reticulum.cryptography.Token;
 import io.reticulum.destination.AbstractDestination;
 import io.reticulum.destination.Destination;
 import io.reticulum.packet.Packet;
@@ -36,6 +36,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 
+import static io.reticulum.constant.IdentityConstant.DERIVED_KEY_LENGTH;
 import static io.reticulum.constant.IdentityConstant.KEYSIZE;
 import static io.reticulum.constant.IdentityConstant.NAME_HASH_LENGTH;
 import static io.reticulum.constant.IdentityConstant.RATCHETSIZE;
@@ -387,7 +388,7 @@ public class Identity {
      * @param plaintext       The plaintext to be encrypted.
      * @param ratchetPubBytes 32-byte X25519 ratchet public key, or {@code null} to use
      *                        the identity's base public key.
-     * @return Ciphertext token (ephemeral-pub || fernet-ciphertext).
+     * @return Ciphertext token (ephemeral-pub || token-ciphertext).
      */
     @SneakyThrows
     public byte[] encrypt(final byte[] plaintext, final byte[] ratchetPubBytes) {
@@ -411,11 +412,11 @@ public class Identity {
 
         var hkdf = new HKDFBytesGenerator(new SHA256Digest());
         hkdf.init(new HKDFParameters(sharedKey, getSalt(), getContext()));
-        var derivedKey = new byte[32];
+        var derivedKey = new byte[DERIVED_KEY_LENGTH];
         hkdf.generateBytes(derivedKey, 0, derivedKey.length);
 
-        var fernet     = new Fernet(derivedKey);
-        var ciphertext = fernet.encrypt(plaintext);
+        var token      = new Token(derivedKey);
+        var ciphertext = token.encrypt(plaintext);
 
         return concatArrays(ephemeralPubBytes, ciphertext);
     }
@@ -442,11 +443,11 @@ public class Identity {
 
         var hkdf = new HKDFBytesGenerator(new SHA256Digest());
         hkdf.init(new HKDFParameters(sharedKey, getSalt(), getContext()));
-        var derivedKey = new byte[32];
+        var derivedKey = new byte[DERIVED_KEY_LENGTH];
         hkdf.generateBytes(derivedKey, 0, derivedKey.length);
 
-        var fernet = new Fernet(derivedKey);
-        var ciphertext = fernet.encrypt(plaintext);
+        var token = new Token(derivedKey);
+        var ciphertext = token.encrypt(plaintext);
 
         return concatArrays(ephemeralPubBytes, ciphertext);
     }
@@ -469,12 +470,12 @@ public class Identity {
 
                 var hkdf = new HKDFBytesGenerator(new SHA256Digest());
                 hkdf.init(new HKDFParameters(sharedKey, getSalt(), getContext()));
-                var derivedKey = new byte[32];
+                var derivedKey = new byte[DERIVED_KEY_LENGTH];
                 hkdf.generateBytes(derivedKey, 0, derivedKey.length);
 
-                var fernet = new Fernet(derivedKey);
+                var token = new Token(derivedKey);
                 var cipherText = subarray(cipherTextToken, KEYSIZE / 8 / 2, cipherTextToken.length);
-                plainText = fernet.decrypt(cipherText);
+                plainText = token.decrypt(cipherText);
             } catch (Exception e) {
                 log.debug("Decryption by {} failed.", hash, e);
             }
@@ -527,7 +528,7 @@ public class Identity {
     }
 
     /**
-     * Shared ECDH + HKDF + Fernet decryption helper.
+     * Shared ECDH + HKDF + Token decryption helper.
      * Returns plaintext on success, {@code null} on any failure.
      */
     private byte[] decryptWithPrivateKey(byte[] prvBytes, byte[] peerPubBytes, byte[] ciphertext) {
@@ -542,10 +543,10 @@ public class Identity {
 
             var hkdf = new HKDFBytesGenerator(new SHA256Digest());
             hkdf.init(new HKDFParameters(sharedKey, getSalt(), getContext()));
-            var derivedKey = new byte[32];
+            var derivedKey = new byte[DERIVED_KEY_LENGTH];
             hkdf.generateBytes(derivedKey, 0, derivedKey.length);
 
-            return new Fernet(derivedKey).decrypt(ciphertext);
+            return new Token(derivedKey).decrypt(ciphertext);
         } catch (Exception e) {
             return null;
         }

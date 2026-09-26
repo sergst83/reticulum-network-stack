@@ -1,0 +1,15 @@
+# Java client for the step-1 interop test. Connects to the Python
+# RNS 1.5.2 link-example server on loopback.
+reticulum:
+  enable_transport: false
+  share_instance: false
+  panic_on_interface_error: false
+interfaces:
+  "Default Interface":
+    type: AutoInterface
+    enabled: false
+  "Step4 TCP Client":
+    type: TCPClientInterface
+    enabled: true
+    target_host: 127.0.0.1
+    target_port: 42502

@@ -362,8 +362,42 @@ public class Channel {
         }
     }
 
+    /**
+     * How long to wait for a packet to be proven before resending it, in
+     * milliseconds.
+     * <p>
+     * Transcribed from {@code Channel._get_packet_timeout_time}:
+     * {@code pow(1.5, tries-1) * max(rtt*2.5, 0.025) * (len(tx_ring)+1.5)},
+     * in seconds, converted to milliseconds here because
+     * {@code PacketReceipt.timeout} is milliseconds.
+     * <p>
+     * The term that matters most is {@code tx_ring.size() + 1.5}: the allowance
+     * scales with how many packets are already in flight, because a packet
+     * queued behind a full window legitimately takes longer to be proven. The
+     * previous constant factor of 5 ignored queue depth entirely, so on a busy
+     * channel packets were declared timed out while they were merely waiting
+     * their turn — each retry burning one of five tries until the link was torn
+     * down. The exponent was also 2 rather than 1.5, and the RTT floor was
+     * 100 (read as milliseconds) rather than the reference's 25 ms.
+     */
     private long getPacketTimeoutTime(int tries) {
-        return (long) (Math.pow(2, tries - 1) * Math.max(outlet.rtt(), 100) * 5);
+        return packetTimeoutMillis(tries, outlet.rtt(), txRing.size());
+    }
+
+    /**
+     * The formula itself, separated so it can be checked against the reference
+     * without standing up a live link.
+     *
+     * @param tries       attempt number, from 1
+     * @param rttSeconds  link round-trip time in seconds
+     * @param inFlight    packets currently in the TX ring
+     * @return timeout in milliseconds
+     */
+    static long packetTimeoutMillis(int tries, double rttSeconds, int inFlight) {
+        var rttAllowanceSeconds = Math.max(rttSeconds * 2.5, 0.025);
+        var timeoutSeconds = Math.pow(1.5, tries - 1) * rttAllowanceSeconds * (inFlight + 1.5);
+
+        return (long) (timeoutSeconds * 1000);
     }
 
     private void packetTimeout(Packet packet) {

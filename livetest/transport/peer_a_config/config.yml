@@ -1,0 +1,14 @@
+# Peer A: hosts the destination. Reaches peer B only through the hub.
+reticulum:
+  enable_transport: false
+  share_instance: false
+  panic_on_interface_error: false
+interfaces:
+  "Default Interface":
+    type: AutoInterface
+    enabled: false
+  "To Hub":
+    type: TCPClientInterface
+    enabled: true
+    target_host: 127.0.0.1
+    target_port: 42508

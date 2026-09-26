@@ -1,0 +1,17 @@
+# Step 6 flooder aimed at the Java victim.
+
+[reticulum]
+  enable_transport = No
+  share_instance = No
+  panic_on_interface_error = No
+
+[logging]
+  loglevel = 4
+
+[interfaces]
+
+  [[Step6 TCP Client]]
+    type = TCPClientInterface
+    interface_enabled = True
+    target_host = 127.0.0.1
+    target_port = 42507

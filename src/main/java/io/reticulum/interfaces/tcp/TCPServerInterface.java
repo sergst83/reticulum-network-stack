@@ -55,6 +55,7 @@ public class TCPServerInterface extends AbstractConnectionInterface implements H
 
         this.interfaceMode = InterfaceMode.MODE_FULL;
         this.bitrate = BITRATE_GUESS;
+        this.hwMtu = io.reticulum.interfaces.tcp.TCPChannelInitializer.HW_MTU;
 
         if (isNull(ifacSize)) {
             ifacSize = 16;
@@ -160,5 +161,9 @@ public class TCPServerInterface extends AbstractConnectionInterface implements H
                         .map(socketAddress -> ((InetSocketAddress) socketAddress).getHostString())
                         .orElse("")
                 + ":" + listenPort;
+    }
+    @Override
+    public boolean isAutoconfigureMtu() {
+        return true;
     }
 }

@@ -3,6 +3,7 @@ package io.reticulum.interfaces.discovery;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.reticulum.Transport;
+import io.reticulum.interfaces.InterfaceMode;
 import io.reticulum.interfaces.ConnectionInterface;
 import io.reticulum.interfaces.backbone.BackboneClientInterface;
 import lombok.extern.slf4j.Slf4j;
@@ -100,6 +101,16 @@ public class InterfaceDiscovery {
     private static final String KEY_STAMP_VALUE = "value";
     private static final String KEY_CONFIG_ENTRY= "config_entry";
     private static final String KEY_DISCOVERY_HASH = "discovery_hash";
+    /**
+     * Mode assigned to auto-connected interfaces on a transport-enabled node when
+     * no explicit {@code autoconnect_interface_mode} is configured. Mirrors
+     * {@code InterfaceDiscovery.AC_TRANSPORT_MODE}.
+     */
+    private static final InterfaceMode AC_TRANSPORT_MODE = InterfaceMode.MODE_GATEWAY;
+
+    /** Default gravity for auto-connected interfaces ({@code InterfaceDiscovery.AC_GRAVITY}). */
+    private static final int AC_GRAVITY = 0;
+
     private static final String KEY_AUTOCONNECT_HASH = "autoconnect_hash";
 
     private final Path storagePath;
@@ -118,7 +129,7 @@ public class InterfaceDiscovery {
      * @param storageBase        base storage path (the manager creates a {@code discovery/interfaces}
      *                           sub-directory)
      * @param requiredStampValue minimum PoW difficulty to accept (use
-     *                           {@link InterfaceAnnouncer#DEFAULT_STAMP_VALUE} for the default 14)
+     *                           {@link InterfaceAnnouncer#DEFAULT_STAMP_VALUE} for the default 16)
      * @param callback           called whenever a valid new or updated interface is discovered;
      *                           may be {@code null}
      */
@@ -350,6 +361,23 @@ public class InterfaceDiscovery {
             byte[] endpointHash = endpointHash(reachableOn, port);
             iface.setAutoconnectHash(endpointHash);
             iface.setAutoconnectSource(info.getNetworkId());
+            // Only set when configured on; null means "not configured", which is
+            // distinct from false (RNS/Discovery.py:771).
+            if (Boolean.TRUE.equals(io.reticulum.Reticulum.autoconnectAnnouncesToInternal())) {
+                iface.setAnnouncesToInternal(true);
+            }
+
+            // The reference assigns autoconnect_interface_mode, falling back to
+            // gateway mode on a transport-enabled node (RNS/Discovery.py:769-770).
+            var autoconnectGravity = io.reticulum.Reticulum.autoconnectInterfaceGravity();
+            iface.setGravity(nonNull(autoconnectGravity) ? autoconnectGravity : AC_GRAVITY);
+
+            var autoconnectMode = io.reticulum.Reticulum.autoconnectInterfaceMode();
+            if (nonNull(autoconnectMode)) {
+                iface.setInterfaceMode(autoconnectMode);
+            } else if (Transport.getInstance().getOwner().isTransportEnabled()) {
+                iface.setInterfaceMode(AC_TRANSPORT_MODE);
+            }
 
             Transport.getInstance().getInterfaces().add(iface);
             iface.launch();
@@ -499,15 +527,29 @@ public class InterfaceDiscovery {
                 .count();
     }
 
+    /**
+     * Whether discovered interfaces may be auto-connected.
+     * <p>
+     * This used to return true unconditionally, so a node dialled out to
+     * interfaces it found on the network without being asked to. The reference
+     * leaves auto-connection off until {@code autoconnect_discovered_interfaces}
+     * is configured above zero.
+     */
     private boolean shouldAutoconnect() {
-        // Default: auto-connect is enabled unless explicitly disabled in config
-        // Python checks RNS.Reticulum.should_autoconnect_discovered_interfaces()
-        return true;
+        try {
+            return io.reticulum.Reticulum.shouldAutoconnectDiscoveredInterfaces();
+        } catch (Exception e) {
+            // No running instance to consult; stay off, as the reference does
+            return false;
+        }
     }
 
     private int maxAutoconnectedInterfaces() {
-        // Python default is 4 in Reticulum config; use same default
-        return 4;
+        try {
+            return io.reticulum.Reticulum.maxAutoconnectedInterfaces();
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     private void writeInfoFile(Path path, Map<String, Object> info) {

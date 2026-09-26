@@ -3,12 +3,17 @@ package io.reticulum.destination;
 import lombok.Value;
 
 import java.util.List;
-import java.util.function.Function;
 
 @Value
 public class RequestHandler {
     String path;
-    Function<Request, byte[]> responseGenerator;
+    ResponseGenerator responseGenerator;
     RequestPolicy allow;
     List<byte[]> allowedList;
+    /**
+     * Whether resource responses from this handler are auto-compressed before
+     * sending. Mirrors the {@code auto_compress} argument of
+     * {@code Destination.register_request_handler}.
+     */
+    boolean autoCompress;
 }

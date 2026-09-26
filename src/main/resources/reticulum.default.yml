@@ -45,6 +45,52 @@ reticulum:
 
   panic_on_interface_error: false
 
+  # Links negotiate an MTU larger than the 500-byte default when the
+  # next-hop interface supports it. This significantly increases
+  # throughput over fast links. Enabled by default.
+
+  # link_mtu_discovery: true
+
+  # Reticulum can look for other interfaces announced on the network.
+  # This is off by default. Enabling it only makes this instance
+  # *listen* for announced interfaces; connecting to them additionally
+  # requires autoconnect_discovered_interfaces below.
+
+  # discover_interfaces: false
+
+  # Minimum proof-of-work stamp value a discovered interface must carry
+  # to be remembered. Leave unset for the default.
+
+  # required_discovery_value: 16
+
+  # How many discovered interfaces this instance may automatically
+  # connect to. Zero, or leaving this out, disables auto-connection
+  # entirely — this instance will not dial out to interfaces it finds
+  # on the network unless you set this.
+
+  # autoconnect_discovered_interfaces: 0
+
+  # Interface mode assigned to auto-connected interfaces. Defaults to
+  # gateway mode when transport is enabled, otherwise unset.
+
+  # autoconnect_interface_mode: gateway
+
+  # Only accept interface discoveries announced by these identities.
+
+  # interface_discovery_sources:
+  #   - 00000000000000000000000000000000
+
+  # Name distinguishing this instance if you run several on one system.
+
+  # instance_name: default
+
+  # Default announce rate controls applied to interfaces that do not
+  # configure their own.
+
+  # default_ar_target: 3600
+  # default_ar_penalty: 0
+  # default_ar_grace: 5
+
 
 # The interfaces section defines the physical and virtual
 # interfaces Reticulum will use to communicate on. This

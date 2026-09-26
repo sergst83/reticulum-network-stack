@@ -13,6 +13,7 @@ public class IdentityConstant {
     public static final int KEYSIZE = 256 * 2;
 
     public static final int AES128_BLOCKSIZE = 16;      // In bytes
+    public static final int AES256_BLOCKSIZE = 16;      // In bytes
     public static final int HASHLENGTH = 256;           // In bits
     public static final int SIGLENGTH = KEYSIZE;        // In bits
     public static final int RATCHETSIZE = 256;          // In bits
@@ -23,13 +24,23 @@ public class IdentityConstant {
     public static final int NAME_HASH_LENGTH = 80;
 
     /**
-     * This class provides a slightly modified implementation of the Fernet spec
-     * found at: <a href="https://github.com/fernet/spec/blob/master/Spec.md">https://github.com/fernet/spec/blob/master/Spec.md</a>
+     * Length in bytes of the key derived by HKDF for token encryption.
      * <p>
-     * According to the spec, a Fernet token includes a one byte VERSION and
-     * eight byte TIMESTAMP field at the start of each token. These fields are
-     * not relevant to Reticulum. They are therefore stripped from this
-     * implementation, since they incur overhead and leak initiator metadata.
+     * 64 bytes selects AES-256-CBC in {@link io.reticulum.cryptography.Token}
+     * (32 byte signing key + 32 byte encryption key).
      */
-    public static final int FERNET_OVERHEAD = 48; //bytes
+    public static final int DERIVED_KEY_LENGTH = 512 / 8;
+
+    /**
+     * The pre-AES-256 derived key length. Retained for parity with the reference
+     * implementation, which also no longer uses it. Reticulum peers negotiate
+     * AES-256-CBC unconditionally, so nothing derives a key of this length.
+     */
+    public static final int DERIVED_KEY_LENGTH_LEGACY = 256 / 8;
+
+    /**
+     * Combined size of the IV and HMAC fields carried by every token — see
+     * {@link io.reticulum.cryptography.Token}.
+     */
+    public static final int TOKEN_OVERHEAD = io.reticulum.cryptography.Token.TOKEN_OVERHEAD;
 }

@@ -3,6 +3,7 @@ package io.reticulum.interfaces;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonSubTypes.Type;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import io.reticulum.constant.ReticulumConstant;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.auto.AutoInterface;
 import io.reticulum.interfaces.backbone.BackboneClientInterface;
@@ -107,6 +108,117 @@ public interface ConnectionInterface {
     void  setAnnounceAllowedAt(Instant announceAllowedAt);
 
     Integer getBitrate();
+
+    /**
+     * Preference weight for this interface when choosing between equally good
+     * paths. A higher value wins. Mirrors {@code Interface.gravity}; the
+     * reference default is 0.
+     */
+    default int getGravity() {
+        return 0;
+    }
+
+    /**
+     * Whether announces whose next hop is an internal-mode interface may be
+     * propagated out of this interface. Mirrors
+     * {@code Interface.announces_from_internal}; defaults to true.
+     */
+    default boolean isAnnouncesFromInternal() {
+        return true;
+    }
+
+    /**
+     * Whether announces arriving via this interface may be propagated into an
+     * internal-mode interface. Mirrors {@code Interface.announces_to_internal};
+     * null means "not configured", which is distinct from false.
+     */
+    default Boolean getAnnouncesToInternal() {
+        return null;
+    }
+
+    /**
+     * Whether a path request arriving on this interface may trigger recursive
+     * path requests on other interfaces, regardless of interface mode. Mirrors
+     * {@code Interface.recursive_prs}; defaults to false.
+     */
+    default boolean isRecursivePrs() {
+        return false;
+    }
+
+    /**
+     * Largest frame this interface can carry, in bytes, or {@code null} if the
+     * interface declares no hardware MTU at all.
+     * <p>
+     * Only meaningful when {@link #isAutoconfigureMtu()} or {@link #isFixedMtu()}
+     * is true; otherwise the link MTU stays at the Reticulum default. Mirrors
+     * {@code Interface.HW_MTU} in the reference implementation, which is an
+     * instance attribute seeded from a per-class ceiling and then recomputed by
+     * {@link #optimiseMtu()} — hence nullable here too, since
+     * {@code optimise_mtu()} yields {@code None} below 62.5 kbps.
+     */
+    default Integer getHwMtu() {
+        return ReticulumConstant.MTU;
+    }
+
+    /**
+     * Record a protocol violation observed on this interface.
+     * <p>
+     * Mirrors {@code Interface.protocol_violation()}. The reference only counts
+     * and logs; the counter is what a future traffic-class implementation would
+     * act on.
+     */
+    default void protocolViolation(String description) {
+        //pass
+    }
+
+    /**
+     * Recompute {@link #getHwMtu()} from the interface's bitrate.
+     * <p>
+     * A no-op unless {@link #isAutoconfigureMtu()} is true. Mirrors
+     * {@code Interface.optimise_mtu()} ({@code RNS/Interfaces/Interface.py:250}),
+     * which the reference calls after an interface is configured and after a
+     * server interface spawns a client interface. Without it the per-class
+     * {@code HW_MTU} is only a ceiling that is never applied: a reference TCP
+     * interface at the default 10 Mbps guess ends up at 16384, not 262144.
+     */
+    default void optimiseMtu() {
+        //pass
+    }
+
+    /**
+     * The hardware MTU a given bitrate supports, or {@code null} below
+     * 62.5 kbps. Table transcribed from {@code Interface.optimise_mtu()}.
+     */
+    static Integer optimisedMtu(Integer bitrate) {
+        if (bitrate == null)              return null;
+        if (bitrate >= 1_000_000_000)     return 524288;
+        else if (bitrate >= 750_000_000)  return 262144;
+        else if (bitrate >= 400_000_000)  return 131072;
+        else if (bitrate >= 200_000_000)  return 65536;
+        else if (bitrate >= 100_000_000)  return 32768;
+        else if (bitrate >= 10_000_000)   return 16384;
+        else if (bitrate >= 5_000_000)    return 8192;
+        else if (bitrate >= 2_000_000)    return 4096;
+        else if (bitrate >= 1_000_000)    return 2048;
+        else if (bitrate >= 62_500)       return 1024;
+        else                              return null;
+    }
+
+    /**
+     * Whether links over this interface may negotiate an MTU up to
+     * {@link #getHwMtu()}. Mirrors {@code Interface.AUTOCONFIGURE_MTU}.
+     */
+    default boolean isAutoconfigureMtu() {
+        return false;
+    }
+
+    /**
+     * Whether this interface always operates at {@link #getHwMtu()}. Mirrors
+     * {@code Interface.FIXED_MTU}.
+     */
+    default boolean isFixedMtu() {
+        return false;
+    }
 
     default void detach() {
         //pass
@@ -240,6 +352,30 @@ public interface ConnectionInterface {
     void receivedAnnounce(boolean fromSpawned);
 
     boolean shouldIngressLimit();
+
+    /**
+     * Whether inbound path requests on this interface should currently be rate
+     * limited. Mirrors {@code Interface.should_ingress_limit_pr}.
+     */
+    default boolean shouldIngressLimitPr() {
+        return false;
+    }
+
+    /**
+     * Whether an outgoing path request should be suppressed to stay within this
+     * interface's egress budget. Mirrors {@code Interface.should_egress_limit_pr}.
+     */
+    default boolean shouldEgressLimitPr() {
+        return false;
+    }
+
+    /** Records that a path request was received on this interface. */
+    default void receivedPathRequest() {
+    }
+
+    /** Records that a path request was sent on this interface. */
+    default void sentPathRequest() {
+    }
 
     void holdAnnounce(Packet announcePacket);
 }

@@ -1,0 +1,24 @@
+# Step 6 victim, reference side. Same ingress-control values as the Java victim.
+
+[reticulum]
+  enable_transport = Yes
+  share_instance = No
+  panic_on_interface_error = No
+
+[logging]
+  loglevel = 4
+
+[interfaces]
+
+  [[Step6 TCP Server]]
+    type = TCPServerInterface
+    interface_enabled = True
+    listen_ip = 127.0.0.1
+    listen_port = 42507
+    ingress_control = True
+    ic_burst_freq_new = 3
+    ic_burst_freq = 3
+    ic_burst_hold = 4
+    ic_burst_penalty = 4
+    ic_held_release_interval = 1
+    ic_max_held_announces = 20

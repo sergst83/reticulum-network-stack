@@ -66,7 +66,7 @@ public class InterfaceAnnounceHandler implements AnnounceHandler {
     private final ObjectMapper msgpack = new MessagePackMapper();
 
     /**
-     * @param requiredValue minimum stamp difficulty to accept (default 14)
+     * @param requiredValue minimum stamp difficulty to accept (default 16)
      * @param callback      called with parsed info when a valid announce is received;
      *                      may be {@code null}
      */

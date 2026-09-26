@@ -46,6 +46,18 @@ public class RequestReceipt {
     private long timeout;
     private Instant resourceResponseTimeout;
     private byte[] response;
+    /** Size of the request that was sent, in bytes. */
+    private int requestSize;
+    /**
+     * Metadata delivered alongside a file response, or null. Only file responses
+     * carry metadata; see {@code Link.handleRequest}.
+     */
+    private Object metadata;
+    /**
+     * Largest response this requester will accept, in bytes, or null for no
+     * limit. Oversized responses are rejected rather than delivered.
+     */
+    private Integer maxResponseSize;
 
     private void init(
             Link link,
@@ -57,7 +69,11 @@ public class RequestReceipt {
     ) {
         this.link = link;
         this.requestId = this.hash;
-        this.responseSize = requestSize;
+        // The request size belongs in its own field. This used to be assigned to
+        // responseSize, so getResponseSize() reported the request size until a
+        // response arrived and overwrote it.
+        this.requestSize = requestSize;
+        this.responseSize = 0;
 
         this.timeout = timeout;
 
@@ -177,9 +193,18 @@ public class RequestReceipt {
     }
 
     public synchronized void responseReceived(byte[] responseData) {
+        responseReceived(responseData, null);
+    }
+
+    /**
+     * @param responseData the response payload
+     * @param responseMetadata metadata carried with a file response, or null
+     */
+    public synchronized void responseReceived(byte[] responseData, Object responseMetadata) {
         if (isFalse(status == FAILED)) {
             progress = 1.0;
             response = responseData;
+            metadata = responseMetadata;
             status = READY;
             responseConcludedAt = Instant.now();
 
@@ -205,6 +230,26 @@ public class RequestReceipt {
                     callbacks.getResponse().accept(this);
                 } catch (Exception e) {
                     log.error("Error while executing response received callback from {}.", this, e);
+                }
+            }
+        }
+    }
+
+    /**
+     * Concludes the request as failed because the response exceeded
+     * {@link #maxResponseSize}. Mirrors {@code RequestReceipt.response_rejected}.
+     */
+    public synchronized void responseRejected() {
+        if (link.getPendingRequests().contains(this) && status == DELIVERED) {
+            status = FAILED;
+            concludedAt = Instant.now();
+            link.getPendingRequests().remove(this);
+
+            if (nonNull(callbacks.getFailed())) {
+                try {
+                    callbacks.getFailed().accept(this);
+                } catch (Exception e) {
+                    log.error("Error while executing request rejected callback from {}.", this, e);
                 }
             }
         }

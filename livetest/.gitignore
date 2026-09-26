@@ -1,0 +1,8 @@
+# Harness scratch: logs, captures, resolved classpath, fifos
+.work/
+
+# Runtime state created by a run — identities, caches, path tables, databases.
+# Each run starts from clean storage, so none of this should be versioned.
+# Matched by directory name so it covers any config dir, however named.
+storage/
+interfaces/

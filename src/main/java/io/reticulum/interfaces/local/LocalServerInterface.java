@@ -27,6 +27,7 @@ public class LocalServerInterface extends AbstractConnectionInterface {
         this.server = new ServerSocket(port);
         this.server.setReuseAddress(true);
         this.bitrate = 1_000_000_000;
+        this.hwMtu = 262_144;
         this.online.set(true);
     }
 
@@ -46,7 +47,9 @@ public class LocalServerInterface extends AbstractConnectionInterface {
         spawnedInterface.setIN(IN);
         spawnedInterface.setOUT(OUT);
         spawnedInterface.setParentInterface(this);
+        spawnedInterface.inheritTrafficControl(this);
         spawnedInterface.setBitrate(bitrate);
+        spawnedInterface.optimiseMtu();
         log.trace("Accepting new connection to shared instance: {}", spawnedInterface.getInterfaceName());
         Transport.getInstance().getInterfaces().add(spawnedInterface);
         Transport.getInstance().getLocalClientInterfaces().add(spawnedInterface);
@@ -67,5 +70,11 @@ public class LocalServerInterface extends AbstractConnectionInterface {
     @Override
     public void launch() {
         start();
+    }
+
+    /** {@code LocalInterface.AUTOCONFIGURE_MTU = True} in the reference. */
+    @Override
+    public boolean isAutoconfigureMtu() {
+        return true;
     }
 }

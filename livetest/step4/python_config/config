@@ -1,0 +1,18 @@
+# Python RNS 1.5.2 link-example server for the step-1 interop test.
+# Listens on loopback only; nothing here is reachable off this machine.
+
+[reticulum]
+  enable_transport = False
+  share_instance = No
+  panic_on_interface_error = No
+
+[logging]
+  loglevel = 7
+
+[interfaces]
+
+  [[Step4 TCP Server]]
+    type = TCPServerInterface
+    interface_enabled = True
+    listen_ip = 127.0.0.1
+    listen_port = 42502

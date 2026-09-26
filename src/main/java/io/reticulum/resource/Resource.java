@@ -17,6 +17,8 @@ import org.apache.commons.compress.compressors.CompressorStreamFactory;
 import org.apache.commons.lang3.ArrayUtils;
 import org.msgpack.core.MessagePack;
 
+import org.msgpack.jackson.dataformat.MessagePackMapper;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -47,13 +49,21 @@ import static io.reticulum.constant.ResourceConstant.HASHMAP_MAX_LEN;
 import static io.reticulum.constant.ResourceConstant.MAPHASH_LEN;
 import static io.reticulum.constant.ResourceConstant.MAX_ADV_RETRIES;
 import static io.reticulum.constant.ResourceConstant.MAX_EFFICIENT_SIZE;
+import static io.reticulum.constant.ResourceConstant.METADATA_MAX_SIZE;
 import static io.reticulum.constant.ResourceConstant.MAX_RETRIES;
 import static io.reticulum.constant.ResourceConstant.PART_TIMEOUT_FACTOR;
 import static io.reticulum.constant.ResourceConstant.PART_TIMEOUT_FACTOR_AFTER_RTT;
 import static io.reticulum.constant.ResourceConstant.PER_RETRY_DELAY;
 import static io.reticulum.constant.ResourceConstant.RANDOM_HASH_SIZE;
+import static io.reticulum.constant.ResourceConstant.PROCESSING_GRACE;
+import static io.reticulum.constant.ResourceConstant.PROOF_TIMEOUT_FACTOR;
 import static io.reticulum.constant.ResourceConstant.RATE_FAST;
+import static io.reticulum.constant.ResourceConstant.RATE_VERY_SLOW;
+import static io.reticulum.constant.ResourceConstant.VERY_SLOW_RATE_THRESHOLD;
+import static io.reticulum.constant.ResourceConstant.WINDOW_MAX_VERY_SLOW;
 import static io.reticulum.constant.ResourceConstant.RETRY_GRACE_TIME;
+import static io.reticulum.constant.ReticulumConstant.HEADER_MAXSIZE;
+import static io.reticulum.constant.ReticulumConstant.IFAC_MIN_SIZE;
 import static io.reticulum.constant.ResourceConstant.SDU;
 import static io.reticulum.constant.ResourceConstant.SENDER_GRACE_TIME;
 import static io.reticulum.constant.ResourceConstant.WATCHDOG_MAX_SLEEP;
@@ -83,6 +93,7 @@ import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.utils.IdentityUtils.truncatedHash;
 import static java.nio.file.StandardOpenOption.APPEND;
+import static java.nio.file.StandardOpenOption.TRUNCATE_EXISTING;
 import static java.nio.file.StandardOpenOption.CREATE;
 import static java.nio.file.StandardOpenOption.WRITE;
 import static java.util.Objects.isNull;
@@ -107,6 +118,9 @@ import static org.msgpack.value.ValueFactory.newInteger;
 @Slf4j
 @EqualsAndHashCode(of = "hash")
 public class Resource {
+
+    /** Serialiser for resource metadata objects; mirrors umsgpack in the reference. */
+    private static final MessagePackMapper METADATA_MSGPACK = new MessagePackMapper();
 
     private final Lock assambleLock = new ReentrantLock();
     private final Lock watchdogLock = new ReentrantLock();
@@ -144,6 +158,28 @@ public class Resource {
     private boolean isResponse;
     private boolean initiator;
     private boolean hasMetadata;
+    /**
+     * The auto-compression choice this resource was created with, retained so
+     * continuation segments inherit it ({@code auto_compress_option} in the
+     * reference).
+     */
+    private boolean autoCompressOption;
+    /**
+     * Framed metadata as carried on the wire: a 3-byte big-endian length prefix
+     * followed by the msgpack-encoded metadata object. Empty when there is none.
+     */
+    private byte[] metadata = new byte[0];
+    /** Size of {@link #metadata} including its 3-byte length prefix. */
+    private int metadataSize;
+    /** Metadata decoded on the receiving side, available once the transfer concludes. */
+    private Object unpackedMetadata;
+    private Path metaStoragePath;
+    /**
+     * Segment data unit for this resource: how many payload bytes fit in one
+     * part. Derived from the link's negotiated MTU rather than the global
+     * default, so a link that negotiated a larger MTU actually uses it.
+     */
+    private int sdu = SDU;
     private volatile boolean waitingForHmu;
     private volatile boolean receivingPart;
     private boolean hmuRetryOk;
@@ -171,6 +207,7 @@ public class Resource {
     private int partTimeoutFactor;
     private int watchdogJobId;
     private volatile int fastRateRounds;
+    private volatile int verySlowRateRounds;
     private int receiverMinConsecutiveHeight;
     private int sentParts;
     private int reqSentBytes;
@@ -190,6 +227,92 @@ public class Resource {
 
     private double progressTotalParts;
 
+    /**
+     * Frames a metadata object for transmission: msgpack-encode it, then prefix
+     * a 3-byte big-endian length. Mirrors {@code RNS/Resource.py:262-268}.
+     * <p>
+     * The framed metadata is prepended to the resource payload before
+     * compression and encryption, so it is covered by the resource hash.
+     *
+     * @param metadata the object to carry, or null for none
+     */
+    /**
+     * Payload bytes per part over a given link. Mirrors
+     * {@code RNS/Resource.py:338-339}: derived from the link MTU when one is
+     * negotiated, falling back to the link MDU and then the global default.
+     */
+    private static int sduFor(final Link link) {
+        if (isNull(link)) {
+            return SDU;
+        }
+        if (link.getMtu() > 0) {
+            return link.getMtu() - HEADER_MAXSIZE - IFAC_MIN_SIZE;
+        }
+
+        return link.getMdu() > 0 ? link.getMdu() : SDU;
+    }
+
+    @SneakyThrows
+    private void prepareMetadata(final Object metadata) {
+        if (isNull(metadata)) {
+            this.metadata = new byte[0];
+            this.metadataSize = 0;
+            this.hasMetadata = false;
+
+            return;
+        }
+
+        var framed = frameMetadata(metadata);
+
+        this.metadata = framed;
+        this.metadataSize = framed.length;
+        this.hasMetadata = true;
+    }
+
+    /**
+     * Encodes a metadata object into its wire form: a 3-byte big-endian length
+     * prefix followed by the msgpack encoding.
+     *
+     * @throws IllegalArgumentException if the encoded metadata exceeds
+     *                                  {@link io.reticulum.constant.ResourceConstant#METADATA_MAX_SIZE}
+     */
+    @SneakyThrows
+    static byte[] frameMetadata(final Object metadata) {
+        var packed = METADATA_MSGPACK.writeValueAsBytes(metadata);
+        if (packed.length > METADATA_MAX_SIZE) {
+            throw new IllegalArgumentException(
+                    "Resource metadata size exceeded: " + packed.length + " > " + METADATA_MAX_SIZE);
+        }
+
+        var framed = new byte[3 + packed.length];
+        framed[0] = (byte) (packed.length >> 16);
+        framed[1] = (byte) (packed.length >> 8);
+        framed[2] = (byte) packed.length;
+        System.arraycopy(packed, 0, framed, 3, packed.length);
+
+        return framed;
+    }
+
+    /**
+     * Reads the 3-byte big-endian metadata length from the front of a received
+     * payload.
+     */
+    static int declaredMetadataSize(final byte[] payload) {
+        if (payload.length < 3) {
+            throw new IllegalStateException("Payload of " + payload.length + " bytes is too short to frame metadata");
+        }
+
+        return ((payload[0] & 0xFF) << 16) | ((payload[1] & 0xFF) << 8) | (payload[2] & 0xFF);
+    }
+
+    /**
+     * Decodes msgpack-encoded metadata back into an object.
+     */
+    @SneakyThrows
+    static Object unpackMetadata(final byte[] packed) {
+        return METADATA_MSGPACK.readValue(packed, Object.class);
+    }
+
     @SneakyThrows
     private void init(
             byte[] data,
@@ -205,6 +328,7 @@ public class Resource {
     ) {
         this.status = NONE;
         this.link = link;
+        this.autoCompressOption = autoCompress;
         this.timeoutFactor = link.getTrafficTimeoutFactor();
         this.progressCallback = progressCallback;
         this.requestId = requestId;
@@ -221,6 +345,7 @@ public class Resource {
         this.reqRespRttRate = 0;
         this.rttRxdBytesAtPartReq = 0;
         this.fastRateRounds = 0;
+        this.verySlowRateRounds = 0;
 
         this.reqHashlist = new ArrayList<>();
         this.receiverMinConsecutiveHeight = 0;
@@ -232,6 +357,12 @@ public class Resource {
         }
 
         if (nonNull(data)) {
+            // Metadata rides in front of the payload, inside the hashed and
+            // compressed region (RNS/Resource.py:337).
+            if (this.hasMetadata) {
+                data = concatArrays(this.metadata, data);
+            }
+
             this.initiator = true;
             this.callback = callback;
             this.uncompressedData = data;
@@ -240,8 +371,14 @@ public class Resource {
             if (autoCompress && uncompressedData.length < AUTO_COMPRESS_MAX_SIZE) {
                 log.debug("Compressing resource data...");
                 try (var baos = new ByteArrayOutputStream()) {
-                    var compressor = new CompressorStreamFactory().createCompressorOutputStream(BZIP2, baos);
-                    compressor.write(uncompressedData);
+                    // The compressor must be closed before reading the buffer. BZIP2
+                    // buffers the whole block and only emits it on close, so reading
+                    // early yields nothing but the stream header — which, being
+                    // shorter than any input, always "won" the size comparison below
+                    // and replaced the payload with a 3-byte stub.
+                    try (var compressor = new CompressorStreamFactory().createCompressorOutputStream(BZIP2, baos)) {
+                        compressor.write(uncompressedData);
+                    }
                     this.compressedData = baos.toByteArray();
                 } catch (IOException e) {
                     throw new RuntimeException(e);
@@ -288,7 +425,10 @@ public class Resource {
 
             this.size = this.data.length;
             this.sentParts = 0;
-            var hashmapEntries = (int) Math.ceil((double) this.size / ResourceConstant.SDU);
+            var hashmapEntries = (int) Math.ceil((double) this.size / this.sdu);
+            // RNS/Resource.py:438. Without this the sender leaves totalParts at 0, and
+            // ResourceAdvertisement reports n=0 parts for every outgoing resource.
+            this.totalParts = hashmapEntries;
 
             var hashmapOk = false;
             while (isFalse(hashmapOk)) {
@@ -306,7 +446,7 @@ public class Resource {
                 this.hashmap = new byte[0];
                 var collisionGuardList = new LinkedList<byte[]>();
                 for (int i = 0; i < hashmapEntries; i++) {
-                    var d = subarray(this.data, i * SDU, (i + 1) * SDU);
+                    var d = subarray(this.data, i * this.sdu, (i + 1) * this.sdu);
                     var mapHash = getMapHash(d);
 
                     if (collisionGuardList.stream().anyMatch(array -> Arrays.equals(array, mapHash))) {
@@ -338,12 +478,39 @@ public class Resource {
         }
     }
 
+    /**
+     * Creates a resource carrying a request or response payload, with the timeout
+     * derived from link RTT.
+     * <p>
+     * Mirrors {@code RNS.Resource(packed_response, link, request_id=..., is_response=True)}
+     * at {@code RNS/Link.py:851}: advertised immediately, auto-compressed, no
+     * callbacks, first and only segment.
+     *
+     * @param data       the packed request or response
+     * @param link       the link to transfer over
+     * @param requestId  ID of the associated request
+     * @param isResponse true if this resource carries a response
+     */
     public Resource(byte[] data, Link link, byte[] requestId, boolean isResponse) {
-
+        this(data, link, requestId, isResponse, null);
     }
 
-    public Resource(byte[] data, Link link, byte[] requestId, boolean isResponse, long timeout) {
-
+    /**
+     * Creates a resource carrying a request or response payload with an explicit
+     * timeout.
+     * <p>
+     * Mirrors {@code RNS.Resource(packed_request, link, request_id=..., is_response=False,
+     * timeout=timeout)} at {@code RNS/Link.py:506}.
+     *
+     * @param data       the packed request or response
+     * @param link       the link to transfer over
+     * @param requestId  ID of the associated request
+     * @param isResponse true if this resource carries a response
+     * @param timeout    transfer timeout in <b>milliseconds</b>, or {@code null} to
+     *                   derive it from link RTT
+     */
+    public Resource(byte[] data, Link link, byte[] requestId, boolean isResponse, Long timeout) {
+        this(data, link, null, null, requestId, isResponse, timeout, true, null, true);
     }
 
     public Resource(
@@ -358,15 +525,69 @@ public class Resource {
             byte[] originalHash,
             boolean advertise
     ) {
+        this(data, link, null, callback, progressCallback, requestId, isResponse, timeout, autoCompress, originalHash, advertise);
+    }
+
+    /**
+     * @param metadata an optional object carried alongside the payload. It is
+     *                 msgpack-encoded, length-prefixed and prepended to the data,
+     *                 and surfaces on the receiving side via
+     *                 {@link #getUnpackedMetadata()}.
+     */
+    public Resource(
+            @NonNull final byte[] data,
+            final Link link,
+            final Object metadata,
+            final Consumer<Resource> callback,
+            Consumer<Resource> progressCallback,
+            byte[] requestId,
+            boolean isResponse,
+            Long timeout,
+            boolean autoCompress,
+            byte[] originalHash,
+            boolean advertise
+    ) {
+        prepareMetadata(metadata);
+        this.sdu = sduFor(link);
+
         var dataSize = data.length;
-        this.grandTotalParts = (int) Math.ceil((double) dataSize / SDU);
-        this.totalSize = dataSize;
+
+        if (dataSize + this.metadataSize > MAX_EFFICIENT_SIZE) {
+            // Too large to ship as one segment. Spill to a temporary file and take
+            // the segmented path, exactly as the reference does
+            // (RNS/Resource.py:275-280) — without this the byte-array path always
+            // declared a single segment, however large the payload.
+            var spill = spillToTempFile(data);
+            this.inputFile = spill;
+            var resourceData = readSegment(spill, 1);
+            init(resourceData, link, callback, progressCallback, requestId, isResponse, timeout,
+                    autoCompress, originalHash, advertise);
+
+            return;
+        }
+
+        this.grandTotalParts = (int) Math.ceil((double) (dataSize + this.metadataSize) / this.sdu);
+        this.totalSize = dataSize + this.metadataSize;
 
         this.totalSegments = 1;
         this.segmentIndex = 1;
         this.split = false;
 
         init(data, link, callback, progressCallback, requestId, isResponse, timeout, autoCompress, originalHash, advertise);
+    }
+
+    /**
+     * Writes an oversized payload to a temporary file so it can be segmented.
+     * The file is marked delete-on-exit; segments are read from it as the
+     * transfer progresses, so it cannot be removed before the resource concludes.
+     */
+    @SneakyThrows
+    private static File spillToTempFile(final byte[] data) {
+        var spill = Files.createTempFile("reticulum-resource-", ".segment").toFile();
+        spill.deleteOnExit();
+        Files.write(spill.toPath(), data);
+
+        return spill;
     }
 
     public Resource(@NonNull final File file, final Link link, final Consumer<Resource> callback) {
@@ -390,42 +611,136 @@ public class Resource {
             byte[] originalHash,
             boolean advertise
     ) {
-        var resourceData = new byte[0];
+        this(file, link, null, callback, segmentIndex, progressCallback, requestId, isResponse, timeout,
+                autoCompress, originalHash, advertise);
+    }
+
+    /**
+     * File-backed resource carrying optional metadata. This is the shape used for
+     * file responses to a request, where the metadata describes the file.
+     *
+     * @param metadata an optional object carried alongside the payload
+     */
+    public Resource(
+            @NonNull final File file,
+            final Link link,
+            final Object metadata,
+            final Consumer<Resource> callback,
+            int segmentIndex,
+            Consumer<Resource> progressCallback,
+            byte[] requestId,
+            boolean isResponse,
+            Long timeout,
+            boolean autoCompress,
+            byte[] originalHash,
+            boolean advertise
+    ) {
+        prepareMetadata(metadata);
+        this.sdu = sduFor(link);
+
         if (file.isFile()) {
-            try (var fileInputStream = new FileInputStream(file)) {
-                var dataSize = fileInputStream.available();
+            var resourceData = readSegment(file, segmentIndex);
+            init(resourceData, link, callback, progressCallback, requestId, isResponse, timeout, autoCompress, originalHash, advertise);
+        }
+    }
 
-                this.totalSize = dataSize;
-                this.grandTotalParts = (int) Math.ceil((double) dataSize / ResourceConstant.SDU);
+    /**
+     * Reads one segment out of a file-backed resource, setting the segment and
+     * size bookkeeping as a side effect. Mirrors {@code RNS/Resource.py:299-320}.
+     *
+     * @param file         the backing file
+     * @param segmentIndex 1-based index of the segment to read
+     * @return the bytes of that segment
+     */
+    @SneakyThrows
+    private byte[] readSegment(final File file, final int segmentIndex) {
+        try (var fileInputStream = new FileInputStream(file)) {
+            // file.length() rather than available(): the latter is only
+            // documented as an estimate, and saturates for large files.
+            var dataSize = file.length();
 
-                if (dataSize <= MAX_EFFICIENT_SIZE) {
-                    this.totalSegments = 1;
-                    this.segmentIndex = 1;
-                    this.split = false;
+            this.totalSize = (int) (dataSize + this.metadataSize);
+            this.grandTotalParts = (int) Math.ceil((double) this.totalSize / this.sdu);
 
-                    resourceData = fileInputStream.readAllBytes();
-                } else {
-                    this.totalSegments = ((dataSize - 1) * MAX_EFFICIENT_SIZE) + 1;
-                    this.segmentIndex = segmentIndex;
-                    this.split = true;
-                    var seekIndex = segmentIndex - 1;
-                    var seekPosition = seekIndex * MAX_EFFICIENT_SIZE;
+            if (this.totalSize <= MAX_EFFICIENT_SIZE) {
+                this.totalSegments = 1;
+                this.segmentIndex = 1;
+                this.split = false;
 
-                    fileInputStream.skip(seekPosition);
-                    resourceData = fileInputStream.readNBytes(MAX_EFFICIENT_SIZE);
-                    this.inputFile = file;
-                }
-            } catch (IOException e) {
-                throw new RuntimeException(e);
+                return fileInputStream.readAllBytes();
             }
 
-            init(resourceData, link, callback, progressCallback, requestId, isResponse, timeout, autoCompress, originalHash, advertise);
+            // RNS/Resource.py:307 — integer division. This was a multiplication,
+            // which produced a nonsensical (and int-overflowing) segment count for
+            // every split resource.
+            this.totalSegments = ((this.totalSize - 1) / MAX_EFFICIENT_SIZE) + 1;
+            this.segmentIndex = segmentIndex;
+            this.split = true;
+            this.inputFile = file;
+
+            // The first segment carries the framed metadata, so it has that much
+            // less room for payload; later segments are full width and start after
+            // it (RNS/Resource.py:311-318).
+            var seekIndex = (long) segmentIndex - 1;
+            var firstReadSize = MAX_EFFICIENT_SIZE - this.metadataSize;
+            long seekPosition;
+            int segmentReadSize;
+            if (segmentIndex == 1) {
+                seekPosition = 0;
+                segmentReadSize = firstReadSize;
+            } else {
+                // long arithmetic: this overflows int once a resource runs past ~2 GB
+                seekPosition = firstReadSize + ((seekIndex - 1) * MAX_EFFICIENT_SIZE);
+                segmentReadSize = MAX_EFFICIENT_SIZE;
+            }
+
+            fileInputStream.skip(seekPosition);
+
+            return fileInputStream.readNBytes(segmentReadSize);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * Continuation segment of an already-advertised multi-segment resource.
+     * <p>
+     * Mirrors {@code __prepare_next_segment} (RNS/Resource.py:779). The metadata
+     * itself travelled with the first segment, but its <em>size</em> must be
+     * carried forward: it shifts every subsequent segment's offset in the backing
+     * file, and the receiver still needs the metadata flag set for the resource as
+     * a whole.
+     */
+    private Resource(
+            @NonNull final File file,
+            final Link link,
+            final int segmentIndex,
+            final int sentMetadataSize,
+            final Consumer<Resource> callback,
+            final Consumer<Resource> progressCallback,
+            final byte[] requestId,
+            final boolean isResponse,
+            final Long timeout,
+            final boolean autoCompress,
+            final byte[] originalHash,
+            final boolean advertise
+    ) {
+        this.metadata = new byte[0];
+        this.metadataSize = sentMetadataSize;
+        this.hasMetadata = sentMetadataSize > 0;
+        this.sdu = sduFor(link);
+
+        if (file.isFile()) {
+            var resourceData = readSegment(file, segmentIndex);
+            init(resourceData, link, callback, progressCallback, requestId, isResponse, timeout,
+                    autoCompress, originalHash, advertise);
         }
     }
 
     public Resource(Link link, byte[] requestId) {
         this.link = link;
         this.requestId = requestId;
+        this.sdu = sduFor(link);
     }
 
     public static Resource accept(Packet packet, Consumer<Resource> callback) {
@@ -466,7 +781,7 @@ public class Resource {
             resource.progressCallback = progressCallback;
             resource.hasMetadata = adv.isX();
 
-            resource.grandTotalParts = (int) Math.ceil((double) adv.getDataSize() / SDU);
+            resource.grandTotalParts = (int) Math.ceil((double) adv.getDataSize() / resource.sdu);
             resource.storagePath = Transport.getInstance().getOwner().getResourcePath()
                     .resolve(Hex.encodeHexString(resource.originalHash));
             resource.parts = new ArrayList<>(Collections.nCopies(resource.totalParts, null));
@@ -571,8 +886,18 @@ public class Resource {
         defaultThreadFactory().newThread(this::advertiseJob).start();
     }
 
+    /**
+     * Must NOT be synchronized. This loops for the entire lifetime of a transfer,
+     * so holding the instance monitor here blocks every other synchronized method
+     * on the resource — {@code request}, {@code receivePart}, {@code hashmapUpdate},
+     * {@code cancel}. The effect was that an incoming part request could not be
+     * serviced until the watchdog gave up, by which point the transfer had already
+     * failed: no resource could ever be sent. The reference guards only its brief
+     * critical section, with the {@code watchdog_lock} flag mirrored here by
+     * {@link #watchdogLock}.
+     */
     @SneakyThrows
-    private synchronized void watchdogJob() {
+    private void watchdogJob() {
         this.watchdogJobId++;
         var thisJobId = this.watchdogJobId;
 
@@ -581,7 +906,14 @@ public class Resource {
                 var sleepTime = 0L;
 
                 if (status == ADVERTISED) {
-                    sleepTime = Duration.between(Instant.now(), advSent.minusMillis(timeout)).toMillis();
+                    // RNS/Resource.py:586 — (adv_sent + timeout + PROCESSING_GRACE) - now.
+                    // This used minusMillis, so the deadline sat in the past the moment the
+                    // advertisement was sent: every resource burned its advertisement
+                    // retries immediately and was cancelled before a receiver could reply.
+                    sleepTime = Duration.between(
+                            Instant.now(),
+                            advSent.plusMillis(timeout + PROCESSING_GRACE)
+                    ).toMillis();
                     if (sleepTime < 0) {
                         if (retriesLeft <= 0) {
                             log.debug("Resource transfer timeout after sending advertisement");
@@ -652,6 +984,10 @@ public class Resource {
                         }
                     }
                 } else if (status == AWAITING_PROOF) {
+                    // Decrease timeout factor since proof packets are significantly
+                    // smaller than a full req/resp roundtrip (RNS/Resource.py:655)
+                    this.timeoutFactor = PROOF_TIMEOUT_FACTOR;
+
                     sleepTime = Duration.between(
                             Instant.now(),
                             this.lastPartSent.plusMillis(this.rtt * this.timeoutFactor + this.senderGraceTime)
@@ -674,22 +1010,28 @@ public class Resource {
                     }
                 }
 
-                if (sleepTime == 0) {
-                    log.warn("Warning! Link watchdog sleep time of 0!");
-                }
                 if (sleepTime < 0) {
                     log.error("Timing error, cancelling resource transfer.");
                     cancel();
-                }
-                if (sleepTime > 0) {
-                    Thread.sleep(Math.min(sleepTime, WATCHDOG_MAX_SLEEP));
+                } else {
+                    // Floor the wait at 1 ms. The reference computes this as float
+                    // seconds, where a value of exactly zero is vanishingly unlikely;
+                    // here it is a whole number of milliseconds, so any deadline less
+                    // than a millisecond away truncates to zero. Sleeping zero turned
+                    // the watchdog into a busy loop that burned a core for the whole
+                    // transfer and starved the threads meant to be servicing it.
+                    Thread.sleep(Math.max(1, Math.min(sleepTime, WATCHDOG_MAX_SLEEP)));
                 }
             }
         }
     }
 
     @SneakyThrows
-    private synchronized void advertiseJob() {
+    /**
+     * Also not synchronized: this waits on {@code readyForNewResource()} in a
+     * sleep loop, and would hold the instance monitor for that whole wait.
+     */
+    private void advertiseJob() {
         this.advertisementPacket = new Packet(link, new ResourceAdvertisement(this).pack(), RESOURCE_ADV);
         while (isFalse(link.readyForNewResource())) {
             this.status = QUEUED;
@@ -716,6 +1058,42 @@ public class Resource {
         watchdogJobStart();
     }
 
+    /**
+     * Sidecar file holding the received metadata until the transfer concludes.
+     * Kept out of {@link #storagePath} so the payload file stays byte-exact.
+     */
+    private Path metaStoragePath() {
+        if (isNull(this.metaStoragePath)) {
+            this.metaStoragePath = Path.of(storagePath.toString() + ".meta");
+        }
+
+        return this.metaStoragePath;
+    }
+
+    /**
+     * Reads and decodes the metadata sidecar, then removes it. Returns null when
+     * the resource carried no metadata.
+     */
+    private Object readAssembledMetadata() {
+        if (isNull(this.metaStoragePath) || isFalse(Files.exists(this.metaStoragePath))) {
+            return null;
+        }
+
+        try {
+            return unpackMetadata(Files.readAllBytes(this.metaStoragePath));
+        } catch (Exception e) {
+            log.error("Could not decode metadata for resource {}", this, e);
+
+            return null;
+        } finally {
+            try {
+                Files.deleteIfExists(this.metaStoragePath);
+            } catch (Exception e) {
+                log.error("Error while cleaning up resource metadata file for {}", this, e);
+            }
+        }
+    }
+
     @SneakyThrows
     private void assemble() {
         if (isFalse(status == FAILED)) {
@@ -731,8 +1109,8 @@ public class Resource {
                 data = subarray(data, RANDOM_HASH_SIZE, data.length);
 
                 if (this.compressed) {
-                    try (var baos = new ByteArrayInputStream(data)) {
-                        var decompressor = new CompressorStreamFactory().createCompressorInputStream(BZIP2, baos);
+                    try (var bais = new ByteArrayInputStream(data);
+                         var decompressor = new CompressorStreamFactory().createCompressorInputStream(BZIP2, bais)) {
                         this.data = decompressor.readAllBytes();
                     }
                 } else {
@@ -742,7 +1120,25 @@ public class Resource {
                 var calculatedHash = IdentityUtils.fullHash(concatArrays(this.data, this.randomHash));
 
                 if (Arrays.equals(calculatedHash, this.hash)) {
-                    Files.write(storagePath, this.data, APPEND, WRITE, CREATE);
+                    var payload = this.data;
+
+                    // Metadata is framed in front of the payload of the first
+                    // segment only (RNS/Resource.py:709-717).
+                    if (this.hasMetadata && this.segmentIndex == 1) {
+                        var declaredSize = declaredMetadataSize(this.data);
+
+                        if (declaredSize < 0 || 3 + declaredSize > this.data.length) {
+                            throw new IllegalStateException(
+                                    "Declared metadata size " + declaredSize + " exceeds resource payload of "
+                                            + this.data.length + " bytes");
+                        }
+
+                        Files.write(metaStoragePath(), subarray(this.data, 3, 3 + declaredSize),
+                                TRUNCATE_EXISTING, WRITE, CREATE);
+                        payload = subarray(this.data, 3 + declaredSize, this.data.length);
+                    }
+
+                    Files.write(storagePath, payload, APPEND, WRITE, CREATE);
                     status = COMPLETE;
                     prove();
                 } else {
@@ -756,6 +1152,7 @@ public class Resource {
             if (this.segmentIndex == this.totalSegments) {
                 if (nonNull(this.callback)) {
                     this.data = Files.readAllBytes(storagePath);
+                    this.unpackedMetadata = readAssembledMetadata();
                     try {
                         this.callback.accept(this);
                     } catch (Exception e) {
@@ -802,8 +1199,13 @@ public class Resource {
                         }
                     } else {
                         // Otherwise we'll recursively create the
-                        // next segment of the resource
-                        new Resource(inputFile, link, callback, segmentIndex + 1, originalHash, progressCallback);
+                        // next segment of the resource. Request ID, response flag,
+                        // compression choice and metadata size all have to carry
+                        // forward, or a segmented request/response loses its
+                        // identity and later segments read from the wrong offset.
+                        new Resource(inputFile, link, segmentIndex + 1, metadataSize, callback,
+                                progressCallback, requestId, isResponse, null, autoCompressOption,
+                                originalHash, true);
                     }
                 }
             }
@@ -911,6 +1313,16 @@ public class Resource {
                                         this.windowMax = WINDOW_MAX_FAST;
                                     }
                                 }
+
+                                if (this.fastRateRounds == 0
+                                        && this.reqDataRttRate < RATE_VERY_SLOW
+                                        && this.verySlowRateRounds < VERY_SLOW_RATE_THRESHOLD) {
+                                    this.verySlowRateRounds++;
+
+                                    if (this.verySlowRateRounds == VERY_SLOW_RATE_THRESHOLD) {
+                                        this.windowMax = WINDOW_MAX_VERY_SLOW;
+                                    }
+                                }
                             }
                         }
 
@@ -1009,9 +1421,17 @@ public class Resource {
             var requestedHashes = subarray(requestData, pad + HASHLENGTH / 8, requestData.length);
 
 
-            // Define the search scope
-            var searchStart = this.receiverMinConsecutiveHeight;
-            var searchEnd = this.receiverMinConsecutiveHeight + COLLISION_GUARD_SIZE;
+            // Define the search scope.
+            // Clamped to the number of parts: the reference slices a list
+            // (self.parts[start:end]), which silently clamps, whereas
+            // List.subList throws IndexOutOfBoundsException past the end.
+            // COLLISION_GUARD_SIZE is 224, so every resource with fewer than
+            // 224 parts — i.e. almost all of them — threw here the moment the
+            // receiver asked for its first part. The exception was swallowed on
+            // the Netty thread, so the sender simply reported "no part requests
+            // received" and timed out.
+            var searchStart = Math.min(this.receiverMinConsecutiveHeight, this.parts.size());
+            var searchEnd = Math.min(this.receiverMinConsecutiveHeight + COLLISION_GUARD_SIZE, this.parts.size());
 
             var mapHashes = new ArrayList<byte[]>();
             for (int i = 0; i < requestedHashes.length / MAPHASH_LEN; i++) {
@@ -1135,14 +1555,14 @@ public class Resource {
      */
     public double getProgress() {
         if (initiator) {
-            this.processedParts = (int) ((this.segmentIndex - 1) * Math.ceil((double) MAX_EFFICIENT_SIZE / SDU));
+            this.processedParts = (int) ((this.segmentIndex - 1) * Math.ceil((double) MAX_EFFICIENT_SIZE / this.sdu));
             this.processedParts += this.sentParts;
             this.progressTotalParts = this.grandTotalParts;
         } else {
-            this.processedParts = (int) ((segmentIndex - 1) * Math.ceil((double) MAX_EFFICIENT_SIZE / SDU));
+            this.processedParts = (int) ((segmentIndex - 1) * Math.ceil((double) MAX_EFFICIENT_SIZE / this.sdu));
             this.processedParts += this.receivedCount;
             if (this.split) {
-                this.progressTotalParts = Math.ceil((double) this.totalSize / SDU);
+                this.progressTotalParts = Math.ceil((double) this.totalSize / this.sdu);
             } else {
                 this.progressTotalParts = this.totalParts;
             }

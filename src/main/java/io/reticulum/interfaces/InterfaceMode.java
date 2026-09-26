@@ -18,6 +18,7 @@ public enum InterfaceMode {
     MODE_ROAMING(List.of("roaming"), Byte.decode("0x04")),
     MODE_BOUNDARY(List.of("boundary"), Byte.decode("0x05")),
     MODE_GATEWAY(List.of("gateway", "gw"), Byte.decode("0x06")),
+    MODE_INTERNAL(List.of("internal"), Byte.decode("0x07")),
     ;
 
     private final List<String> aliases;

@@ -15,6 +15,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.HashMap;
 
+import static io.reticulum.constant.ResourceConstant.MAX_EFFICIENT_SIZE;
 import static io.reticulum.constant.ResourceConstant.HASHMAP_MAX_LEN;
 import static io.reticulum.constant.ResourceConstant.MAPHASH_LEN;
 import static java.util.Objects.isNull;
@@ -24,6 +25,7 @@ import static org.apache.commons.lang3.ArrayUtils.getLength;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 import static org.apache.commons.lang3.BooleanUtils.toInteger;
 import static org.msgpack.value.ValueFactory.newBinary;
+import static org.msgpack.value.ValueFactory.newNil;
 import static org.msgpack.value.ValueFactory.newInteger;
 import static org.msgpack.value.ValueFactory.newMap;
 import static org.msgpack.value.ValueFactory.newString;
@@ -64,6 +66,7 @@ public class ResourceAdvertisement {
             this.c = resource.isCompressed();           // Compression flag
             this.e = resource.isEncrypted();            // Encryption flag
             this.s = resource.isSplit();                // Split flag
+            this.x = resource.isHasMetadata();           // Metadata flag
             this.i = resource.getSegmentIndex();        // Segment index
             this.l = resource.getTotalSegments();       // Total segments
             this.q = resource.getRequestId();           // ID of associated request
@@ -180,7 +183,9 @@ public class ResourceAdvertisement {
         dictionary.put(newString("o"), newBinary(o));   // Original hash
         dictionary.put(newString("i"), newInteger(i));  // Segment index
         dictionary.put(newString("l"), newInteger(l));  // Total segments
-        dictionary.put(newString("q"), newBinary(q));   // Request ID
+        // Python packs None for a resource with no associated request, which is
+        // every ordinary transfer. newBinary(null) would throw.
+        dictionary.put(newString("q"), isNull(q) ? newNil() : newBinary(q));   // Request ID
         dictionary.put(newString("f"), newInteger(f));  // Resource flags
         dictionary.put(newString("m"), newBinary(hashMap));
 
@@ -213,13 +218,21 @@ public class ResourceAdvertisement {
             adv.f = dictionary.get(newString("f")).asIntegerValue().asInt();
             adv.i = dictionary.get(newString("i")).asIntegerValue().asInt();
             adv.l = dictionary.get(newString("l")).asIntegerValue().asInt();
-            adv.q = dictionary.get(newString("q")).asBinaryValue().asByteArray();
+            var requestId = dictionary.get(newString("q"));
+            adv.q = isNull(requestId) || requestId.isNilValue() ? null : requestId.asBinaryValue().asByteArray();
             adv.e = (adv.f & 0x01) == 0x01;
             adv.c = ((adv.f >> 1) & 0x01) == 0x01;
             adv.s = ((adv.f >> 2) & 0x01) == 0x01;
             adv.u = ((adv.f >> 3) & 0x01) == 0x01;
             adv.p = ((adv.f >> 4) & 0x01) == 0x01;
             adv.x = ((adv.f >> 5) & 0x01) == 0x01;
+        }
+
+        // RNS/Resource.py:1374 — reject implausible transfer sizes before any
+        // allocation happens. The reference peer applies the same bound, so an
+        // advertisement over it would be dropped on the other side anyway.
+        if (adv.t > MAX_EFFICIENT_SIZE * 3L) {
+            throw new IllegalArgumentException("Invalid transfer size " + adv.t + " in resource advertisement");
         }
 
         return adv;
