@@ -10,6 +10,7 @@
 #                                          file response with {1: 0} metadata
 #   7b  git push                           large map request carrying a bundle
 #   7c  git clone again                    the pushed commit is served back
+#   7d  /slow, then /git/list on one link  handlers run off the I/O thread
 #
 # Usage:  ./run.sh            (BLOB_MB=3 by default: incompressible, so the
 #                              bundle exceeds MAX_EFFICIENT_SIZE and segments)
@@ -139,6 +140,13 @@ else
     sed 's/^/  | /' "$WORK/clone2.log" | tail -15; fail "7c"
 fi
 
+say "7d: a slow request does not block the next one on the same link"
+PYTHONPATH="$RNS_SRC" timeout 60 python3 -u "$HERE/py_concurrent.py" "$HERE/python_client_config" "$DEST" \
+    > "$WORK/concurrent.log" 2>&1
+RC=$?
+grep -a '^\[step7d\]' "$WORK/concurrent.log" | sed 's/^/  /'
+[[ $RC -eq 0 ]] || fail "7d"
+
 say "Java server"
 grep -a '^\[step7\]' "$WORK/java_server.log" | sed 's/^/  /'
 
@@ -146,6 +154,6 @@ say "Result"
 if [[ $FAILURES -eq 0 ]]; then
     echo "PASS — stock git-remote-rns (RNS $PY_VERSION) cloned, pushed and re-cloned against a Java node."
 else
-    echo "FAIL — $FAILURES of 3 checks failed. Logs in $WORK/"
+    echo "FAIL — $FAILURES of 4 checks failed. Logs in $WORK/"
 fi
 exit $FAILURES

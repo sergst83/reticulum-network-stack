@@ -71,6 +71,15 @@ public class Step7GitServer {
         destination.registerRequestHandler("/git/list", Step7GitServer::handleList, RequestPolicy.ALLOW_ALL, null, true);
         destination.registerRequestHandler("/git/fetch", Step7GitServer::handleFetch, RequestPolicy.ALLOW_ALL, null, false);
         destination.registerRequestHandler("/git/push", Step7GitServer::handlePush, RequestPolicy.ALLOW_ALL, null, true);
+        // Sleeps before answering: a request sent after it on the same link must not wait for it
+        destination.registerRequestHandler("/slow", request -> {
+            try {
+                Thread.sleep(8000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return Response.of("slow".getBytes(UTF_8));
+        }, RequestPolicy.ALLOW_ALL, null, false);
 
         System.out.println("[step7] destination <" + Hex.encodeHexString(destination.getHash()) + ">");
         System.out.println("[step7] serving " + repo);
