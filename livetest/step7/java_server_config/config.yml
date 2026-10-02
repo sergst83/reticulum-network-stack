@@ -1,0 +1,15 @@
+# Java node serving the step 7 git test destination; the stock
+# git-remote-rns connects in.
+reticulum:
+  enable_transport: false
+  share_instance: false
+  panic_on_interface_error: false
+interfaces:
+  "Default Interface":
+    type: AutoInterface
+    enabled: false
+  "Step7 TCP Server":
+    type: TCPServerInterface
+    enabled: true
+    listen_ip: 127.0.0.1
+    listen_port: 42507

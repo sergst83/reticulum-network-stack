@@ -104,7 +104,35 @@ class ResourceMetadataTest {
         System.arraycopy(framed, 3, packed, 0, declared);
         var decoded = invoke("unpackMetadata", byte[].class, packed);
 
-        assertEquals(referenceMetadata(), decoded);
+        // Integers decode as Long, whatever width they were sent with
+        var expected = new LinkedHashMap<Object, Object>();
+        expected.put("name", "release.whl");
+        expected.put("size", 123456L);
+        expected.put("code", 0L);
+        assertEquals(expected, decoded);
+    }
+
+    /**
+     * rngit's fetch response metadata, {IDX_RESULT_CODE: RES_OK} = {1: 0},
+     * framed by Python RNS 1.5.2. Jackson wrote the key as the string "1",
+     * which git-remote-rns does not find, so every fetch aborted.
+     */
+    private static final String REFERENCE_FRAMED_INT_KEY = "000003810100";
+
+    @Test
+    @DisplayName("Integer map keys are framed as msgpack ints, as the reference does")
+    void integerKeysMatchReference() throws Exception {
+        var framed = (byte[]) invoke("frameMetadata", Object.class, Map.of(1, 0));
+
+        assertEquals(REFERENCE_FRAMED_INT_KEY, Hex.encodeHexString(framed));
+    }
+
+    @Test
+    @DisplayName("Integer map keys from the reference decode as integers, not strings")
+    void integerKeysParseFromReference() throws Exception {
+        var decoded = invoke("unpackMetadata", byte[].class, Hex.decodeHex("810100"));
+
+        assertEquals(Map.of(1L, 0L), decoded);
     }
 
     @Test

@@ -19,6 +19,7 @@ import io.reticulum.resource.ResourceAdvertisement;
 import io.reticulum.resource.ResourceStatus;
 import io.reticulum.resource.ResourceStrategy;
 import io.reticulum.utils.IdentityUtils;
+import io.reticulum.utils.MsgPackUtils;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.Setter;
@@ -664,7 +665,10 @@ public class Link extends AbstractDestination {
      * Sends a request to the remote peer.
      *
      * @param path The request path.
-     * @param data The binary content associated with your message.
+     * @param data The content associated with your message: {@code byte[]}, null, or any structure
+     *             {@link MsgPackUtils#toValue} accepts (a {@code Map}, {@code List}, {@code String}, a msgpack
+     *             value, ...). Packed as the reference packs {@code data} ({@code RNS/Link.py:487}), so
+     *             a Python handler receives bytes as {@code bytes} and a map as a {@code dict}.
      * @param responseCallback An optional function or method with the signature
      * @param failedCallback An optional function or method with the signature to be called when a request fails.
      * @param progressCallback An optional function or method with the signature to be called when progress is made
@@ -675,7 +679,7 @@ public class Link extends AbstractDestination {
      */
     public RequestReceipt request(
             String path,
-            byte[] data,
+            Object data,
             Consumer<RequestReceipt> responseCallback,
             Consumer<RequestReceipt> failedCallback,
             Consumer<RequestReceipt> progressCallback,
@@ -706,7 +710,7 @@ public class Link extends AbstractDestination {
     @SneakyThrows
     public RequestReceipt request(
             String path,
-            byte[] data,
+            Object data,
             Consumer<RequestReceipt> responseCallback,
             Consumer<RequestReceipt> failedCallback,
             Consumer<RequestReceipt> progressCallback,
@@ -714,7 +718,7 @@ public class Link extends AbstractDestination {
             Integer maxResponseSize
     ) {
         byte[] requestPathHash = truncatedHash(path.getBytes(UTF_8));
-        var unpackedRequest = new UnpackedRequest(Instant.now(), requestPathHash, data);
+        var unpackedRequest = new UnpackedRequest(Instant.now(), requestPathHash, MsgPackUtils.toValue(data));
         byte[] packedRequest;
         try (var packer = MessagePack.newDefaultBufferPacker()) {
             packer.packValue(unpackedRequest.toValue());
