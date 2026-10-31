@@ -3090,21 +3090,22 @@ public final class Transport implements ExitHandler {
                         && destinationTable.containsKey(encodeHexString(destinationHash))
         ) {
             var destinationEntry = destinationTable.get(encodeHexString(destinationHash));
-            //var packet = destinationEntry.getPacket();
-            var packet = getCachedPacket(destinationHash, ANNOUNCE);
+            // The reference reads the announce back from its packet cache, keyed by
+            // the announce's packet hash (RNS/Transport.py:3460). Here the path table
+            // entry holds the announce packet itself; the packet cache is keyed by
+            // packet hash and announces are not written to it on reception, so a
+            // lookup by destination hash always missed and no path request for a
+            // non-local destination was ever answered.
+            var packet = destinationEntry.getPacket();
             var nextHop = destinationEntry.getVia();
-            var receivedFrom = destinationEntry.getPacket().getTransportId(); //todo в питоне тут ошибка (?)
-            // python version has "Transport.path_table[destination_hash][IDX_PT_RVCD_IF]" (?)
-            //var receivedFrom = destinationEntry.getInterface();
+            var receivedFrom = destinationEntry.getInterface();
 
             if (isNull(packet)) {
-                log.debug("Could not retrieve announce packet from cache while answering path request for {}",
+                log.debug("No announce packet in the path table entry while answering path request for {}",
                         encodeHexString(destinationHash));
             } else if (attachedInterface.getMode() == MODE_ROAMING && Objects.equals(attachedInterface, receivedFrom)) {
                 log.debug("Not answering path request on roaming-mode interface, since next hop is on same roaming-mode interface");
             } else {
-                packet.setHops(destinationEntry.getHops());
-
                 if (nonNull(requestorTransportId) && Arrays.equals(requestorTransportId, nextHop)) {
                     // TODO: Find a bandwidth efficient way to invalidate our
                     // known path on this signal. The obvious way of signing
@@ -3121,7 +3122,7 @@ public final class Transport implements ExitHandler {
                     var retries = PATHFINDER_R;
                     var localRebroadcasts = 0;
                     var blockRebroadcasts = true;
-                    var announceHops = packet.getHops();
+                    var announceHops = destinationEntry.getHops();
                     //var retransmitTimeout = isFromLocalClient ? now : now.plusMillis(PATH_REQUEST_GRACE);
                     var retransmitTimeout = now;
 
@@ -3160,7 +3161,7 @@ public final class Transport implements ExitHandler {
                                     .timestamp(now)
                                     .retransmitTimeout(retransmitTimeout)
                                     .retries(retries)
-                                    .transportId(receivedFrom)
+                                    .transportId(packet.getTransportId())
                                     .hops(announceHops)
                                     .localRebroadcasts(localRebroadcasts)
                                     .blockRebroadcasts(blockRebroadcasts)
