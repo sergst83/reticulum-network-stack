@@ -411,41 +411,55 @@ public final class Transport implements ExitHandler {
                 log.debug("Loaded {}  path table entries  from storage", destinationTable.size());
             }
 
-            var tunnelList = storage.getTunnelTables();
-            if (isNotEmpty(tunnelList) && isFalse(owner.isConnectedToSharedInstance())) {
-                for (TunnelEntity tunnelEntity : tunnelList) {
-                    var tunnelPaths = new HashMap<String, Hops>();
-                    MapUtils.emptyIfNull(tunnelEntity.getTunnelPaths()).forEach((destinationHash, hopEntry) -> {
-                        var receivingInterface = findInterfaceFromHash(hopEntry.getInterfaceHash());
-                        var announcePacket = getCachedPacket(hopEntry.getPacketHash());
-                        if (nonNull(announcePacket)) {
-                            // We increase the hops, since reading a packet
-                            // from cache is equivalent to receiving it again
-                            // over an interface. It is cached with it's non-increased hop-count.
-                            announcePacket.setHops(announcePacket.getHops() + 1);
+            // A tunnel table that cannot be loaded must not stop Transport from starting
+            // (RNS/Transport.py logs and carries on). Tables saved before the converter fix
+            // hold null paths, which are skipped here.
+            try {
+                var tunnelList = storage.getTunnelTables();
+                if (isNotEmpty(tunnelList) && isFalse(owner.isConnectedToSharedInstance())) {
+                    for (TunnelEntity tunnelEntity : tunnelList) {
+                        var tunnelPaths = new HashMap<String, Hops>();
+                        MapUtils.emptyIfNull(tunnelEntity.getTunnelPaths()).forEach((destinationHash, hopEntry) -> {
+                            if (isNull(hopEntry) || isNull(hopEntry.getPacketHash())) {
+                                return;
+                            }
+                            var receivingInterface = findInterfaceFromHash(hopEntry.getInterfaceHash());
+                            var announcePacket = getCachedPacket(hopEntry.getPacketHash());
+                            if (nonNull(announcePacket) && announcePacket.unpack()) {
+                                // We increase the hops, since reading a packet
+                                // from cache is equivalent to receiving it again
+                                // over an interface. It is cached with it's non-increased hop-count.
+                                announcePacket.setHops(announcePacket.getHops() + 1);
 
-                            var tunnelPath = Hops.builder()
-                                    .timestamp(hopEntry.getTimestamp())
-                                    .hops(hopEntry.getHops())
-                                    .via(hopEntry.getVia())
-                                    .expires(hopEntry.getExpires())
-                                    .randomBlobs(hopEntry.getRandomBlobs())
-                                    .anInterface(receivingInterface)
-                                    .packet(announcePacket)
-                                    .build();
-                            tunnelPaths.put(destinationHash, tunnelPath);
+                                var tunnelPath = Hops.builder()
+                                        .timestamp(hopEntry.getTimestamp())
+                                        .hops(hopEntry.getHops())
+                                        .via(hopEntry.getVia())
+                                        .expires(hopEntry.getExpires())
+                                        .randomBlobs(hopEntry.getRandomBlobs())
+                                        .anInterface(receivingInterface)
+                                        .packet(announcePacket)
+                                        .build();
+                                tunnelPaths.put(destinationHash, tunnelPath);
+                            }
+                        });
+                        if (tunnelPaths.isEmpty()) {
+                            continue;
                         }
-                    });
-                    tunnels.put(
-                            tunnelEntity.getTunnelIdHex(),
-                            Tunnel.builder()
-                                    .tunnelId(tunnelEntity.getTunnelId())
-                                    .tunnelPaths(tunnelPaths)
-                                    .expires(tunnelEntity.getExpires())
-                                    .anInterface(findInterfaceFromHash(tunnelEntity.getInterfaceHash()))
-                                    .build()
-                    );
+                        tunnels.put(
+                                tunnelEntity.getTunnelIdHex(),
+                                Tunnel.builder()
+                                        .tunnelId(tunnelEntity.getTunnelId())
+                                        .tunnelPaths(tunnelPaths)
+                                        .expires(tunnelEntity.getExpires())
+                                        .anInterface(findInterfaceFromHash(tunnelEntity.getInterfaceHash()))
+                                        .build()
+                        );
+                    }
+                    log.debug("Loaded {} tunnel table entries from storage", tunnels.size());
                 }
+            } catch (Exception e) {
+                log.error("Could not load tunnel table from storage", e);
             }
         }
 

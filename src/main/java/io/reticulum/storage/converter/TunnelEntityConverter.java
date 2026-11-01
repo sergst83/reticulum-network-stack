@@ -22,7 +22,8 @@ public class TunnelEntityConverter implements EntityConverter<TunnelEntity> {
         var tunnelPaths = new HashMap<String, Document>();
         if (MapUtils.isNotEmpty(entity.getTunnelPaths())) {
             for (String key : entity.getTunnelPaths().keySet()) {
-                var doc = (Document) nitriteMapper.tryConvert(tunnelPaths.get(key), Document.class);
+                // From the entity: reading the map being built here stored every path as null
+                var doc = (Document) nitriteMapper.tryConvert(entity.getTunnelPaths().get(key), Document.class);
                 tunnelPaths.put(key, doc);
             }
         } else {
