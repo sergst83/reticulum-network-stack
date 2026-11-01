@@ -169,7 +169,9 @@ public class BackboneClientInterface extends AbstractConnectionInterface impleme
     @Override
     public void run() {
         try {
-            connect(initiator);
+            if (connect(initiator) && initiator) {
+                requestTunnel();
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
