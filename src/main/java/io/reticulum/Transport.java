@@ -368,6 +368,22 @@ public final class Transport implements ExitHandler {
         controlDestinations.add(tunnelSynthesizeDestination);
         controlHashes.add(tunnelSynthesizeDestination.getHash());
 
+        // Start interface discovery announcer
+        if (isFalse(owner.isConnectedToSharedInstance())) {
+            interfaceAnnouncer = new InterfaceAnnouncer(this);
+            interfaceAnnouncer.start();
+        }
+    }
+
+    /**
+     * Loads the saved path and tunnel tables. Reticulum calls this once its
+     * interfaces are registered, as RNS/Reticulum.py applies its config before
+     * Transport.start(): a saved path is only restored onto an interface that
+     * exists. Loading them in {@link #init()}, before any interface was
+     * registered, dropped every saved path ("The interface is no longer available").
+     */
+    @SneakyThrows
+    public void loadPersistedTables() {
         if (owner.isTransportEnabled()) {
             var dtList = storage.getDestinationTables();
             if (isNotEmpty(dtList) && isFalse(owner.isConnectedToSharedInstance())) {
@@ -469,12 +485,6 @@ public final class Transport implements ExitHandler {
             if (anInterface.wantsTunnel()) {
                 synthesizeTunnel(anInterface);
             }
-        }
-
-        // Start interface discovery announcer
-        if (isFalse(owner.isConnectedToSharedInstance())) {
-            interfaceAnnouncer = new InterfaceAnnouncer(this);
-            interfaceAnnouncer.start();
         }
     }
 

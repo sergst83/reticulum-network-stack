@@ -189,6 +189,8 @@ public class Reticulum implements ExitHandler {
         var ifList = initInterfaces();
         loadKnownDestinations();
         transport.getInterfaces().addAll(ifList);
+        // Now that the interfaces exist, saved paths can be restored onto them
+        transport.loadPersistedTables();
 
 //        rpcAddr = new InetSocketAddress(localIntefacePort);
 //        rpcKey = fullHash(transport.getIdentity().getPrivateKey());
