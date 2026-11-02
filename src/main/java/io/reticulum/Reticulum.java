@@ -25,6 +25,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static io.reticulum.constant.ReticulumConstant.*;
@@ -68,6 +69,7 @@ import static org.apache.commons.lang3.SystemUtils.USER_HOME;
 @Slf4j
 public class Reticulum implements ExitHandler {
     private final Transport transport;
+    private final AtomicBoolean exitHandlerRan = new AtomicBoolean(false);
 
     private ConfigObj config;
     private Path configPath;
@@ -222,6 +224,11 @@ public class Reticulum implements ExitHandler {
      * out cleanup operations.
      */
     public void exitHandler() {
+        // Once, as RNS/Reticulum.py: an application's shutdown calls this, and then
+        // the JVM shutdown hook does too
+        if (!exitHandlerRan.compareAndSet(false, true)) {
+            return;
+        }
         transport.exitHandler();
         IdentityUtils.exitHandler();
         // Stop the shared scheduler last, after data has been persisted. This halts

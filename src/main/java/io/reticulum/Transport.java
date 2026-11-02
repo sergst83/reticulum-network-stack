@@ -512,7 +512,10 @@ public final class Transport implements ExitHandler {
 
     @Override
     public void exitHandler() {
-        if (owner.isConnectedToSharedInstance()) {
+        // As RNS/Transport.py: a node with its own transport saves its tables on exit.
+        // This was inverted, so no standalone node ever saved its path or tunnel table
+        // on shutdown, and a restarted gateway could not restore paths through tunnels.
+        if (isFalse(owner.isConnectedToSharedInstance())) {
             persistData();
         }
     }
