@@ -63,6 +63,7 @@ public class IdentityUtils {
      * @param deriveFrom input key material
      * @param salt       salt; null or empty means 32 zero bytes
      * @param context    info; null means none
+     * @return the derived key material
      */
     public static byte[] hkdf(int length, byte[] deriveFrom, byte[] salt, byte[] context) {
         if (length < 1) throw new IllegalArgumentException("Invalid output key length");
