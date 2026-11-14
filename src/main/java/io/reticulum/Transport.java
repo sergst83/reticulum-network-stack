@@ -44,9 +44,6 @@ import org.apache.commons.collections4.MapUtils;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
-import org.bouncycastle.crypto.digests.SHA256Digest;
-import org.bouncycastle.crypto.generators.HKDFBytesGenerator;
-import org.bouncycastle.crypto.params.HKDFParameters;
 
 import java.math.BigInteger;
 import java.time.Duration;
@@ -164,6 +161,7 @@ import static io.reticulum.utils.DestinationUtils.hashFromNameAndIdentity;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.utils.IdentityUtils.getRandomHash;
+import static io.reticulum.utils.IdentityUtils.hkdf;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static java.util.Objects.requireNonNullElse;
@@ -368,6 +366,22 @@ public final class Transport implements ExitHandler {
         controlDestinations.add(tunnelSynthesizeDestination);
         controlHashes.add(tunnelSynthesizeDestination.getHash());
 
+        // Start interface discovery announcer
+        if (isFalse(owner.isConnectedToSharedInstance())) {
+            interfaceAnnouncer = new InterfaceAnnouncer(this);
+            interfaceAnnouncer.start();
+        }
+    }
+
+    /**
+     * Loads the saved path and tunnel tables. Reticulum calls this once its
+     * interfaces are registered, as RNS/Reticulum.py applies its config before
+     * Transport.start(): a saved path is only restored onto an interface that
+     * exists. Loading them in {@link #init()}, before any interface was
+     * registered, dropped every saved path ("The interface is no longer available").
+     */
+    @SneakyThrows
+    public void loadPersistedTables() {
         if (owner.isTransportEnabled()) {
             var dtList = storage.getDestinationTables();
             if (isNotEmpty(dtList) && isFalse(owner.isConnectedToSharedInstance())) {
@@ -411,41 +425,55 @@ public final class Transport implements ExitHandler {
                 log.debug("Loaded {}  path table entries  from storage", destinationTable.size());
             }
 
-            var tunnelList = storage.getTunnelTables();
-            if (isNotEmpty(tunnelList) && isFalse(owner.isConnectedToSharedInstance())) {
-                for (TunnelEntity tunnelEntity : tunnelList) {
-                    var tunnelPaths = new HashMap<String, Hops>();
-                    MapUtils.emptyIfNull(tunnelEntity.getTunnelPaths()).forEach((destinationHash, hopEntry) -> {
-                        var receivingInterface = findInterfaceFromHash(hopEntry.getInterfaceHash());
-                        var announcePacket = getCachedPacket(hopEntry.getPacketHash());
-                        if (nonNull(announcePacket)) {
-                            // We increase the hops, since reading a packet
-                            // from cache is equivalent to receiving it again
-                            // over an interface. It is cached with it's non-increased hop-count.
-                            announcePacket.setHops(announcePacket.getHops() + 1);
+            // A tunnel table that cannot be loaded must not stop Transport from starting
+            // (RNS/Transport.py logs and carries on). Tables saved before the converter fix
+            // hold null paths, which are skipped here.
+            try {
+                var tunnelList = storage.getTunnelTables();
+                if (isNotEmpty(tunnelList) && isFalse(owner.isConnectedToSharedInstance())) {
+                    for (TunnelEntity tunnelEntity : tunnelList) {
+                        var tunnelPaths = new HashMap<String, Hops>();
+                        MapUtils.emptyIfNull(tunnelEntity.getTunnelPaths()).forEach((destinationHash, hopEntry) -> {
+                            if (isNull(hopEntry) || isNull(hopEntry.getPacketHash())) {
+                                return;
+                            }
+                            var receivingInterface = findInterfaceFromHash(hopEntry.getInterfaceHash());
+                            var announcePacket = getCachedPacket(hopEntry.getPacketHash());
+                            if (nonNull(announcePacket) && announcePacket.unpack()) {
+                                // We increase the hops, since reading a packet
+                                // from cache is equivalent to receiving it again
+                                // over an interface. It is cached with it's non-increased hop-count.
+                                announcePacket.setHops(announcePacket.getHops() + 1);
 
-                            var tunnelPath = Hops.builder()
-                                    .timestamp(hopEntry.getTimestamp())
-                                    .hops(hopEntry.getHops())
-                                    .via(hopEntry.getVia())
-                                    .expires(hopEntry.getExpires())
-                                    .randomBlobs(hopEntry.getRandomBlobs())
-                                    .anInterface(receivingInterface)
-                                    .packet(announcePacket)
-                                    .build();
-                            tunnelPaths.put(destinationHash, tunnelPath);
+                                var tunnelPath = Hops.builder()
+                                        .timestamp(hopEntry.getTimestamp())
+                                        .hops(hopEntry.getHops())
+                                        .via(hopEntry.getVia())
+                                        .expires(hopEntry.getExpires())
+                                        .randomBlobs(hopEntry.getRandomBlobs())
+                                        .anInterface(receivingInterface)
+                                        .packet(announcePacket)
+                                        .build();
+                                tunnelPaths.put(destinationHash, tunnelPath);
+                            }
+                        });
+                        if (tunnelPaths.isEmpty()) {
+                            continue;
                         }
-                    });
-                    tunnels.put(
-                            tunnelEntity.getTunnelIdHex(),
-                            Tunnel.builder()
-                                    .tunnelId(tunnelEntity.getTunnelId())
-                                    .tunnelPaths(tunnelPaths)
-                                    .expires(tunnelEntity.getExpires())
-                                    .anInterface(findInterfaceFromHash(tunnelEntity.getInterfaceHash()))
-                                    .build()
-                    );
+                        tunnels.put(
+                                tunnelEntity.getTunnelIdHex(),
+                                Tunnel.builder()
+                                        .tunnelId(tunnelEntity.getTunnelId())
+                                        .tunnelPaths(tunnelPaths)
+                                        .expires(tunnelEntity.getExpires())
+                                        .anInterface(findInterfaceFromHash(tunnelEntity.getInterfaceHash()))
+                                        .build()
+                        );
+                    }
+                    log.debug("Loaded {} tunnel table entries from storage", tunnels.size());
                 }
+            } catch (Exception e) {
+                log.error("Could not load tunnel table from storage", e);
             }
         }
 
@@ -455,12 +483,6 @@ public final class Transport implements ExitHandler {
             if (anInterface.wantsTunnel()) {
                 synthesizeTunnel(anInterface);
             }
-        }
-
-        // Start interface discovery announcer
-        if (isFalse(owner.isConnectedToSharedInstance())) {
-            interfaceAnnouncer = new InterfaceAnnouncer(this);
-            interfaceAnnouncer.start();
         }
     }
 
@@ -498,7 +520,10 @@ public final class Transport implements ExitHandler {
 
     @Override
     public void exitHandler() {
-        if (owner.isConnectedToSharedInstance()) {
+        // As RNS/Transport.py: a node with its own transport saves its tables on exit.
+        // This was inverted, so no standalone node ever saved its path or tunnel table
+        // on shutdown, and a restarted gateway could not restore paths through tunnels.
+        if (isFalse(owner.isConnectedToSharedInstance())) {
             persistData();
         }
     }
@@ -755,24 +780,20 @@ public final class Transport implements ExitHandler {
                         //Extract IFAC
                         var ifac = subarray(raw, 2, 2 + iface.getIfacSize());
 
-                        //Generate mask
-                        var hkdf = new HKDFBytesGenerator(new SHA256Digest());
-                        hkdf.init(new HKDFParameters(ifac, iface.getIfacKey(), new byte[0]));
-                        var mask = new byte[getLength(raw)];
-                        hkdf.generateBytes(mask, 0, mask.length);
+                        //Generate mask. Not BouncyCastle's HKDF: it stops at 8160 bytes,
+                        //and packets on links with a large MTU are longer than that.
+                        var mask = hkdf(getLength(raw), ifac, iface.getIfacKey(), null);
 
                         //Unmask payload
-                        var i = 0;
-                        var unmaskedRaw = new byte[0];
-                        for (byte b : raw) {
+                        var unmaskedRaw = new byte[raw.length];
+                        for (int i = 0; i < raw.length; i++) {
                             if (i <= 1 || i > iface.getIfacSize() + 1) {
                                 //Unmask header bytes and payload
-                                unmaskedRaw = ArrayUtils.add(unmaskedRaw, (byte) (b ^ mask[i]));
+                                unmaskedRaw[i] = (byte) (raw[i] ^ mask[i]);
                             } else {
                                 //Don't unmask IFAC itself
-                                unmaskedRaw = ArrayUtils.add(unmaskedRaw, b);
+                                unmaskedRaw[i] = raw[i];
                             }
-                            i++;
                         }
 
                         //Unset IFAC flag
@@ -2930,10 +2951,7 @@ public final class Transport implements ExitHandler {
                 var ifac = subarray(signed, signed.length - iface.getIfacSize(), signed.length);
 
                 //Generate mask
-                var hkdf = new HKDFBytesGenerator(new SHA256Digest());
-                hkdf.init(new HKDFParameters(ifac, iface.getIfacKey(), new byte[0]));
-                var mask = new byte[getLength(raw) + iface.getIfacSize()];
-                hkdf.generateBytes(mask, 0, mask.length);
+                var mask = hkdf(getLength(raw) + iface.getIfacSize(), ifac, iface.getIfacKey(), null);
 
                 //Set IFAC flag
                 var dataPacket = DataPacketConverter.fromBytes(raw);
@@ -3090,21 +3108,22 @@ public final class Transport implements ExitHandler {
                         && destinationTable.containsKey(encodeHexString(destinationHash))
         ) {
             var destinationEntry = destinationTable.get(encodeHexString(destinationHash));
-            //var packet = destinationEntry.getPacket();
-            var packet = getCachedPacket(destinationHash, ANNOUNCE);
+            // The reference reads the announce back from its packet cache, keyed by
+            // the announce's packet hash (RNS/Transport.py:3460). Here the path table
+            // entry holds the announce packet itself; the packet cache is keyed by
+            // packet hash and announces are not written to it on reception, so a
+            // lookup by destination hash always missed and no path request for a
+            // non-local destination was ever answered.
+            var packet = destinationEntry.getPacket();
             var nextHop = destinationEntry.getVia();
-            var receivedFrom = destinationEntry.getPacket().getTransportId(); //todo в питоне тут ошибка (?)
-            // python version has "Transport.path_table[destination_hash][IDX_PT_RVCD_IF]" (?)
-            //var receivedFrom = destinationEntry.getInterface();
+            var receivedFrom = destinationEntry.getInterface();
 
             if (isNull(packet)) {
-                log.debug("Could not retrieve announce packet from cache while answering path request for {}",
+                log.debug("No announce packet in the path table entry while answering path request for {}",
                         encodeHexString(destinationHash));
             } else if (attachedInterface.getMode() == MODE_ROAMING && Objects.equals(attachedInterface, receivedFrom)) {
                 log.debug("Not answering path request on roaming-mode interface, since next hop is on same roaming-mode interface");
             } else {
-                packet.setHops(destinationEntry.getHops());
-
                 if (nonNull(requestorTransportId) && Arrays.equals(requestorTransportId, nextHop)) {
                     // TODO: Find a bandwidth efficient way to invalidate our
                     // known path on this signal. The obvious way of signing
@@ -3121,7 +3140,7 @@ public final class Transport implements ExitHandler {
                     var retries = PATHFINDER_R;
                     var localRebroadcasts = 0;
                     var blockRebroadcasts = true;
-                    var announceHops = packet.getHops();
+                    var announceHops = destinationEntry.getHops();
                     //var retransmitTimeout = isFromLocalClient ? now : now.plusMillis(PATH_REQUEST_GRACE);
                     var retransmitTimeout = now;
 
@@ -3160,7 +3179,7 @@ public final class Transport implements ExitHandler {
                                     .timestamp(now)
                                     .retransmitTimeout(retransmitTimeout)
                                     .retries(retries)
-                                    .transportId(receivedFrom)
+                                    .transportId(packet.getTransportId())
                                     .hops(announceHops)
                                     .localRebroadcasts(localRebroadcasts)
                                     .blockRebroadcasts(blockRebroadcasts)
