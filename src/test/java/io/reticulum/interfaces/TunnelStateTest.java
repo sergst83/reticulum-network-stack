@@ -1,6 +1,9 @@
 package io.reticulum.interfaces;
 
+import io.reticulum.Transport;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -40,8 +43,14 @@ class TunnelStateTest {
         var iface = new TestInterface();
         assertFalse(iface.wantsTunnel());
 
-        // No Transport running: Transport start-up synthesizes it later
-        iface.requestTunnel();
+        // No Transport running: Transport start-up synthesizes it later.
+        // Mock the singleton instead of relying on test order: another test may
+        // already have started Transport in the shared JVM.
+        try (MockedStatic<Transport> transport = Mockito.mockStatic(Transport.class)) {
+            transport.when(Transport::getInstance)
+                    .thenThrow(new IllegalStateException("Transport not started"));
+            iface.requestTunnel();
+        }
         assertTrue(iface.wantsTunnel());
 
         iface.setWantsTunnel(false);
