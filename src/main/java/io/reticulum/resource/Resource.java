@@ -6,6 +6,7 @@ import io.reticulum.link.Link;
 import io.reticulum.link.LinkStatus;
 import io.reticulum.packet.Packet;
 import io.reticulum.utils.IdentityUtils;
+import io.reticulum.utils.MsgPackUtils;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NonNull;
@@ -17,7 +18,6 @@ import org.apache.commons.compress.compressors.CompressorStreamFactory;
 import org.apache.commons.lang3.ArrayUtils;
 import org.msgpack.core.MessagePack;
 
-import org.msgpack.jackson.dataformat.MessagePackMapper;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -120,8 +120,6 @@ import static org.msgpack.value.ValueFactory.newInteger;
 public class Resource {
 
     /** Serialiser for resource metadata objects; mirrors umsgpack in the reference. */
-    private static final MessagePackMapper METADATA_MSGPACK = new MessagePackMapper();
-
     private final Lock assambleLock = new ReentrantLock();
     private final Lock watchdogLock = new ReentrantLock();
     private final Lock receiveLock = new ReentrantLock();
@@ -278,7 +276,7 @@ public class Resource {
      */
     @SneakyThrows
     static byte[] frameMetadata(final Object metadata) {
-        var packed = METADATA_MSGPACK.writeValueAsBytes(metadata);
+        var packed = MsgPackUtils.packObject(metadata);
         if (packed.length > METADATA_MAX_SIZE) {
             throw new IllegalArgumentException(
                     "Resource metadata size exceeded: " + packed.length + " > " + METADATA_MAX_SIZE);
@@ -306,11 +304,12 @@ public class Resource {
     }
 
     /**
-     * Decodes msgpack-encoded metadata back into an object.
+     * Decodes msgpack-encoded metadata back into an object. Map keys keep
+     * their msgpack type, so the reference's {@code {1: 0}} arrives with a
+     * {@code Long} key rather than the string Jackson would produce.
      */
-    @SneakyThrows
     static Object unpackMetadata(final byte[] packed) {
-        return METADATA_MSGPACK.readValue(packed, Object.class);
+        return MsgPackUtils.unpackObject(packed);
     }
 
     @SneakyThrows
@@ -1122,8 +1121,11 @@ public class Resource {
         if (isFalse(status == FAILED)) {
             try {
                 status = ASSEMBLING;
+                // A received part is the packet's data as sent: the resource
+                // stream is encrypted as a whole, never per packet, so the
+                // packet carries no separate ciphertext (RNS/Resource.py:689).
                 var stream = parts.stream()
-                        .map(Packet::getCiphertext)
+                        .map(Packet::getData)
                         .reduce(IdentityUtils::concatArrays)
                         .orElse(new byte[0]);
                 var data = this.encrypted ? this.link.decrypt(stream) : stream;
@@ -1172,15 +1174,27 @@ public class Resource {
                 this.status = CORRUPT;
             }
 
+            // RNS/Resource.py:736 — release the link's hold on this resource
+            this.link.resourceConcluded(this);
+
             if (this.segmentIndex == this.totalSegments) {
                 if (nonNull(this.callback)) {
-                    this.data = Files.readAllBytes(storagePath);
+                    // A corrupt resource never wrote its storage file; the callback
+                    // still runs so the receiver learns of the failure from status.
+                    this.data = status == COMPLETE ? Files.readAllBytes(storagePath) : null;
                     this.unpackedMetadata = readAssembledMetadata();
                     try {
                         this.callback.accept(this);
                     } catch (Exception e) {
                         log.error("Error while executing resource assembled callback from {}", this, e);
                     }
+                }
+
+                // RNS/Resource.py:755-757 — the payload now lives in this.data
+                try {
+                    Files.deleteIfExists(storagePath);
+                } catch (Exception e) {
+                    log.error("Error while cleaning up resource files for {}", this, e);
                 }
             } else {
                 log.debug("Resource segment {}  of {} received, waiting for next segment to be announced", this.segmentIndex, this.totalSegments);
@@ -1254,12 +1268,13 @@ public class Resource {
                     } else if (rtt < this.rtt) {
                         this.rtt = (long) Math.max(this.rtt - this.rtt * 0.05, rtt);
                     } else if (rtt > this.rtt) {
-                        this.rtt = (long) Math.min(this.rtt - this.rtt * 0.05, rtt);
+                        this.rtt = (long) Math.min(this.rtt + this.rtt * 0.05, rtt);
                     }
 
                     if (rtt > 0) {
+                        // RATE_FAST and RATE_VERY_SLOW are bytes per second; rtt is in ms
                         var reqRespCost = ArrayUtils.getLength(packet.getRaw()) + this.reqSentBytes;
-                        this.reqRespRttRate = reqRespCost / rtt;
+                        this.reqRespRttRate = reqRespCost * 1000L / rtt;
 
                         if (this.reqRespRttRate > RATE_FAST && this.fastRateRounds < FAST_RATE_THRESHOLD) {
                             this.fastRateRounds++;
@@ -1269,7 +1284,13 @@ public class Resource {
                             }
                         }
                     }
-                } else if (isFalse(this.status == FAILED)) {
+                }
+
+                // Not an else-branch: the part that ends the request round-trip
+                // carries data too (RNS/Resource.py:872). Dropping it here meant
+                // the first part of every window was discarded and re-requested
+                // forever, so no Python-originated resource could complete.
+                if (isFalse(this.status == FAILED)) {
                     this.status = TRANSFERRING;
                     var partData = packet.getData();
                     var partHash = getMapHash(partData);
@@ -1284,13 +1305,10 @@ public class Resource {
                                 this.receivedCount++;
                                 this.outstandingParts.getAndDecrement();
 
-                                // Update consecutive completed pointer
-                                if (i == this.consecutiveCompletedHeight + 1) {
-                                    this.consecutiveCompletedHeight = i;
-                                }
-
+                                // Update consecutive completed pointer, stopping at the
+                                // first part still missing (RNS/Resource.py:890-893)
                                 var cp = this.consecutiveCompletedHeight + 1;
-                                while (cp < CollectionUtils.size(this.parts)) {
+                                while (cp < CollectionUtils.size(this.parts) && nonNull(this.parts.get(cp))) {
                                     this.consecutiveCompletedHeight = cp;
                                     cp++;
                                 }
@@ -1326,7 +1344,7 @@ public class Resource {
                             var reqTransferred = this.rttRxdBytes - this.rttRxdBytesAtPartReq;
 
                             if (rtt != 0) {
-                                this.reqDataRttRate = reqTransferred / rtt;
+                                this.reqDataRttRate = reqTransferred * 1000L / rtt;
                                 this.rttRxdBytesAtPartReq = this.rttRxdBytes;
 
                                 if (this.reqDataRttRate > RATE_FAST && this.fastRateRounds < FAST_RATE_THRESHOLD) {

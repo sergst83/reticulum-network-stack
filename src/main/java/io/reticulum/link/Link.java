@@ -9,6 +9,7 @@ import io.reticulum.destination.AbstractDestination;
 import io.reticulum.destination.Destination;
 import io.reticulum.destination.DestinationType;
 import io.reticulum.destination.Request;
+import io.reticulum.destination.Response;
 import io.reticulum.identity.Identity;
 import io.reticulum.interfaces.ConnectionInterface;
 import io.reticulum.packet.Packet;
@@ -19,6 +20,7 @@ import io.reticulum.resource.ResourceAdvertisement;
 import io.reticulum.resource.ResourceStatus;
 import io.reticulum.resource.ResourceStrategy;
 import io.reticulum.utils.IdentityUtils;
+import io.reticulum.utils.MsgPackUtils;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.Setter;
@@ -664,7 +666,10 @@ public class Link extends AbstractDestination {
      * Sends a request to the remote peer.
      *
      * @param path The request path.
-     * @param data The binary content associated with your message.
+     * @param data The content associated with your message: {@code byte[]}, null, or any structure
+     *             {@link MsgPackUtils#toValue} accepts (a {@code Map}, {@code List}, {@code String}, a msgpack
+     *             value, ...). Packed as the reference packs {@code data} ({@code RNS/Link.py:487}), so
+     *             a Python handler receives bytes as {@code bytes} and a map as a {@code dict}.
      * @param responseCallback An optional function or method with the signature
      * @param failedCallback An optional function or method with the signature to be called when a request fails.
      * @param progressCallback An optional function or method with the signature to be called when progress is made
@@ -675,7 +680,7 @@ public class Link extends AbstractDestination {
      */
     public RequestReceipt request(
             String path,
-            byte[] data,
+            Object data,
             Consumer<RequestReceipt> responseCallback,
             Consumer<RequestReceipt> failedCallback,
             Consumer<RequestReceipt> progressCallback,
@@ -706,7 +711,7 @@ public class Link extends AbstractDestination {
     @SneakyThrows
     public RequestReceipt request(
             String path,
-            byte[] data,
+            Object data,
             Consumer<RequestReceipt> responseCallback,
             Consumer<RequestReceipt> failedCallback,
             Consumer<RequestReceipt> progressCallback,
@@ -714,7 +719,7 @@ public class Link extends AbstractDestination {
             Integer maxResponseSize
     ) {
         byte[] requestPathHash = truncatedHash(path.getBytes(UTF_8));
-        var unpackedRequest = new UnpackedRequest(Instant.now(), requestPathHash, data);
+        var unpackedRequest = new UnpackedRequest(Instant.now(), requestPathHash, MsgPackUtils.toValue(data));
         byte[] packedRequest;
         try (var packer = MessagePack.newDefaultBufferPacker()) {
             packer.packValue(unpackedRequest.toValue());
@@ -1143,34 +1148,53 @@ public class Link extends AbstractDestination {
                 if (allowed) {
                     log.debug("Handling request {}  for: {}", Hex.encodeHexString(requestId), path);
                     var autoCompress = requestHandler.isAutoCompress();
-                    var response = responseGenerator.generate(
-                            new Request(path, requestData, requestId, linkId, remoteIdentity, requestedAt));
+                    var request = new Request(path, requestData, requestId, linkId, remoteIdentity, requestedAt);
 
-                    if (nonNull(response)) {
-                        if (response.isFileResponse()) {
-                            // A file response streams as a resource, with any metadata
-                            // riding along inside it (RNS/Link.py:846).
-                            new Resource(response.getFile(), this, response.getMetadata(), null, 1, null,
-                                    requestId, true, null, autoCompress, null, true);
-                        } else {
-                            try (var packer = MessagePack.newDefaultBufferPacker()) {
-                                packer.packValue(new PackedResponse(requestId, response.getData()).toValue());
-                                var packedResponse = packer.toByteArray();
-
-                                if (packedResponse.length <= this.mdu) {
-                                    new Packet(this, packedResponse, DATA, RESPONSE).send();
-                                } else {
-                                    new Resource(packedResponse, this, null, null, null, requestId, true, null,
-                                            autoCompress, null, true);
-                                }
-                            }
+                    // Off the interface I/O thread: see RequestHandlerExecutor
+                    RequestHandlerExecutor.submit(() -> {
+                        var response = responseGenerator.generate(request);
+                        if (nonNull(response)) {
+                            sendResponse(requestId, response, autoCompress);
                         }
-                    }
+                    });
                 } else {
                     var identityString = Optional.ofNullable(getRemoteIdentity())
                             .map(Identity::toString)
                             .orElse("<Unknown>");
                     log.debug("Request {}  from {} not allowed for: {}", Hex.encodeHexString(requestId), identityString, path);
+                }
+            }
+        }
+    }
+
+    /**
+     * Sends a request handler's response: a file as a resource carrying its
+     * metadata, otherwise {@code [request_id, response]} as a packet or, when
+     * oversized, a resource (RNS/Link.py:836-851). Skipped if the link closed
+     * while the handler ran.
+     */
+    @SneakyThrows
+    private void sendResponse(byte[] requestId, Response response, boolean autoCompress) {
+        if (status != ACTIVE) {
+            log.debug("Link closed before the response to {} was ready, not sending it", Hex.encodeHexString(requestId));
+            return;
+        }
+
+        if (response.isFileResponse()) {
+            // A file response streams as a resource, with any metadata
+            // riding along inside it (RNS/Link.py:846).
+            new Resource(response.getFile(), this, response.getMetadata(), null, 1, null,
+                    requestId, true, null, autoCompress, null, true);
+        } else {
+            try (var packer = MessagePack.newDefaultBufferPacker()) {
+                packer.packValue(new PackedResponse(requestId, response.getData()).toValue());
+                var packedResponse = packer.toByteArray();
+
+                if (packedResponse.length <= this.mdu) {
+                    new Packet(this, packedResponse, DATA, RESPONSE).send();
+                } else {
+                    new Resource(packedResponse, this, null, null, null, requestId, true, null,
+                            autoCompress, null, true);
                 }
             }
         }
