@@ -125,7 +125,9 @@ public class TCPClientInterface extends AbstractConnectionInterface implements H
 
     public void run() {
         try {
-            connect(initiator);
+            if (connect(initiator) && initiator && isFalse(kissFraming)) {
+                requestTunnel();
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }

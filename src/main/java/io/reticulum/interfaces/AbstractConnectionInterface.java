@@ -278,6 +278,34 @@ public abstract class AbstractConnectionInterface extends Thread implements Conn
     protected Queue<AnnounceQueueEntry> announceQueue = new ConcurrentLinkedQueue<>();
     protected Map<String, Packet> heldAnnounces = new ConcurrentHashMap<>();
 
+    // Set by Transport when a remote synthesizes a tunnel over this interface. The paths
+    // learned through it are then kept with the tunnel and restored when the remote
+    // reconnects, e.g. after this node restarted. Without a field here the interface
+    // defaults dropped the id, and no path was ever associated with a tunnel.
+    private volatile byte[] tunnelId;
+    // Set by a client interface once it first connects (RNS wants_tunnel)
+    private volatile boolean wantsTunnel;
+
+    @Override
+    public boolean wantsTunnel() {
+        return wantsTunnel;
+    }
+
+    /**
+     * Called by a client interface after its first successful connect, as the
+     * reference does with {@code wants_tunnel}: ask the remote transport for a
+     * tunnel, so it can restore the paths learned through us after a restart.
+     * If Transport is not running yet, its start-up synthesizes the tunnel.
+     */
+    protected void requestTunnel() {
+        wantsTunnel = true;
+        try {
+            Transport.getInstance().synthesizeTunnel(this);
+        } catch (Exception e) {
+            log.debug("Tunnel for {} left to Transport start-up: {}", this, e.getMessage());
+        }
+    }
+
     @Override
     public boolean isOnline() {
         return online.get();

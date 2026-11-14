@@ -43,7 +43,8 @@ public class IdentityUtils {
     }
 
     public static void persistData() {
-        if (Transport.getInstance().getOwner().isConnectedToSharedInstance()) {
+        // As RNS/Identity.py: only a node with its own transport owns the known destinations
+        if (!Transport.getInstance().getOwner().isConnectedToSharedInstance()) {
             saveKnownDestinations();
         }
     }
