@@ -44,9 +44,6 @@ import org.apache.commons.collections4.MapUtils;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
-import org.bouncycastle.crypto.digests.SHA256Digest;
-import org.bouncycastle.crypto.generators.HKDFBytesGenerator;
-import org.bouncycastle.crypto.params.HKDFParameters;
 
 import java.math.BigInteger;
 import java.time.Duration;
@@ -164,6 +161,7 @@ import static io.reticulum.utils.DestinationUtils.hashFromNameAndIdentity;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.IdentityUtils.fullHash;
 import static io.reticulum.utils.IdentityUtils.getRandomHash;
+import static io.reticulum.utils.IdentityUtils.hkdf;
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 import static java.util.Objects.requireNonNullElse;
@@ -755,24 +753,20 @@ public final class Transport implements ExitHandler {
                         //Extract IFAC
                         var ifac = subarray(raw, 2, 2 + iface.getIfacSize());
 
-                        //Generate mask
-                        var hkdf = new HKDFBytesGenerator(new SHA256Digest());
-                        hkdf.init(new HKDFParameters(ifac, iface.getIfacKey(), new byte[0]));
-                        var mask = new byte[getLength(raw)];
-                        hkdf.generateBytes(mask, 0, mask.length);
+                        //Generate mask. Not BouncyCastle's HKDF: it stops at 8160 bytes,
+                        //and packets on links with a large MTU are longer than that.
+                        var mask = hkdf(getLength(raw), ifac, iface.getIfacKey(), null);
 
                         //Unmask payload
-                        var i = 0;
-                        var unmaskedRaw = new byte[0];
-                        for (byte b : raw) {
+                        var unmaskedRaw = new byte[raw.length];
+                        for (int i = 0; i < raw.length; i++) {
                             if (i <= 1 || i > iface.getIfacSize() + 1) {
                                 //Unmask header bytes and payload
-                                unmaskedRaw = ArrayUtils.add(unmaskedRaw, (byte) (b ^ mask[i]));
+                                unmaskedRaw[i] = (byte) (raw[i] ^ mask[i]);
                             } else {
                                 //Don't unmask IFAC itself
-                                unmaskedRaw = ArrayUtils.add(unmaskedRaw, b);
+                                unmaskedRaw[i] = raw[i];
                             }
-                            i++;
                         }
 
                         //Unset IFAC flag
@@ -2930,10 +2924,7 @@ public final class Transport implements ExitHandler {
                 var ifac = subarray(signed, signed.length - iface.getIfacSize(), signed.length);
 
                 //Generate mask
-                var hkdf = new HKDFBytesGenerator(new SHA256Digest());
-                hkdf.init(new HKDFParameters(ifac, iface.getIfacKey(), new byte[0]));
-                var mask = new byte[getLength(raw) + iface.getIfacSize()];
-                hkdf.generateBytes(mask, 0, mask.length);
+                var mask = hkdf(getLength(raw) + iface.getIfacSize(), ifac, iface.getIfacKey(), null);
 
                 //Set IFAC flag
                 var dataPacket = DataPacketConverter.fromBytes(raw);
@@ -3090,21 +3081,22 @@ public final class Transport implements ExitHandler {
                         && destinationTable.containsKey(encodeHexString(destinationHash))
         ) {
             var destinationEntry = destinationTable.get(encodeHexString(destinationHash));
-            //var packet = destinationEntry.getPacket();
-            var packet = getCachedPacket(destinationHash, ANNOUNCE);
+            // The reference reads the announce back from its packet cache, keyed by
+            // the announce's packet hash (RNS/Transport.py:3460). Here the path table
+            // entry holds the announce packet itself; the packet cache is keyed by
+            // packet hash and announces are not written to it on reception, so a
+            // lookup by destination hash always missed and no path request for a
+            // non-local destination was ever answered.
+            var packet = destinationEntry.getPacket();
             var nextHop = destinationEntry.getVia();
-            var receivedFrom = destinationEntry.getPacket().getTransportId(); //todo в питоне тут ошибка (?)
-            // python version has "Transport.path_table[destination_hash][IDX_PT_RVCD_IF]" (?)
-            //var receivedFrom = destinationEntry.getInterface();
+            var receivedFrom = destinationEntry.getInterface();
 
             if (isNull(packet)) {
-                log.debug("Could not retrieve announce packet from cache while answering path request for {}",
+                log.debug("No announce packet in the path table entry while answering path request for {}",
                         encodeHexString(destinationHash));
             } else if (attachedInterface.getMode() == MODE_ROAMING && Objects.equals(attachedInterface, receivedFrom)) {
                 log.debug("Not answering path request on roaming-mode interface, since next hop is on same roaming-mode interface");
             } else {
-                packet.setHops(destinationEntry.getHops());
-
                 if (nonNull(requestorTransportId) && Arrays.equals(requestorTransportId, nextHop)) {
                     // TODO: Find a bandwidth efficient way to invalidate our
                     // known path on this signal. The obvious way of signing
@@ -3121,7 +3113,7 @@ public final class Transport implements ExitHandler {
                     var retries = PATHFINDER_R;
                     var localRebroadcasts = 0;
                     var blockRebroadcasts = true;
-                    var announceHops = packet.getHops();
+                    var announceHops = destinationEntry.getHops();
                     //var retransmitTimeout = isFromLocalClient ? now : now.plusMillis(PATH_REQUEST_GRACE);
                     var retransmitTimeout = now;
 
@@ -3160,7 +3152,7 @@ public final class Transport implements ExitHandler {
                                     .timestamp(now)
                                     .retransmitTimeout(retransmitTimeout)
                                     .retries(retries)
-                                    .transportId(receivedFrom)
+                                    .transportId(packet.getTransportId())
                                     .hops(announceHops)
                                     .localRebroadcasts(localRebroadcasts)
                                     .blockRebroadcasts(blockRebroadcasts)
