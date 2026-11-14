@@ -1,6 +1,7 @@
 package io.reticulum.message;
 
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import org.msgpack.core.MessagePack;
 import org.msgpack.value.Value;
@@ -27,8 +28,9 @@ import static java.util.Objects.isNull;
  * {@code str}.
  */
 @Data
+@EqualsAndHashCode(callSuper = false)
 @NoArgsConstructor
-public class StringMessage extends MessageBase{
+public class StringMessage extends MessageBase {
 
     private byte[] data;
     private Instant timestamp;
