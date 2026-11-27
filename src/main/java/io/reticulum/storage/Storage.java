@@ -134,11 +134,27 @@ public final class Storage {
         }
     }
 
+    /**
+     * Loads all persisted known destinations, keyed by destination hash.
+     * <p>
+     * The collection is upserted by {@code destinationHash}, so duplicates should not
+     * exist. They have been observed in the field, though (most likely after an unclean
+     * shutdown left the id index out of step with the document map), and a plain
+     * {@code toMap} then threw {@code IllegalStateException: Duplicate key}, aborting the
+     * whole {@code Reticulum} constructor. Duplicates are now tolerated: the newest
+     * entry (by timestamp) wins and a warning is logged.
+     */
     public Map<String, DestinationData> loadKnownDestinations() {
-        return db.getRepository(new DestinationDataDecorator()).find()
-                .toList()
-                .stream()
-                .collect(toMap(DestinationData::getDestinationHash, identity()));
+        var all = db.getRepository(new DestinationDataDecorator()).find().toList();
+        Map<String, DestinationData> result = all.stream()
+                .collect(toMap(DestinationData::getDestinationHash, identity(),
+                        (a, b) -> b.getTimestamp() > a.getTimestamp() ? b : a));
+        int duplicates = all.size() - result.size();
+        if (duplicates > 0) {
+            log.warn("Ignored {} duplicate known-destination record(s) in storage (kept newest per destination hash)",
+                    duplicates);
+        }
+        return result;
     }
 
     /**
